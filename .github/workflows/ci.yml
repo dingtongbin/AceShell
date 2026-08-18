@@ -74,3 +74,9 @@ jobs:
       - name: 构建
         shell: bash
         run: task build
+
+      - name: 打包 MSIX 验证
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File build\windows\msix\build-msix.ps1 -Version 0.1.0
