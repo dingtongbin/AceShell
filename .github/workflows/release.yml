@@ -99,9 +99,15 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.name }}
-          path: |
-            ${{ matrix.asset }}
-            ${{ matrix.msix && 'AceShell-windows-amd64.msix' || '' }}
+          path: ${{ matrix.asset }}
+          if-no-files-found: error
+
+      - name: Upload MSIX artifact
+        if: matrix.msix
+        uses: actions/upload-artifact@v4
+        with:
+          name: msix
+          path: AceShell-windows-amd64.msix
           if-no-files-found: error
 
   release:
@@ -122,6 +128,7 @@ jobs:
         run: find . -type f -name 'AceShell-*' -exec mv {} . \;
 
       - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: |
