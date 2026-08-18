@@ -7,8 +7,8 @@ import (
 	"os/exec"
 )
 
-// hideWindow 非 Windows 平台无隐藏窗口概念,空实现。
-func hideWindow(cmd *exec.Cmd) {}
+// HideWindow 非 Windows 平台无隐藏窗口概念,空实现。
+func HideWindow(cmd *exec.Cmd) {}
 
 // openWithDefault 使用 xdg-open 打开文件或目录。
 func openWithDefault(filePath string) error {

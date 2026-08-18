@@ -46,7 +46,7 @@ func (w *WindowService) IsAdmin() bool {
 		return false
 	}
 	cmd := exec.Command("net", "session")
-	hideWindow(cmd)
+	HideWindow(cmd)
 	err := cmd.Run()
 	return err == nil
 }
@@ -60,7 +60,7 @@ func (w *WindowService) MoveToRecycleBin(filePath string) error {
 			strings.ReplaceAll(filePath, "'", "''"),
 		)
 		cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", psScript)
-		hideWindow(cmd)
+		HideWindow(cmd)
 		err := cmd.Run()
 		if err == nil {
 			return nil

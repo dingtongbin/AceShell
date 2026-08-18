@@ -84,7 +84,7 @@ func setupCleanup() {
 func killChildProcesses() {
 	if _, err := exec.LookPath("taskkill"); err == nil {
 		cmd := exec.Command("taskkill", "/f", "/im", "node.exe")
-		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+		appservices.HideWindow(cmd)
 		cmd.Run()
 	}
 }
