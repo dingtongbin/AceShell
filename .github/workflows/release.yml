@@ -30,10 +30,6 @@ jobs:
             name: linux-amd64
             asset: AceShell-linux-amd64
             src: bin/AceShell
-          - os: macos-13
-            name: macos-amd64
-            asset: AceShell-macos-amd64
-            src: bin/AceShell
           - os: macos-14
             name: macos-arm64
             asset: AceShell-macos-arm64
@@ -128,5 +124,8 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/AceShell-*
+          files: |
+            artifacts/AceShell-windows-amd64.exe
+            artifacts/AceShell-linux-amd64
+            artifacts/AceShell-macos-arm64
           generate_release_notes: true
