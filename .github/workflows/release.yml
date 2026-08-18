@@ -91,7 +91,7 @@ jobs:
         shell: bash
         run: |
           cp "${{ matrix.src }}" "${{ matrix.asset }}"
-          if [ "${{ runner.os }}" = "Windows" ] && [ -f "bin/AceShell-*.msix" ]; then
+          if [ "${{ runner.os }}" = "Windows" ]; then
             cp bin/AceShell-*.msix "AceShell-windows-amd64.msix"
           fi
 
