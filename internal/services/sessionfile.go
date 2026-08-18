@@ -143,6 +143,9 @@ func (s *SessionFileService) getFilePath(folder, name string) string {
 }
 
 func (s *SessionFileService) safeSessionPath(subPath string) (string, error) {
+	if hasBackslashTraversal(subPath) {
+		return "", fmt.Errorf("不允许的路径遍历操作")
+	}
 	clean := filepath.Clean(subPath)
 	full := filepath.Join(sessionsDir, clean)
 	absSessions, _ := filepath.Abs(sessionsDir)
@@ -154,6 +157,18 @@ func (s *SessionFileService) safeSessionPath(subPath string) (string, error) {
 		return "", fmt.Errorf("不允许的路径遍历操作")
 	}
 	return full, nil
+}
+
+// hasBackslashTraversal 将反斜杠归一化为分隔符后,拒绝任何包含 .. 段的路径
+// (Linux/macOS 上反斜杠是普通字符,需显式防护)。
+func hasBackslashTraversal(subPath string) bool {
+	norm := strings.ReplaceAll(subPath, "\\", "/")
+	for _, seg := range strings.Split(norm, "/") {
+		if seg == ".." {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *SessionFileService) CreateFolder(folderPath string) error {
