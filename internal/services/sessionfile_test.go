@@ -564,6 +564,8 @@ func TestSessionFileService_SafeSessionPath(t *testing.T) {
 		{"traversal with ../", "../escape", true},
 		{"traversal deep", "a/../../../escape", true},
 		{"traversal with backslash", "..\\escape", true},
+		{"traversal mixed", "a\\..\\escape", true},
+		{"backslash in name", "a\\b.toml", false},
 	}
 
 	for _, tt := range tests {

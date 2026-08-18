@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -47,7 +46,7 @@ func (w *WindowService) IsAdmin() bool {
 		return false
 	}
 	cmd := exec.Command("net", "session")
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	HideWindow(cmd)
 	err := cmd.Run()
 	return err == nil
 }
@@ -61,7 +60,7 @@ func (w *WindowService) MoveToRecycleBin(filePath string) error {
 			strings.ReplaceAll(filePath, "'", "''"),
 		)
 		cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", psScript)
-		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+		HideWindow(cmd)
 		err := cmd.Run()
 		if err == nil {
 			return nil

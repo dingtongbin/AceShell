@@ -8,8 +8,8 @@ import (
 	"syscall"
 )
 
-// hideWindow 隐藏子进程窗口,避免弹出黑色控制台。
-func hideWindow(cmd *exec.Cmd) {
+// HideWindow 隐藏子进程窗口,避免弹出黑色控制台(跨平台导出,非 Windows 为空实现)。
+func HideWindow(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 }
 
@@ -23,7 +23,7 @@ func openWithEditor(filePath string) error {
 	escaped := strings.ReplaceAll(filePath, "'", "''")
 	psScript := "$s = New-Object -ComObject Shell.Application; $s.Namespace(0).ParseName('" + escaped + "').InvokeVerb('edit')"
 	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", psScript)
-	hideWindow(cmd)
+	HideWindow(cmd)
 	if err := cmd.Run(); err == nil {
 		return nil
 	}
