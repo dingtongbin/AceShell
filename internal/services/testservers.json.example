@@ -1,0 +1,14 @@
+{
+  "ssh": {
+    "host": "127.0.0.1",
+    "port": 22,
+    "username": "your-user",
+    "password": "your-password"
+  },
+  "telnet": {
+    "host": "127.0.0.1",
+    "port": 23,
+    "username": "your-user",
+    "password": "your-password"
+  }
+}

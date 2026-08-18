@@ -1,0 +1,26 @@
+.task
+bin
+frontend/dist
+frontend/node_modules
+frontend/bindings
+build/linux/appimage/build
+build/windows/nsis/MicrosoftEdgeWebview2Setup.exe
+build/windows.zip
+*.db
+sessions/
+captures/
+tmp/
+docs/
+aceshell.db
+internal/services/config.toml
+internal/services/testservers.json
+
+# AI 工具配置与规范(面向本地开发,不公开)
+.opencode/
+opencode.json
+AGENTS.md
+CLAUDE.md
+.cursorrules
+
+# 废弃的未使用素材
+shapes/

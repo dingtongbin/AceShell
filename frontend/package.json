@@ -1,0 +1,46 @@
+{
+  "name": "frontend",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build:dev": "vue-tsc && vite build --minify false --mode development",
+    "build": "vue-tsc && vite build --mode production",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@codemirror/autocomplete": "^6.20.3",
+    "@codemirror/commands": "^6.10.3",
+    "@codemirror/lang-css": "^6.3.1",
+    "@codemirror/lang-html": "^6.4.11",
+    "@codemirror/lang-javascript": "^6.2.5",
+    "@codemirror/lang-json": "^6.0.2",
+    "@codemirror/lang-markdown": "^6.5.0",
+    "@codemirror/lang-python": "^6.2.1",
+    "@codemirror/language": "^6.12.3",
+    "@codemirror/legacy-modes": "^6.5.3",
+    "@codemirror/lint": "^6.9.6",
+    "@codemirror/search": "^6.7.0",
+    "@codemirror/state": "^6.6.0",
+    "@codemirror/view": "^6.43.0",
+    "@vicons/ionicons5": "^0.13.0",
+    "@wailsio/runtime": "latest",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/addon-search": "^0.16.0",
+    "@xterm/addon-web-links": "^0.12.0",
+    "@xterm/xterm": "^6.0.0",
+    "codemirror": "^6.0.2",
+    "echarts": "^6.1.0",
+    "highlight.js": "^11.11.1",
+    "naive-ui": "^2.44.1",
+    "vue": "^3.2.45",
+    "vue-echarts": "^8.0.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^6.0.0",
+    "typescript": "^4.9.3",
+    "vite": "^8.0.5",
+    "vue-tsc": "^1.0.11"
+  }
+}
