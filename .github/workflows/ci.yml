@@ -53,7 +53,9 @@ jobs:
 
       - name: 生成 bindings
         shell: bash
-        run: wails3 generate bindings -ts
+        run: |
+          wails3 generate bindings -ts
+          ls frontend/bindings/changeme/internal/services/ | head -5
 
       - name: 前端类型检查
         working-directory: frontend
@@ -62,6 +64,7 @@ jobs:
       - name: Go 静态检查与测试
         shell: bash
         run: |
+          mkdir -p frontend/dist
           go vet ./...
           go test ./...
 
