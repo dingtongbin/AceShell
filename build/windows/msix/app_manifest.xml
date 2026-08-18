@@ -15,7 +15,7 @@
     - Version:   由打包脚本按标签版本自动替换,无需手工改
   -->
   <Identity
-    Name="AceShell"
+    Name="dingtongbin.AceShell"
     Publisher="CN=5A3FBAB9-DA34-4BF8-A23D-BBE10243FF61"
     Version="0.1.0.0"
     ProcessorArchitecture="x64" />
