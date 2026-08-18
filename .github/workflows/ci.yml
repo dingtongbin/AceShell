@@ -67,6 +67,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p frontend/dist
+          touch frontend/dist/.gitkeep
           go vet ./...
           go test ./...
 
