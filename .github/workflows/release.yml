@@ -122,6 +122,7 @@ jobs:
         run: find . -type f -name 'AceShell-*' -exec mv {} . \;
 
       - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: |
