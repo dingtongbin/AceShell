@@ -80,3 +80,17 @@ jobs:
         shell: pwsh
         run: |
           powershell -NoProfile -ExecutionPolicy Bypass -File build\windows\msix\build-msix.ps1 -Version 0.1.0
+
+      - name: Stage MSIX (模拟 release)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          cp bin/AceShell-*.msix "AceShell-windows-amd64.msix"
+
+      - name: Upload MSIX artifact
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: msix
+          path: AceShell-windows-amd64.msix
+          if-no-files-found: error
