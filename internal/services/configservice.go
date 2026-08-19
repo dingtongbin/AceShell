@@ -100,6 +100,7 @@ func (c *ConfigService) Init() {
 			VerticalTabWidth: 180,
 			CloseConfirm:     true,
 			Theme:            "dark",
+			PanelOpacity:     100,
 			ShowGithub:       true,
 		},
 		Sections: SectionsConfig{
@@ -152,6 +153,17 @@ func (c *ConfigService) save() error {
 		return err
 	}
 	return os.WriteFile(configFile, data, 0644)
+}
+
+// ThemeMode 返回已保存的视图主题模式（dark / light / auto），默认 "dark"。
+func (c *ConfigService) ThemeMode() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	t := c.config.View.Theme
+	if t != "dark" && t != "light" && t != "auto" {
+		return "dark"
+	}
+	return t
 }
 
 // GetConfig 返回当前完整配置的 JSON 字符串。

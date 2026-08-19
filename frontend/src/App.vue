@@ -5,10 +5,11 @@ import ShellPanel from './components/ShellPanel.vue'
 import SettingsDialog from './components/SettingsDialog.vue'
 import { useTheme } from './stores/theme'
 import { GetConfig, GetWallpaperData } from '../bindings/changeme/internal/services/configservice.js'
+import { ApplyTitleBarTheme } from '../bindings/changeme/internal/services/windowservice.js'
 
 const { isDark, theme, themeOverrides, initTheme } = useTheme()
 const showSettings = ref(false)
-const panelOpacity = ref(70)
+const panelOpacity = ref(100)
 const wallpaper = ref('')
 
 function handleOpenSettings() {
@@ -42,7 +43,7 @@ onMounted(async () => {
   try {
     const cfg = JSON.parse(await GetConfig())
     initTheme(cfg.view?.theme ?? 'dark')
-    panelOpacity.value = cfg.view?.panelOpacity || 70
+    panelOpacity.value = cfg.view?.panelOpacity ?? 100
     wallpaper.value = cfg.view?.wallpaper || ''
   } catch {
     initTheme('dark')
@@ -54,7 +55,7 @@ onMounted(async () => {
 async function onConfigChanged() {
   try {
     const cfg = JSON.parse(await GetConfig())
-    panelOpacity.value = cfg.view?.panelOpacity || 70
+    panelOpacity.value = cfg.view?.panelOpacity ?? 100
     wallpaper.value = cfg.view?.wallpaper || ''
   } catch {
     // 忽略配置读取失败
@@ -62,6 +63,10 @@ async function onConfigChanged() {
 }
 
 watch(wallpaper, () => { applyWallpaperStyle() })
+
+watch(isDark, (dark) => {
+  ApplyTitleBarTheme(dark).catch(() => {})
+})
 
 watchEffect(() => {
   document.documentElement.classList.toggle('dark', isDark.value)

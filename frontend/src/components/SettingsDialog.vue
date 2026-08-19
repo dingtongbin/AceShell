@@ -25,7 +25,7 @@ const activeNav = ref('general')
 const tabOrientation = ref('horizontal')
 
 const closeNoConfirm = ref(false)
-const panelOpacity = ref(70)
+const panelOpacity = ref(100)
 const wallpaperPath = ref('')
 const showSerial = ref(true)
 const showHelp = ref(true)
@@ -198,7 +198,7 @@ async function loadConfig() {
     const cfg = JSON.parse(await GetConfig())
     tabOrientation.value = cfg.view?.tabOrientation ?? 'horizontal'
     closeNoConfirm.value = cfg.view?.closeConfirm === false
-    panelOpacity.value = cfg.view?.panelOpacity || 70
+    panelOpacity.value = cfg.view?.panelOpacity ?? 100
     wallpaperPath.value = cfg.view?.wallpaper || ''
     showSerial.value = cfg.view?.showSerial ?? true
     showHelp.value = cfg.view?.showHelp ?? true
