@@ -15,20 +15,20 @@
     - Version:   由打包脚本按标签版本自动替换,无需手工改
   -->
   <Identity
-    Name="AceShell"
+    Name="dingtongbin.AceShell"
     Publisher="CN=5A3FBAB9-DA34-4BF8-A23D-BBE10243FF61"
     Version="0.1.0.0"
     ProcessorArchitecture="x64" />
 
   <Properties>
     <DisplayName>AceShell</DisplayName>
-    <PublisherDisplayName>AceShell</PublisherDisplayName>
+    <PublisherDisplayName>dingtongbin</PublisherDisplayName>
     <Description>跨平台网络终端管理工具</Description>
     <Logo>Assets\StoreLogo.png</Logo>
   </Properties>
 
   <Dependencies>
-    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.19041.0" />
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.19041.0" MaxVersionTested="10.0.19041.0" />
   </Dependencies>
 
   <Resources>

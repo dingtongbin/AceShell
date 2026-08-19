@@ -51,7 +51,7 @@ Copy-Item -LiteralPath (Join-Path $MsixDir 'app_manifest.xml') -Destination (Joi
 # 替换 manifest 中的版本号
 $manifest = Join-Path $Payload 'AppxManifest.xml'
 $content = Get-Content -LiteralPath $manifest -Raw -Encoding UTF8
-$content = $content -replace 'Version="[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+"', "Version=`"$Version.0`""
+$content = $content -replace '(?<![A-Za-z])Version="[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+"', "Version=`"$Version.0`""
 Set-Content -LiteralPath $manifest -Value $content -Encoding UTF8 -NoNewline
 
 # ---------- 生成 MSIX 图标(从 appicon.png 缩放) ----------
