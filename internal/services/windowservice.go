@@ -17,7 +17,22 @@ import (
 )
 
 type WindowService struct {
-	app *application.App
+	app     *application.App
+	mainWin *application.WebviewWindow
+}
+
+// SetMainWindow 保存主窗口引用，供标题栏主题等方法使用。
+func (w *WindowService) SetMainWindow(win *application.WebviewWindow) {
+	w.mainWin = win
+}
+
+// ApplyTitleBarTheme 将原生标题栏背景色/文字色/边框色切换为应用亮色或暗色主题对应的颜色。
+// 仅 Windows 生效，其他平台为 no-op。
+func (w *WindowService) ApplyTitleBarTheme(dark bool) {
+	if w.mainWin == nil {
+		return
+	}
+	applyNativeTitleBarTheme(w.mainWin, dark)
 }
 
 func (w *WindowService) SetApp(app *application.App) {

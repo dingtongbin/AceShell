@@ -62,7 +62,7 @@ func main() {
 	svc := initServices()
 	app := createApp(svc)
 	wireServices(svc, app)
-	createMainWindow(app)
+	createMainWindow(app, svc)
 
 	if err := app.Run(); err != nil {
 		fmt.Println(err)
@@ -166,7 +166,7 @@ func wireServices(svc *services, app *application.App) {
 }
 
 // createMainWindow 创建主窗口。
-func createMainWindow(app *application.App) {
+func createMainWindow(app *application.App, svc *services) {
 	win := app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title:            "AceShell",
 		Width:            1100,
@@ -176,7 +176,11 @@ func createMainWindow(app *application.App) {
 		MinWidth:         800,
 		MinHeight:        500,
 		EnableFileDrop:   true,
+		Windows:          buildWindowsOptions(svc),
 	})
+
+	// 供 WindowService 在运行时调整原生标题栏主题色
+	svc.window.SetMainWindow(win)
 
 	// 系统文件拖入窗口时转发给前端（仅命中 SFTP 远端拖放目标时）。
 	win.OnWindowEvent(events.Common.WindowFilesDropped, func(event *application.WindowEvent) {
@@ -186,6 +190,24 @@ func createMainWindow(app *application.App) {
 		}
 		app.Event.Emit("sftp-files-dropped", payload)
 	})
+}
+
+// buildWindowsOptions 根据已保存的主题模式构建 Windows 平台窗口选项。
+// 强制 dark/light 时不注册系统主题监听（避免系统切换覆盖应用主题），auto 跟随系统；
+// CustomTheme 让原生标题栏在窗口创建及系统主题变化时即应用与应用背景一致的颜色。
+func buildWindowsOptions(svc *services) application.WindowsWindow {
+	theme := application.SystemDefault
+	switch svc.config.ThemeMode() {
+	case "dark":
+		theme = application.Dark
+	case "light":
+		theme = application.Light
+	}
+
+	return application.WindowsWindow{
+		Theme:       theme,
+		CustomTheme: appservices.TitleBarCustomTheme(),
+	}
 }
 
 // buildSftpDropPayload 将系统拖入的文件组装为前端可用的 JSON 字符串。
