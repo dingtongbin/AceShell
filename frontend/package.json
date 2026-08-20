@@ -37,7 +37,8 @@
     "highlight.js": "^11.11.1",
     "naive-ui": "^2.44.1",
     "vue": "^3.2.45",
-    "vue-echarts": "^8.0.1"
+    "vue-echarts": "^8.0.1",
+    "vue-i18n": "^11.4.8"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^6.0.0",
