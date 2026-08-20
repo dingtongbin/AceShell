@@ -48,6 +48,7 @@ type services struct {
 	browser      *appservices.BrowserService
 	clipboard    *appservices.ClipboardService
 	version      *appservices.VersionService
+	rdp          *appservices.RdpService
 }
 
 // main 应用入口。
@@ -106,6 +107,7 @@ func initServices() *services {
 		browser:      &appservices.BrowserService{},
 		clipboard:    &appservices.ClipboardService{},
 		version:      &appservices.VersionService{},
+		rdp:          &appservices.RdpService{},
 	}
 
 	svc.config.Init()
@@ -134,6 +136,7 @@ func createApp(svc *services) *application.App {
 			application.NewService(svc.browser),
 			application.NewService(svc.clipboard),
 			application.NewService(svc.version),
+			application.NewService(svc.rdp),
 		},
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(assets),
@@ -163,6 +166,13 @@ func wireServices(svc *services, app *application.App) {
 	appservices.AppServiceRegistry["telnet"] = svc.directTelnet
 	appservices.AppServiceRegistry["ssh"] = svc.ssh
 	appservices.AppServiceRegistry["serial"] = svc.serial
+
+	// RDP 图形会话桥:启动本机 WebSocket 字节桥(仅 127.0.0.1)
+	svc.rdp.SetApp(app)
+	if _, err := svc.rdp.Start(); err != nil {
+		fmt.Printf("RDP bridge start failed: %v\n", err)
+	}
+	svc.rdp.SetSessionFiles(svc.sessionFile)
 }
 
 // createMainWindow 创建主窗口。

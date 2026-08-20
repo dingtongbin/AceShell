@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount, inject, computed, watch } from 'vue'
 import { NModal, NInput, NInputNumber, NSelect, NButton, NDescriptions, NDescriptionsItem, NCheckboxGroup, NCheckbox, NRadioGroup, NRadioButton, NIcon, NScrollbar, useMessage } from 'naive-ui'
-import { DocumentTextOutline, LogoGithub, GlobeOutline } from '@vicons/ionicons5'
+import { DocumentTextOutline } from '@vicons/ionicons5'
 import { Window } from '@wailsio/runtime'
 import LeftToolBar from './LeftToolBar.vue'
 import MainMenu from './MainMenu.vue'
@@ -17,6 +17,7 @@ import { ListPorts } from '../../bindings/changeme/internal/services/serialservi
 import { OpenUrl as BrowserOpenUrl } from '../../bindings/changeme/internal/services/browserservice.js'
 import { ListKeys, DeleteKey } from '../../bindings/changeme/internal/services/globalkeyservice.js'
 import { ScanBrowsers } from '../../bindings/changeme/internal/services/browserservice.js'
+import { GetRdpTestServers } from '../../bindings/changeme/internal/services/rdpservice.js'
 import KeyCreateDialog from './KeyCreateDialog.vue'
 import SshCopyDialog from './SshCopyDialog.vue'
 import FileEditor from './FileEditor.vue'
@@ -39,8 +40,7 @@ function onTabStatus(info: { text: string; row: number; col: number; encoding: s
 const showSerial = ref(true)
 const showToolbar = ref(true)
 const showHelp = ref(true)
-const showGithub = ref(true)
-const appVersion = ref('0.1.0')
+const appVersion = ref('0.1.2')
 const showExport = ref(false)
 const showImport = ref(false)
 const sessionWidth = ref(220)
@@ -61,7 +61,7 @@ const newFolderParent = ref('')
 // Session dialog
 const showSessionDialog = ref(false)
 const isEditMode = ref(false)
-const selectedProtocol = ref<'ssh' | 'sftp' | 'telnet' | 'serial' | 'http'>('ssh')
+const selectedProtocol = ref<'ssh' | 'sftp' | 'telnet' | 'serial' | 'http' | 'rdp'>('ssh')
 
 // Common fields
 const sessName = ref('')
@@ -98,6 +98,37 @@ const serialParity = ref('none')
 const httpUrl = ref('')
 const httpBrowser = ref('')
 const browserList = ref<{ id: string; name: string; execPath: string; isDefault: boolean }[]>([])
+
+// RDP
+const rdpHost = ref('')
+const rdpPort = ref(3389)
+const rdpUser = ref('')
+const rdpPassword = ref('')
+const rdpTestServers = ref<{ label: string; value: string }[]>([])
+const rdpTestSel = ref('')
+
+async function loadRdpTestServers() {
+  try {
+    const raw = JSON.parse(await GetRdpTestServers())
+    const list = Array.isArray(raw) ? raw : []
+    rdpTestServers.value = list.map((s: any) => ({
+      label: `${s.name} (${s.host}:${s.port})`,
+      value: JSON.stringify(s),
+    }))
+  } catch {
+    rdpTestServers.value = []
+  }
+}
+
+function applyRdpTestServer(value: string) {
+  try {
+    const s = JSON.parse(value)
+    rdpHost.value = s.host || ''
+    rdpPort.value = s.port || 3389
+    rdpUser.value = s.username || ''
+    rdpPassword.value = s.password || ''
+  } catch {}
+}
 
 async function loadBrowsers() {
   try {
@@ -176,7 +207,6 @@ async function loadConfig() {
     showSerial.value = cfg.view?.showSerial ?? true
     showToolbar.value = cfg.view?.showToolbar ?? true
     showHelp.value = cfg.view?.showHelp ?? true
-    showGithub.value = cfg.view?.showGithub ?? true
     tabOrientation.value = cfg.view?.tabOrientation ?? 'horizontal'
     verticalTabWidth.value = cfg.view?.verticalTabWidth ?? 180
   } catch {}
@@ -260,6 +290,12 @@ function validateHttp(): string | null {
   return null
 }
 
+function validateRdp(): string | null {
+  if (!rdpHost.value.trim()) return 'RDP 主机不能为空'
+  if (rdpPort.value < 1 || rdpPort.value > 65535) return 'RDP 端口范围 1-65535'
+  return null
+}
+
 function validateCurrent(): string | null {
   const nameErr = validateName(sessName.value.trim())
   if (nameErr) return nameErr
@@ -270,6 +306,7 @@ function validateCurrent(): string | null {
     case 'telnet': return validateTelnet()
     case 'serial': return validateSerial()
     case 'http': return validateHttp()
+    case 'rdp': return validateRdp()
     default: return '未知协议'
   }
 }
@@ -353,6 +390,10 @@ function buildHttpToml(name: string): string {
   return `name = "${escapeToml(name)}"\nurl = "${escapeToml(httpUrl.value.trim())}"\nprotocol = "http"\nbrowser = "${escapeToml(httpBrowser.value)}"\nnotes = ""\ncreated = "${escapeToml(sessCreated.value || nowStr())}"\nupdated = "${escapeToml(nowStr())}"\n`
 }
 
+function buildRdpToml(name: string): string {
+  return `name = "${escapeToml(name)}"\nhost = "${escapeToml(rdpHost.value.trim())}"\nport = ${rdpPort.value}\nusername = "${escapeToml(rdpUser.value)}"\npassword = "${escapeToml(rdpPassword.value)}"\nprotocol = "rdp"\nnotes = ""\ncreated = "${escapeToml(sessCreated.value || nowStr())}"\nupdated = "${escapeToml(nowStr())}"\n`
+}
+
 function buildToml(name: string): string {
   switch (selectedProtocol.value) {
     case 'ssh': return buildSshToml(name, 'ssh')
@@ -360,6 +401,7 @@ function buildToml(name: string): string {
     case 'telnet': return buildTelnetToml(name)
     case 'serial': return buildSerialToml(name)
     case 'http': return buildHttpToml(name)
+    case 'rdp': return buildRdpToml(name)
     default: return ''
   }
 }
@@ -458,12 +500,13 @@ function resetSshFields() { sshHost.value = ''; sshPort.value = 22; sshUser.valu
 function resetTelnetFields() { telnetHost.value = ''; telnetPort.value = 23; telnetAccount.value = ''; telnetPassword.value = '' }
 function resetSerialFields() { serialDevice.value = ''; serialBaud.value = 9600; serialDataBits.value = 8; serialStopBits.value = '1'; serialParity.value = 'none' }
 function resetHttpFields() { httpUrl.value = ''; httpBrowser.value = '' }
+function resetRdpFields() { rdpHost.value = ''; rdpPort.value = 3389; rdpUser.value = ''; rdpPassword.value = ''; rdpTestSel.value = '' }
 function resetAllFields() {
   sessName.value = ''; sessCreated.value = ''; sessUpdated.value = ''; sessFolder.value = ''; sessPath.value = ''
-  resetSshFields(); resetTelnetFields(); resetSerialFields(); resetHttpFields()
+  resetSshFields(); resetTelnetFields(); resetSerialFields(); resetHttpFields(); resetRdpFields()
 }
 
-function openNewSession(folderPath: string, protocol: 'ssh' | 'sftp' | 'telnet' | 'serial' | 'http' = 'ssh') {
+function openNewSession(folderPath: string, protocol: 'ssh' | 'sftp' | 'telnet' | 'serial' | 'http' | 'rdp' = 'ssh') {
   resetAllFields()
   selectedProtocol.value = protocol
   sessFolder.value = folderPath
@@ -471,6 +514,7 @@ function openNewSession(folderPath: string, protocol: 'ssh' | 'sftp' | 'telnet' 
   isEditMode.value = false
   showSessionDialog.value = true
   if (protocol === 'http') loadBrowsers()
+  if (protocol === 'rdp') loadRdpTestServers()
 }
 
 async function handleCreateSession() {
@@ -495,7 +539,7 @@ async function openEditSession(path: string) {
     sessFolder.value = path.substring(0, path.lastIndexOf('/'))
     sessCreated.value = meta.created || ''
     sessUpdated.value = meta.updated || ''
-    selectedProtocol.value = meta.protocol === 'serial' ? 'serial' : (meta.protocol === 'telnet' ? 'telnet' : (meta.protocol === 'sftp' ? 'sftp' : (meta.protocol === 'http' ? 'http' : 'ssh')))
+    selectedProtocol.value = meta.protocol === 'serial' ? 'serial' : (meta.protocol === 'telnet' ? 'telnet' : (meta.protocol === 'sftp' ? 'sftp' : (meta.protocol === 'http' ? 'http' : (meta.protocol === 'rdp' ? 'rdp' : 'ssh'))))
     switch (selectedProtocol.value) {
       case 'ssh':
       case 'sftp':
@@ -524,6 +568,13 @@ async function openEditSession(path: string) {
         httpUrl.value = meta.url || ''
         httpBrowser.value = meta.browser || ''
         loadBrowsers()
+        break
+      case 'rdp':
+        rdpHost.value = meta.host || ''
+        rdpPort.value = meta.port || 3389
+        rdpUser.value = meta.username || ''
+        rdpPassword.value = meta.password || ''
+        loadRdpTestServers()
         break
     }
     sessionSide.value = 'settings'
@@ -658,9 +709,6 @@ async function openExternal(url: string) {
   if (err) message.error('打开链接失败: ' + err)
 }
 
-// 打开项目 GitHub 页面(系统默认浏览器)
-function openGithub() { openExternal('https://github.com/dingtongbin/AceShell') }
-
 onMounted(() => {
   loadConfig()
   window.addEventListener('config-changed', onConfigChanged)
@@ -678,10 +726,8 @@ onBeforeUnmount(() => {
       <LeftToolBar
         :show-session="showSessionManager"
         :show-help="showHelp"
-        :show-github="showGithub"
         @toggle-session="toggleSessionManager"
         @open-help="showAbout = true"
-        @open-github="openGithub"
         @open-settings="emit('open-settings')"
       />
       <MainMenu
@@ -768,6 +814,10 @@ onBeforeUnmount(() => {
               <span class="type-name">HTTP</span>
               <span class="type-desc">网页链接访问</span>
             </div>
+            <div class="type-item" :class="{ active: selectedProtocol === 'rdp' }" @click="selectedProtocol = 'rdp'; loadRdpTestServers()">
+              <span class="type-name">RDP</span>
+              <span class="type-desc">远程桌面协议</span>
+            </div>
           </div>
         </n-scrollbar>
         <n-scrollbar style="flex: 1; min-width: 0;">
@@ -829,6 +879,16 @@ onBeforeUnmount(() => {
                 <br />4. 若打开时所选浏览器已不存在或不可用，将不会打开网页，并弹出提示让您重新选择浏览器。
               </div>
             </template>
+            <template v-else-if="selectedProtocol === 'rdp'">
+              <div class="form-group"><label class="form-label">IP 地址 <span class="required">*</span></label><n-input v-model:value="rdpHost" placeholder="IP 或域名" /></div>
+              <div class="form-group"><label class="form-label">端口</label><n-input-number v-model:value="rdpPort" :min="1" :max="65535" style="width: 100%" /></div>
+              <div class="form-group"><label class="form-label">用户名</label><n-input v-model:value="rdpUser" placeholder="登录账号" /></div>
+              <div class="form-group"><label class="form-label">密码</label><n-input v-model:value="rdpPassword" type="password" show-password-on="click" placeholder="登录密码" /></div>
+              <div class="form-group">
+                <label class="form-label">测试服务器</label>
+                <n-select v-model:value="rdpTestSel" :options="rdpTestServers" placeholder="选择测试服务器自动填充（本地配置，不入库）" filterable clearable style="width: 100%" @update:value="applyRdpTestServer" />
+              </div>
+            </template>
           </div>
           <div v-else-if="sessionSide === 'meta'" class="anim-fade">
             <n-descriptions bordered :column="1" size="medium" label-style="width:100px" style="max-width: 400px; margin: 0 auto">
@@ -871,34 +931,16 @@ onBeforeUnmount(() => {
     <SshCopyDialog v-model:show="showKeyCopy" :selected-key="sshKeyRef" :host="sshHost" :port="sshPort" :user="sshUser" @done="handleKeyCopied" />
 
     <!-- About / help dialog -->
-    <n-modal v-model:show="showAbout" title="帮助" preset="dialog" :show-icon="false" style="width: 480px" :mask-closable="false">
-      <n-scrollbar style="height: 360px" class="about-scroller">
-        <div class="about-body">
-          <div class="about-name">AceShell</div>
-          <div class="about-desc">跨平台网络终端管理工具</div>
-          <div class="about-info">版本：{{ appVersion }}</div>
-          <div class="about-links">
-            <span class="about-link" @click="openExternal('https://github.com/dingtongbin/AceShell')">
-              <n-icon :size="13" :component="LogoGithub" /> 项目主页
-            </span>
-            <span class="about-link" @click="openExternal('https://dingtongbin.cn/')">
-              <n-icon :size="13" :component="GlobeOutline" /> 我的博客
-            </span>
-          </div>
-          <div class="about-divider" />
-          <div class="about-info">会话管理：SSH / SFTP / Telnet / 串口 / HTTP 五类会话，树形组织、加密存储、支持导入导出</div>
-          <div class="about-info">多层标签页：外层标签 + SSH 内层会话（shell-1、shell-N），支持拖拽排序</div>
-          <div class="about-info">终端渲染：真色彩、TUI 全屏程序、超链接、emoji 宽字符、回滚缓冲、选择复制与右键粘贴</div>
-          <div class="about-info">SFTP：SSH / SFTP 会话内置面板，双栏浏览、上传下载、断点续传、在线编辑</div>
-          <div class="about-info">HTTP 会话：自动扫描本机浏览器，双击在所选浏览器中打开链接</div>
-          <div class="about-info">脚本管理：脚本内容注入活动终端执行，内置编辑器支持多标签与语法高亮</div>
-          <div class="about-info">连接日志：自动记录所有连接的输入输出，按会话浏览查看</div>
-          <div class="about-info">安全：主密钥加密存储敏感字段、SSH 指纹验证、SSH 密钥生成与部署</div>
-          <div class="about-info">外观：深色 / 浅色主题、壁纸、面板透明度、标签方向</div>
-          <div class="about-info">跨平台：Windows / macOS / Linux</div>
-          <div class="about-info">详细使用文档请参考项目根目录 AceShell项目文档.md</div>
+    <n-modal v-model:show="showAbout" title="帮助" preset="dialog" :show-icon="false" style="width: 420px" :mask-closable="false">
+      <div class="about-body">
+        <div class="about-name">AceShell</div>
+        <div class="about-desc">跨平台网络终端管理工具</div>
+        <div class="about-version">版本 v{{ appVersion }}</div>
+        <div class="about-links">
+          <div class="about-item"><span class="about-label">项目地址</span><a class="about-link" href="#" @click.prevent="openExternal('https://github.com/dingtongbin/AceShell')">https://github.com/dingtongbin/AceShell</a></div>
+          <div class="about-item"><span class="about-label">作者博客</span><a class="about-link" href="#" @click.prevent="openExternal('https://dingtongbin.cn/')">https://dingtongbin.cn/</a></div>
         </div>
-      </n-scrollbar>
+      </div>
       <template #action><n-button type="primary" @click="showAbout = false">确定</n-button></template>
     </n-modal>
 
@@ -1129,30 +1171,34 @@ onBeforeUnmount(() => {
 .about-desc {
   font-size: 13px;
   color: var(--text-secondary, #888);
+  margin-top: 2px;
 }
-.about-divider {
-  height: 1px;
-  background: var(--border-color, #3c3c3c);
-  margin: 2px 0;
-}
-.about-info {
+.about-version {
   font-size: 12px;
-  color: var(--text-color, #d4d4d4);
-  line-height: 1.7;
+  color: var(--text-secondary, #888);
+  margin-top: 2px;
 }
 .about-links {
   display: flex;
-  gap: 16px;
-  margin-top: 2px;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+}
+.about-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+}
+.about-label {
+  color: var(--text-secondary, #888);
+  flex-shrink: 0;
 }
 .about-link {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 12px;
+  font-size: 13px;
   color: #0078d4;
-  cursor: pointer;
-  user-select: none;
+  text-decoration: none;
+  word-break: break-all;
 }
 .about-link:hover {
   text-decoration: underline;

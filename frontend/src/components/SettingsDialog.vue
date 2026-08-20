@@ -3,7 +3,7 @@ import { ref, reactive, onMounted, watch } from 'vue'
 import { NModal, NSwitch, NTag, NRadioGroup, NRadioButton, NButton, NInput, NCheckbox, NIcon, NSlider, NColorPicker, NInputNumber, NAutoComplete, NSelect, useMessage } from 'naive-ui'
 import { CloseOutline, LogoGithub, GlobeOutline } from '@vicons/ionicons5'
 import { useTheme } from '../stores/theme'
-import { GetConfig, SetTabOrientation, SetTheme, SetCloseConfirm, SetPanelOpacity, SetWallpaper, SetTerminalConfig, SetShowSerial, SetShowHelp, SetShowGithub, SetFileEditingAutoSave } from '../../bindings/changeme/internal/services/configservice.js'
+import { GetConfig, SetTabOrientation, SetTheme, SetCloseConfirm, SetPanelOpacity, SetWallpaper, SetTerminalConfig, SetShowSerial, SetShowHelp, SetFileEditingAutoSave } from '../../bindings/changeme/internal/services/configservice.js'
 import { OpenFileDialog } from '../../bindings/changeme/internal/services/windowservice.js'
 import { OpenUrl as BrowserOpenUrl } from '../../bindings/changeme/internal/services/browserservice.js'
 import { GetVersion } from '../../bindings/changeme/internal/services/versionservice.js'
@@ -29,7 +29,6 @@ const panelOpacity = ref(100)
 const wallpaperPath = ref('')
 const showSerial = ref(true)
 const showHelp = ref(true)
-const showGithub = ref(true)
 const autoSave = ref(true)
 const appVersion = ref('0.1.0')
 
@@ -165,11 +164,6 @@ async function handleShowHelpChange(value: boolean) {
   try { await SetShowHelp(value); window.dispatchEvent(new Event('config-changed')) } catch (e) { console.warn('切换帮助失败:', e) }
 }
 
-async function handleShowGithubChange(value: boolean) {
-  showGithub.value = value
-  try { await SetShowGithub(value); window.dispatchEvent(new Event('config-changed')) } catch (e) { console.warn('切换 GitHub 按钮失败:', e) }
-}
-
 async function handleAutoSaveChange(value: boolean) {
   autoSave.value = value
   try { await SetFileEditingAutoSave(value); window.dispatchEvent(new Event('config-changed')) } catch (e) { console.warn('设置自动保存失败:', e) }
@@ -202,7 +196,6 @@ async function loadConfig() {
     wallpaperPath.value = cfg.view?.wallpaper || ''
     showSerial.value = cfg.view?.showSerial ?? true
     showHelp.value = cfg.view?.showHelp ?? true
-    showGithub.value = cfg.view?.showGithub ?? true
     autoSave.value = cfg.fileEditing?.autoSave ?? true
     loadTermForm(cfg)
   } catch {}
@@ -265,10 +258,6 @@ watch(() => props.show, (val) => { if (val) loadConfig() })
             <div class="setting-item" style="margin-top: 12px;">
               <div class="setting-label">帮助</div>
               <n-switch :value="showHelp" size="small" @update:value="handleShowHelpChange" />
-            </div>
-            <div class="setting-item" style="margin-top: 12px;">
-              <div class="setting-label">GitHub 按钮</div>
-              <n-switch :value="showGithub" size="small" @update:value="handleShowGithubChange" />
             </div>
           </div>
           <div v-if="activeNav === 'terminal'" class="term-settings">

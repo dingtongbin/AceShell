@@ -101,6 +101,7 @@ export interface PaneActions {
   onMoveTab: (tabId: string, targetPaneId: string, index?: number) => void
   onSplitAt: (tabId: string, targetPaneId: string, dir: SplitDir) => void
   onFocus: (paneId: string) => void
+  openRdp: (meta: { sessionPath: string; name: string; host: string; port: number }) => void
   onStatus: (paneId: string, text: string, row: number, col: number, encoding: string, hasTab: boolean) => void
   registerPane: (paneId: string, api: TabPaneApi) => () => void
   paneExists: (paneId: string) => boolean
