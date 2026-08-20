@@ -24,6 +24,8 @@
     "@codemirror/search": "^6.7.0",
     "@codemirror/state": "^6.6.0",
     "@codemirror/view": "^6.43.0",
+    "@devolutions/iron-remote-desktop": "^0.11.0",
+    "@devolutions/iron-remote-desktop-rdp": "https://github.com/dingtongbin/iron-remote-desktop-rdp-build/releases/download/v0.7.0-aceshell.1/devolutions-iron-remote-desktop-rdp-0.7.0-aceshell.1.tgz",
     "@vicons/ionicons5": "^0.13.0",
     "@wailsio/runtime": "latest",
     "@xterm/addon-fit": "^0.11.0",

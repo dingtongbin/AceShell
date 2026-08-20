@@ -13,6 +13,7 @@ import {
   RadioOutline,
   LogInOutline,
   SearchOutline,
+  DesktopOutline,
 } from '@vicons/ionicons5'
 import { Events } from '@wailsio/runtime'
 import { useMessage } from 'naive-ui'
@@ -192,10 +193,10 @@ function handleDblClick(node: TreeNode) {
 }
 
 function getProtocolIcon(protocol?: string) {
-  switch (protocol) { case 'ssh': return TerminalOutline; case 'telnet': return TerminalOutline; case 'serial': return RadioOutline; default: return TerminalOutline }
+  switch (protocol) { case 'ssh': return TerminalOutline; case 'telnet': return TerminalOutline; case 'serial': return RadioOutline; case 'rdp': return DesktopOutline; default: return TerminalOutline }
 }
 function getProtocolColor(protocol?: string) {
-  switch (protocol) { case 'ssh': return '#4ec9b0'; case 'telnet': return '#569cd6'; case 'serial': return '#c586c0'; default: return '#6e9fc7' }
+  switch (protocol) { case 'ssh': return '#4ec9b0'; case 'telnet': return '#569cd6'; case 'serial': return '#c586c0'; case 'rdp': return '#c586c0'; default: return '#6e9fc7' }
 }
 
 function getContextMenuOptions(node: TreeNode): DropdownOption[] {

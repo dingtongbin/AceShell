@@ -6,6 +6,7 @@ import SettingsDialog from './components/SettingsDialog.vue'
 import { useTheme } from './stores/theme'
 import { GetConfig, GetWallpaperData } from '../bindings/changeme/internal/services/configservice.js'
 import { ApplyTitleBarTheme } from '../bindings/changeme/internal/services/windowservice.js'
+import { warmupRdpRuntime } from './composables/useRdp'
 
 const { isDark, theme, themeOverrides, initTheme } = useTheme()
 const showSettings = ref(false)
@@ -50,6 +51,7 @@ onMounted(async () => {
   }
   await applyWallpaperStyle()
   window.addEventListener('config-changed', onConfigChanged)
+  warmupRdpRuntime()
 })
 
 async function onConfigChanged() {

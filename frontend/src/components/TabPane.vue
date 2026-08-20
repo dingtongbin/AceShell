@@ -49,7 +49,7 @@ const pane = props.pane
 const paneInstanceId = ++paneInstanceSeq
 const ctx = inject<PaneCtx>('pane-ctx')
 const actions: PaneActions = ctx?.actions ?? {
-  onSplit: () => {}, onMoveTab: () => {}, onSplitAt: () => {}, onFocus: () => {}, onStatus: () => {}, registerPane: () => () => {}, paneExists: () => true,
+  onSplit: () => {}, onMoveTab: () => {}, onSplitAt: () => {}, onFocus: () => {}, onStatus: () => {}, registerPane: () => () => {}, paneExists: () => true, openRdp: () => {},
 }
 
 const message = useMessage()
@@ -175,6 +175,11 @@ async function openSession(sessionPath: string) {
   // HTTP 会话：直接打开所选浏览器的新标签页（不创建应用内标签页）
   if ((meta.protocol || 'telnet') === 'http') {
     openHttpSession(sessionPath, meta)
+    return
+  }
+  // RDP 会话：图形标签页,按 (host:port) 去重,已存在则定位激活
+  if ((meta.protocol || 'telnet') === 'rdp') {
+    actions.openRdp({ sessionPath, name: meta.name || meta.host, host: meta.host, port: meta.port })
     return
   }
   const tabId = sessionPath + '@' + Date.now()

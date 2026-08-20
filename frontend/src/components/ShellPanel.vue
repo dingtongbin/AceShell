@@ -17,6 +17,7 @@ import { ListPorts } from '../../bindings/changeme/internal/services/serialservi
 import { OpenUrl as BrowserOpenUrl } from '../../bindings/changeme/internal/services/browserservice.js'
 import { ListKeys, DeleteKey } from '../../bindings/changeme/internal/services/globalkeyservice.js'
 import { ScanBrowsers } from '../../bindings/changeme/internal/services/browserservice.js'
+import { GetRdpTestServers } from '../../bindings/changeme/internal/services/rdpservice.js'
 import KeyCreateDialog from './KeyCreateDialog.vue'
 import SshCopyDialog from './SshCopyDialog.vue'
 import FileEditor from './FileEditor.vue'
@@ -61,7 +62,7 @@ const newFolderParent = ref('')
 // Session dialog
 const showSessionDialog = ref(false)
 const isEditMode = ref(false)
-const selectedProtocol = ref<'ssh' | 'sftp' | 'telnet' | 'serial' | 'http'>('ssh')
+const selectedProtocol = ref<'ssh' | 'sftp' | 'telnet' | 'serial' | 'http' | 'rdp'>('ssh')
 
 // Common fields
 const sessName = ref('')
@@ -98,6 +99,37 @@ const serialParity = ref('none')
 const httpUrl = ref('')
 const httpBrowser = ref('')
 const browserList = ref<{ id: string; name: string; execPath: string; isDefault: boolean }[]>([])
+
+// RDP
+const rdpHost = ref('')
+const rdpPort = ref(3389)
+const rdpUser = ref('')
+const rdpPassword = ref('')
+const rdpTestServers = ref<{ label: string; value: string }[]>([])
+const rdpTestSel = ref('')
+
+async function loadRdpTestServers() {
+  try {
+    const raw = JSON.parse(await GetRdpTestServers())
+    const list = Array.isArray(raw) ? raw : []
+    rdpTestServers.value = list.map((s: any) => ({
+      label: `${s.name} (${s.host}:${s.port})`,
+      value: JSON.stringify(s),
+    }))
+  } catch {
+    rdpTestServers.value = []
+  }
+}
+
+function applyRdpTestServer(value: string) {
+  try {
+    const s = JSON.parse(value)
+    rdpHost.value = s.host || ''
+    rdpPort.value = s.port || 3389
+    rdpUser.value = s.username || ''
+    rdpPassword.value = s.password || ''
+  } catch {}
+}
 
 async function loadBrowsers() {
   try {
@@ -260,6 +292,12 @@ function validateHttp(): string | null {
   return null
 }
 
+function validateRdp(): string | null {
+  if (!rdpHost.value.trim()) return 'RDP 主机不能为空'
+  if (rdpPort.value < 1 || rdpPort.value > 65535) return 'RDP 端口范围 1-65535'
+  return null
+}
+
 function validateCurrent(): string | null {
   const nameErr = validateName(sessName.value.trim())
   if (nameErr) return nameErr
@@ -270,6 +308,7 @@ function validateCurrent(): string | null {
     case 'telnet': return validateTelnet()
     case 'serial': return validateSerial()
     case 'http': return validateHttp()
+    case 'rdp': return validateRdp()
     default: return '未知协议'
   }
 }
@@ -353,6 +392,10 @@ function buildHttpToml(name: string): string {
   return `name = "${escapeToml(name)}"\nurl = "${escapeToml(httpUrl.value.trim())}"\nprotocol = "http"\nbrowser = "${escapeToml(httpBrowser.value)}"\nnotes = ""\ncreated = "${escapeToml(sessCreated.value || nowStr())}"\nupdated = "${escapeToml(nowStr())}"\n`
 }
 
+function buildRdpToml(name: string): string {
+  return `name = "${escapeToml(name)}"\nhost = "${escapeToml(rdpHost.value.trim())}"\nport = ${rdpPort.value}\nusername = "${escapeToml(rdpUser.value)}"\npassword = "${escapeToml(rdpPassword.value)}"\nprotocol = "rdp"\nnotes = ""\ncreated = "${escapeToml(sessCreated.value || nowStr())}"\nupdated = "${escapeToml(nowStr())}"\n`
+}
+
 function buildToml(name: string): string {
   switch (selectedProtocol.value) {
     case 'ssh': return buildSshToml(name, 'ssh')
@@ -360,6 +403,7 @@ function buildToml(name: string): string {
     case 'telnet': return buildTelnetToml(name)
     case 'serial': return buildSerialToml(name)
     case 'http': return buildHttpToml(name)
+    case 'rdp': return buildRdpToml(name)
     default: return ''
   }
 }
@@ -458,12 +502,13 @@ function resetSshFields() { sshHost.value = ''; sshPort.value = 22; sshUser.valu
 function resetTelnetFields() { telnetHost.value = ''; telnetPort.value = 23; telnetAccount.value = ''; telnetPassword.value = '' }
 function resetSerialFields() { serialDevice.value = ''; serialBaud.value = 9600; serialDataBits.value = 8; serialStopBits.value = '1'; serialParity.value = 'none' }
 function resetHttpFields() { httpUrl.value = ''; httpBrowser.value = '' }
+function resetRdpFields() { rdpHost.value = ''; rdpPort.value = 3389; rdpUser.value = ''; rdpPassword.value = ''; rdpTestSel.value = '' }
 function resetAllFields() {
   sessName.value = ''; sessCreated.value = ''; sessUpdated.value = ''; sessFolder.value = ''; sessPath.value = ''
-  resetSshFields(); resetTelnetFields(); resetSerialFields(); resetHttpFields()
+  resetSshFields(); resetTelnetFields(); resetSerialFields(); resetHttpFields(); resetRdpFields()
 }
 
-function openNewSession(folderPath: string, protocol: 'ssh' | 'sftp' | 'telnet' | 'serial' | 'http' = 'ssh') {
+function openNewSession(folderPath: string, protocol: 'ssh' | 'sftp' | 'telnet' | 'serial' | 'http' | 'rdp' = 'ssh') {
   resetAllFields()
   selectedProtocol.value = protocol
   sessFolder.value = folderPath
@@ -471,6 +516,7 @@ function openNewSession(folderPath: string, protocol: 'ssh' | 'sftp' | 'telnet' 
   isEditMode.value = false
   showSessionDialog.value = true
   if (protocol === 'http') loadBrowsers()
+  if (protocol === 'rdp') loadRdpTestServers()
 }
 
 async function handleCreateSession() {
@@ -495,7 +541,7 @@ async function openEditSession(path: string) {
     sessFolder.value = path.substring(0, path.lastIndexOf('/'))
     sessCreated.value = meta.created || ''
     sessUpdated.value = meta.updated || ''
-    selectedProtocol.value = meta.protocol === 'serial' ? 'serial' : (meta.protocol === 'telnet' ? 'telnet' : (meta.protocol === 'sftp' ? 'sftp' : (meta.protocol === 'http' ? 'http' : 'ssh')))
+    selectedProtocol.value = meta.protocol === 'serial' ? 'serial' : (meta.protocol === 'telnet' ? 'telnet' : (meta.protocol === 'sftp' ? 'sftp' : (meta.protocol === 'http' ? 'http' : (meta.protocol === 'rdp' ? 'rdp' : 'ssh'))))
     switch (selectedProtocol.value) {
       case 'ssh':
       case 'sftp':
@@ -524,6 +570,13 @@ async function openEditSession(path: string) {
         httpUrl.value = meta.url || ''
         httpBrowser.value = meta.browser || ''
         loadBrowsers()
+        break
+      case 'rdp':
+        rdpHost.value = meta.host || ''
+        rdpPort.value = meta.port || 3389
+        rdpUser.value = meta.username || ''
+        rdpPassword.value = meta.password || ''
+        loadRdpTestServers()
         break
     }
     sessionSide.value = 'settings'
@@ -768,6 +821,10 @@ onBeforeUnmount(() => {
               <span class="type-name">HTTP</span>
               <span class="type-desc">网页链接访问</span>
             </div>
+            <div class="type-item" :class="{ active: selectedProtocol === 'rdp' }" @click="selectedProtocol = 'rdp'; loadRdpTestServers()">
+              <span class="type-name">RDP</span>
+              <span class="type-desc">远程桌面协议</span>
+            </div>
           </div>
         </n-scrollbar>
         <n-scrollbar style="flex: 1; min-width: 0;">
@@ -827,6 +884,16 @@ onBeforeUnmount(() => {
                 <br />2. 浏览器列表为自动扫描的本机浏览器；留空或选择"默认浏览器（系统默认）"时使用系统默认浏览器。
                 <br />3. 双击会话即直接打开所选浏览器的新标签页，不占用本应用标签页。
                 <br />4. 若打开时所选浏览器已不存在或不可用，将不会打开网页，并弹出提示让您重新选择浏览器。
+              </div>
+            </template>
+            <template v-else-if="selectedProtocol === 'rdp'">
+              <div class="form-group"><label class="form-label">IP 地址 <span class="required">*</span></label><n-input v-model:value="rdpHost" placeholder="IP 或域名" /></div>
+              <div class="form-group"><label class="form-label">端口</label><n-input-number v-model:value="rdpPort" :min="1" :max="65535" style="width: 100%" /></div>
+              <div class="form-group"><label class="form-label">用户名</label><n-input v-model:value="rdpUser" placeholder="登录账号" /></div>
+              <div class="form-group"><label class="form-label">密码</label><n-input v-model:value="rdpPassword" type="password" show-password-on="click" placeholder="登录密码" /></div>
+              <div class="form-group">
+                <label class="form-label">测试服务器</label>
+                <n-select v-model:value="rdpTestSel" :options="rdpTestServers" placeholder="选择测试服务器自动填充（本地配置，不入库）" filterable clearable style="width: 100%" @update:value="applyRdpTestServer" />
               </div>
             </template>
           </div>
