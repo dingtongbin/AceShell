@@ -39,7 +39,6 @@ type ViewConfig struct {
 	PanelOpacity     int    `toml:"panelOpacity" json:"panelOpacity"`
 	Wallpaper        string `toml:"wallpaper" json:"wallpaper"`
 	ShowHelp         bool   `toml:"showHelp" json:"showHelp"`
-	ShowGithub       bool   `toml:"showGithub" json:"showGithub"`
 }
 
 type SectionState struct {
@@ -101,7 +100,6 @@ func (c *ConfigService) Init() {
 			CloseConfirm:     true,
 			Theme:            "dark",
 			PanelOpacity:     100,
-			ShowGithub:       true,
 		},
 		Sections: SectionsConfig{
 			Session: SectionState{Expanded: true, Size: 0},
@@ -333,16 +331,6 @@ func (c *ConfigService) SetFileEditingAutoSave(autoSave bool) string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.config.FileEditing.AutoSave = autoSave
-	c.save()
-	data, _ := json.Marshal(c.config)
-	return string(data)
-}
-
-// SetShowGithub 设置左侧工具栏 GitHub 按钮显隐(即时生效)。
-func (c *ConfigService) SetShowGithub(show bool) string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.config.View.ShowGithub = show
 	c.save()
 	data, _ := json.Marshal(c.config)
 	return string(data)

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount, inject, computed, watch } from 'vue'
 import { NModal, NInput, NInputNumber, NSelect, NButton, NDescriptions, NDescriptionsItem, NCheckboxGroup, NCheckbox, NRadioGroup, NRadioButton, NIcon, NScrollbar, useMessage } from 'naive-ui'
-import { DocumentTextOutline, LogoGithub, GlobeOutline } from '@vicons/ionicons5'
+import { DocumentTextOutline } from '@vicons/ionicons5'
 import { Window } from '@wailsio/runtime'
 import LeftToolBar from './LeftToolBar.vue'
 import MainMenu from './MainMenu.vue'
@@ -11,7 +11,6 @@ import ExportDialog from './ExportDialog.vue'
 import ImportDialog from './ImportDialog.vue'
 
 import { SaveSession, CreateFolder, LoadSession, GetTree, UpdateSession } from '../../bindings/changeme/internal/services/sessionfileservice.js'
-import { GetVersion } from '../../bindings/changeme/internal/services/versionservice.js'
 import { GetConfig, SetShowSession, SetShowSerial, SetShowToolbar } from '../../bindings/changeme/internal/services/configservice.js'
 import { ListPorts } from '../../bindings/changeme/internal/services/serialservice.js'
 import { OpenUrl as BrowserOpenUrl } from '../../bindings/changeme/internal/services/browserservice.js'
@@ -40,8 +39,6 @@ function onTabStatus(info: { text: string; row: number; col: number; encoding: s
 const showSerial = ref(true)
 const showToolbar = ref(true)
 const showHelp = ref(true)
-const showGithub = ref(true)
-const appVersion = ref('0.1.0')
 const showExport = ref(false)
 const showImport = ref(false)
 const sessionWidth = ref(220)
@@ -208,7 +205,6 @@ async function loadConfig() {
     showSerial.value = cfg.view?.showSerial ?? true
     showToolbar.value = cfg.view?.showToolbar ?? true
     showHelp.value = cfg.view?.showHelp ?? true
-    showGithub.value = cfg.view?.showGithub ?? true
     tabOrientation.value = cfg.view?.tabOrientation ?? 'horizontal'
     verticalTabWidth.value = cfg.view?.verticalTabWidth ?? 180
   } catch {}
@@ -711,13 +707,9 @@ async function openExternal(url: string) {
   if (err) message.error('打开链接失败: ' + err)
 }
 
-// 打开项目 GitHub 页面(系统默认浏览器)
-function openGithub() { openExternal('https://github.com/dingtongbin/AceShell') }
-
 onMounted(() => {
   loadConfig()
   window.addEventListener('config-changed', onConfigChanged)
-  GetVersion().then(v => { appVersion.value = v }).catch(() => {})
 })
 
 onBeforeUnmount(() => {
@@ -731,10 +723,8 @@ onBeforeUnmount(() => {
       <LeftToolBar
         :show-session="showSessionManager"
         :show-help="showHelp"
-        :show-github="showGithub"
         @toggle-session="toggleSessionManager"
         @open-help="showAbout = true"
-        @open-github="openGithub"
         @open-settings="emit('open-settings')"
       />
       <MainMenu
@@ -938,34 +928,14 @@ onBeforeUnmount(() => {
     <SshCopyDialog v-model:show="showKeyCopy" :selected-key="sshKeyRef" :host="sshHost" :port="sshPort" :user="sshUser" @done="handleKeyCopied" />
 
     <!-- About / help dialog -->
-    <n-modal v-model:show="showAbout" title="帮助" preset="dialog" :show-icon="false" style="width: 480px" :mask-closable="false">
-      <n-scrollbar style="height: 360px" class="about-scroller">
-        <div class="about-body">
-          <div class="about-name">AceShell</div>
-          <div class="about-desc">跨平台网络终端管理工具</div>
-          <div class="about-info">版本：{{ appVersion }}</div>
-          <div class="about-links">
-            <span class="about-link" @click="openExternal('https://github.com/dingtongbin/AceShell')">
-              <n-icon :size="13" :component="LogoGithub" /> 项目主页
-            </span>
-            <span class="about-link" @click="openExternal('https://dingtongbin.cn/')">
-              <n-icon :size="13" :component="GlobeOutline" /> 我的博客
-            </span>
-          </div>
-          <div class="about-divider" />
-          <div class="about-info">会话管理：SSH / SFTP / Telnet / 串口 / HTTP 五类会话，树形组织、加密存储、支持导入导出</div>
-          <div class="about-info">多层标签页：外层标签 + SSH 内层会话（shell-1、shell-N），支持拖拽排序</div>
-          <div class="about-info">终端渲染：真色彩、TUI 全屏程序、超链接、emoji 宽字符、回滚缓冲、选择复制与右键粘贴</div>
-          <div class="about-info">SFTP：SSH / SFTP 会话内置面板，双栏浏览、上传下载、断点续传、在线编辑</div>
-          <div class="about-info">HTTP 会话：自动扫描本机浏览器，双击在所选浏览器中打开链接</div>
-          <div class="about-info">脚本管理：脚本内容注入活动终端执行，内置编辑器支持多标签与语法高亮</div>
-          <div class="about-info">连接日志：自动记录所有连接的输入输出，按会话浏览查看</div>
-          <div class="about-info">安全：主密钥加密存储敏感字段、SSH 指纹验证、SSH 密钥生成与部署</div>
-          <div class="about-info">外观：深色 / 浅色主题、壁纸、面板透明度、标签方向</div>
-          <div class="about-info">跨平台：Windows / macOS / Linux</div>
-          <div class="about-info">详细使用文档请参考项目根目录 AceShell项目文档.md</div>
+    <n-modal v-model:show="showAbout" title="帮助" preset="dialog" :show-icon="false" style="width: 420px" :mask-closable="false">
+      <div class="about-body">
+        <div class="about-name">AceShell</div>
+        <div class="about-links">
+          <div class="about-item"><span class="about-label">项目地址</span><a class="about-link" href="#" @click.prevent="openExternal('https://github.com/dingtongbin/AceShell')">https://github.com/dingtongbin/AceShell</a></div>
+          <div class="about-item"><span class="about-label">作者博客</span><a class="about-link" href="#" @click.prevent="openExternal('https://dingtongbin.cn/')">https://dingtongbin.cn/</a></div>
         </div>
-      </n-scrollbar>
+      </div>
       <template #action><n-button type="primary" @click="showAbout = false">确定</n-button></template>
     </n-modal>
 
@@ -1193,33 +1163,17 @@ onBeforeUnmount(() => {
   font-weight: 600;
   color: var(--text-color, #d4d4d4);
 }
-.about-desc {
-  font-size: 13px;
-  color: var(--text-secondary, #888);
-}
-.about-divider {
-  height: 1px;
-  background: var(--border-color, #3c3c3c);
-  margin: 2px 0;
-}
-.about-info {
-  font-size: 12px;
-  color: var(--text-color, #d4d4d4);
-  line-height: 1.7;
-}
 .about-links {
   display: flex;
-  gap: 16px;
-  margin-top: 2px;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
 }
 .about-link {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 12px;
+  font-size: 13px;
   color: #0078d4;
-  cursor: pointer;
-  user-select: none;
+  text-decoration: none;
+  word-break: break-all;
 }
 .about-link:hover {
   text-decoration: underline;

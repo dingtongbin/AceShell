@@ -4,20 +4,17 @@ import {
   FolderOutline,
   FolderOpenOutline,
   HelpCircleOutline,
-  LogoGithub,
   SettingsOutline,
 } from '@vicons/ionicons5'
 
 defineProps<{
   showSession: boolean
   showHelp: boolean
-  showGithub: boolean
 }>()
 
 const emit = defineEmits<{
   (e: 'toggle-session'): void
   (e: 'open-help'): void
-  (e: 'open-github'): void
   (e: 'open-settings'): void
 }>()
 </script>
@@ -35,14 +32,6 @@ const emit = defineEmits<{
       </n-tooltip>
     </div>
     <div class="ltb-bottom">
-      <n-tooltip v-if="showGithub" placement="right" trigger="hover" :delay="300">
-        <template #trigger>
-          <div class="ltb-item" @click="emit('open-github')">
-            <n-icon :size="24" :component="LogoGithub" />
-          </div>
-        </template>
-        GitHub
-      </n-tooltip>
       <n-tooltip v-if="showHelp" placement="right" trigger="hover" :delay="300">
         <template #trigger>
           <div class="ltb-item" @click="emit('open-help')">
