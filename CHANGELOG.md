@@ -2,6 +2,39 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 与 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 规范。
 
+## [0.1.2] - 2026-08-20
+
+### 新增：RDP 图形会话
+
+- 新增 RDP 会话类型，支持远程桌面图形连接：后端 RdpService 统一管理连接与 token 鉴权，WebSocket 桥接层（wsbridge）转发 RDP 协议数据
+- 前端新增远程桌面标签页（基于 IronRDP 的 iron-remote-desktop-rdp）：全屏画面渲染、鼠标/键盘交互、连接状态指示与错误提示
+- 标签页生命周期与既有标签管理器深度集成：拖动排序/分屏/关闭与连接 token 释放联动
+
+### 渲染与显示优化
+
+- 自定义构建 IronRDP：脏区域缓冲 + rAF 合并绘制，每帧仅一次 putImageData，消除网络卡顿时的画面撕裂
+- 显示比例固定为服务器原生分辨率（物理 1:1，按设备像素比缩放适配），黑边保留、不拉伸；窗口尺寸变化不再触发分辨率重新协商（兼容 xrdp 0.9 的 deactivate-reactivate 限制）
+- 修复拖动标签页重建组件导致的 RDP 连接断开（token 释放时机改为标签页真正关闭时）
+
+### 依赖
+
+- `@devolutions/iron-remote-desktop-rdp` 切换为自定义构建发布包（GitHub Release 分发），用户安装即用，无需自行编译 Rust/wasm
+
+## [0.1.1] - 2026-08-19
+
+### 主题
+
+- 原生标题栏跟随应用亮暗主题
+- 面板透明度默认改为 100%
+
+### 构建与发布
+
+- 更新应用图标源并重新生成全平台图标
+- MSIX 包标识名改为发布者前缀格式 `dingtongbin.AceShell`
+- 修复 MSIX 版本替换正则误伤 MinVersion，发布者显示名对齐商店账号
+- 拆分 MSIX 上传为独立发布步骤（修复 `&&`/`||` 表达式求值为布尔的问题）
+- Create Release 步骤仅 tag 触发时执行，手动触发工作流为构建预演
+
 ## [0.1.0] - 2026-08-18
 
 首个功能完整版本，以下为当前版本已实现的功能全景。
