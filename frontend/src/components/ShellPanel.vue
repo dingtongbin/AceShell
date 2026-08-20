@@ -11,6 +11,7 @@ import ExportDialog from './ExportDialog.vue'
 import ImportDialog from './ImportDialog.vue'
 
 import { SaveSession, CreateFolder, LoadSession, GetTree, UpdateSession } from '../../bindings/changeme/internal/services/sessionfileservice.js'
+import { GetVersion } from '../../bindings/changeme/internal/services/versionservice.js'
 import { GetConfig, SetShowSession, SetShowSerial, SetShowToolbar } from '../../bindings/changeme/internal/services/configservice.js'
 import { ListPorts } from '../../bindings/changeme/internal/services/serialservice.js'
 import { OpenUrl as BrowserOpenUrl } from '../../bindings/changeme/internal/services/browserservice.js'
@@ -39,6 +40,7 @@ function onTabStatus(info: { text: string; row: number; col: number; encoding: s
 const showSerial = ref(true)
 const showToolbar = ref(true)
 const showHelp = ref(true)
+const appVersion = ref('0.1.2')
 const showExport = ref(false)
 const showImport = ref(false)
 const sessionWidth = ref(220)
@@ -710,6 +712,7 @@ async function openExternal(url: string) {
 onMounted(() => {
   loadConfig()
   window.addEventListener('config-changed', onConfigChanged)
+  GetVersion().then(v => { appVersion.value = v }).catch(() => {})
 })
 
 onBeforeUnmount(() => {
@@ -931,6 +934,8 @@ onBeforeUnmount(() => {
     <n-modal v-model:show="showAbout" title="帮助" preset="dialog" :show-icon="false" style="width: 420px" :mask-closable="false">
       <div class="about-body">
         <div class="about-name">AceShell</div>
+        <div class="about-desc">跨平台网络终端管理工具</div>
+        <div class="about-version">版本 v{{ appVersion }}</div>
         <div class="about-links">
           <div class="about-item"><span class="about-label">项目地址</span><a class="about-link" href="#" @click.prevent="openExternal('https://github.com/dingtongbin/AceShell')">https://github.com/dingtongbin/AceShell</a></div>
           <div class="about-item"><span class="about-label">作者博客</span><a class="about-link" href="#" @click.prevent="openExternal('https://dingtongbin.cn/')">https://dingtongbin.cn/</a></div>
@@ -1163,11 +1168,31 @@ onBeforeUnmount(() => {
   font-weight: 600;
   color: var(--text-color, #d4d4d4);
 }
+.about-desc {
+  font-size: 13px;
+  color: var(--text-secondary, #888);
+  margin-top: 2px;
+}
+.about-version {
+  font-size: 12px;
+  color: var(--text-secondary, #888);
+  margin-top: 2px;
+}
 .about-links {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  margin-top: 4px;
+  margin-top: 10px;
+}
+.about-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+}
+.about-label {
+  color: var(--text-secondary, #888);
+  flex-shrink: 0;
 }
 .about-link {
   font-size: 13px;
