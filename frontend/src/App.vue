@@ -1,17 +1,20 @@
 <script setup lang="ts">
-import { ref, provide, onMounted, watchEffect, watch } from 'vue'
-import { NConfigProvider, NMessageProvider } from 'naive-ui'
+import { ref, provide, onMounted, watchEffect, watch, computed } from 'vue'
+import { NConfigProvider, NMessageProvider, zhCN, enUS } from 'naive-ui'
 import ShellPanel from './components/ShellPanel.vue'
 import SettingsDialog from './components/SettingsDialog.vue'
 import { useTheme } from './stores/theme'
 import { GetConfig, GetWallpaperData } from '../bindings/changeme/internal/services/configservice.js'
 import { ApplyTitleBarTheme } from '../bindings/changeme/internal/services/windowservice.js'
 import { warmupRdpRuntime } from './composables/useRdp'
+import i18n, { setLocale, currentLocale } from './i18n'
 
 const { isDark, theme, themeOverrides, initTheme } = useTheme()
 const showSettings = ref(false)
 const panelOpacity = ref(100)
 const wallpaper = ref('')
+
+const naiveLocale = computed(() => (currentLocale() === 'en-US' ? enUS : zhCN))
 
 function handleOpenSettings() {
   showSettings.value = true
@@ -46,8 +49,10 @@ onMounted(async () => {
     initTheme(cfg.view?.theme ?? 'dark')
     panelOpacity.value = cfg.view?.panelOpacity ?? 100
     wallpaper.value = cfg.view?.wallpaper || ''
+    setLocale(cfg.language ?? 'zh-CN')
   } catch {
     initTheme('dark')
+    setLocale('zh-CN')
   }
   await applyWallpaperStyle()
   window.addEventListener('config-changed', onConfigChanged)
@@ -59,6 +64,7 @@ async function onConfigChanged() {
     const cfg = JSON.parse(await GetConfig())
     panelOpacity.value = cfg.view?.panelOpacity ?? 100
     wallpaper.value = cfg.view?.wallpaper || ''
+    setLocale(cfg.language ?? 'zh-CN')
   } catch {
     // 忽略配置读取失败
   }
@@ -112,7 +118,7 @@ watchEffect(() => {
 </script>
 
 <template>
-  <n-config-provider :theme="theme" :theme-overrides="themeOverrides">
+  <n-config-provider :theme="theme" :theme-overrides="themeOverrides" :locale="naiveLocale">
     <n-message-provider>
       <div class="app-root">
         <ShellPanel @open-settings="handleOpenSettings" />

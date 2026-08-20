@@ -3,6 +3,7 @@ import { ref, watch, computed } from 'vue'
 import { NModal, NButton, NInput, NIcon, NSelect, NCheckbox, NScrollbar, useMessage } from 'naive-ui'
 import { ChevronForwardOutline, DocumentLockOutline } from '@vicons/ionicons5'
 import { GetImportTree, ImportSessions, PickImportFile, GetImportPackageTree, GetImportPackageKeys } from '../../bindings/changeme/internal/services/sessionfileservice.js'
+import { useI18n } from 'vue-i18n'
 
 interface TreeNode {
   name: string; path: string; isDir: boolean
@@ -17,6 +18,7 @@ interface PkgKey { name: string; type: string; fingerprint: string }
 const props = defineProps<{ show: boolean }>()
 const emit = defineEmits<{ (e: 'update:show', v: boolean): void; (e: 'done'): void }>()
 const message = useMessage()
+const { t } = useI18n()
 
 const localTree = ref<TreeNode[]>([])
 const localLoaded = ref(false)
@@ -51,20 +53,24 @@ const pwStrength = computed(() => {
   if (!password.value) return ''
   const n = [...password.value].length
   const cats = passwordCategories(password.value)
-  if (n < 8 || n > 64) return '长度须为 8~64 个字符'
-  if (cats < 3) return '需包含大写/小写/数字/符号中至少三类'
+  if (n < 8 || n > 64) return t('importDialog.pwLengthError')
+  if (cats < 3) return t('importDialog.pwCategoryError')
   return 'ok'
 })
 
 function validatePassword(pw: string): string | null {
-  if (!pw) return '导入口令不能为空'
+  if (!pw) return t('importDialog.pwEmptyError')
   const n = [...pw].length
-  if (n < 8 || n > 64) return '口令长度须为 8~64 个字符'
-  if (passwordCategories(pw) < 3) return '口令需包含大写字母、小写字母、数字、符号中的至少三类'
+  if (n < 8 || n > 64) return t('importDialog.pwLengthError')
+  if (passwordCategories(pw) < 3) return t('importDialog.pwFullCategoryError')
   return null
 }
 
 const hasFile = computed(() => !!filePath.value)
+const overwriteOptions = computed(() => [
+  { label: t('importDialog.overwriteSkip'), value: 'skip' },
+  { label: t('importDialog.overwriteReplace'), value: 'overwrite' },
+])
 const pwValid = computed(() => validatePassword(password.value) === null)
 
 function resetAll() {
@@ -178,7 +184,7 @@ function handleLocalRowClick(n: TreeNode) {
 const localFlat = computed(() => {
   const out: TreeNode[] = []
   // sessions 根节点恒为最顶层(展开状态),其下才是各子文件夹
-  out.push({ name: '/ (会话根目录)', path: '', isDir: true, depth: 0, expanded: true })
+  out.push({ name: t('importDialog.sessionRoot'), path: '', isDir: true, depth: 0, expanded: true })
   function walk(nodes: TreeNode[], depth: number) {
     for (const n of nodes) {
       out.push({ ...n, depth, _ref: n })
@@ -255,12 +261,12 @@ async function loadPackageTree() {
   try {
     const json = await GetImportPackageTree(filePath.value, password.value)
     if (!json) {
-      pkgTreeError.value = '无法读取导入包：密码错误或文件已损坏'
+      pkgTreeError.value = t('importDialog.cannotReadPkg')
       return
     }
     pkgTree.value = JSON.parse(json) || []
     if (pkgTree.value.length === 0) {
-      pkgTreeError.value = '导入包内没有可导入的内容'
+      pkgTreeError.value = t('importDialog.pkgEmpty')
       return
     }
     parsedOk.value = true
@@ -270,7 +276,7 @@ async function loadPackageTree() {
       if (Array.isArray(parsed)) pkgKeys.value = parsed
     }
   } catch (e: any) {
-    pkgTreeError.value = e.message || '无法读取导入包'
+    pkgTreeError.value = e.message || t('importDialog.cannotReadPkg2')
   }
 }
 
@@ -328,18 +334,18 @@ const confirmFlat = computed(() => {
 })
 
 async function doImport() {
-  if (!filePath.value) { pwError.value = '请选择导入文件'; return }
+  if (!filePath.value) { pwError.value = t('importDialog.noFileError'); return }
   const err = validatePassword(password.value)
   if (err) { pwError.value = err; return }
-  if (!hasPkgSelection.value) { pwError.value = '请至少勾选一个包内文件夹或会话'; return }
+  if (!hasPkgSelection.value) { pwError.value = t('importDialog.noPkgSelection'); return }
   importing.value = true
   try {
     const summary = await ImportSessions(password.value, selectedPath.value || '.', filePath.value, overwrite.value === 'overwrite', getSelectedPaths())
-    message.success(summary || '导入完成')
+    message.success(summary || t('importDialog.importDone'))
     showConfirm.value = false
     emit('done')
   } catch (e: any) {
-    pwError.value = e.message || '导入失败'
+    pwError.value = e.message || t('importDialog.importFailed')
     showConfirm.value = false
   }
   importing.value = false
@@ -363,14 +369,14 @@ function confirmClose() {
 </script>
 
 <template>
-  <n-modal :show="props.show" title="导入会话" preset="dialog" :show-icon="false" :mask-closable="false" style="width: 720px; max-width: 94vw" @update:show="(v) => { if (!v) handleCloseAsk() }">
+  <n-modal :show="props.show" :title="t('importDialog.title')" preset="dialog" :show-icon="false" :mask-closable="false" style="width: 720px; max-width: 94vw" @update:show="(v) => { if (!v) handleCloseAsk() }">
     <div class="import-head">
       <div class="head-col">
-        <div class="head-col-title">导入文件</div>
+        <div class="head-col-title">{{ t('importDialog.fileTitle') }}</div>
         <div class="file-drop-zone" :class="{ 'has-file': !!filePath }" @click="pickFile" @drop="onDrop" @dragover="onDragOver">
           <template v-if="!filePath">
             <n-icon :size="22" :component="DocumentLockOutline" style="color:#888" />
-            <span class="drop-text">点击选择或拖拽 .as9 文件到此处</span>
+            <span class="drop-text">{{ t('importDialog.pickHint') }}</span>
           </template>
           <template v-else>
             <n-icon :size="18" :component="DocumentLockOutline" style="color:#4ec9b0" />
@@ -380,16 +386,16 @@ function confirmClose() {
       </div>
       <div class="head-col head-right">
         <div class="head-col-title-row">
-          <span class="head-col-title">输入密码</span>
-          <n-button size="small" type="primary" ghost :disabled="!hasFile || !pwValid" :loading="parsing" @click="manualParse">确定</n-button>
+          <span class="head-col-title">{{ t('importDialog.passwordTitle') }}</span>
+          <n-button size="small" type="primary" ghost :disabled="!hasFile || !pwValid" :loading="parsing" @click="manualParse">{{ t('importDialog.confirmParse') }}</n-button>
         </div>
-        <n-input v-model:value="password" type="password" show-password-on="click" size="small" placeholder="导入口令（8~64 位）" :disabled="!hasFile" @keyup.enter="manualParse" />
+        <n-input v-model:value="password" type="password" show-password-on="click" size="small" :placeholder="t('importDialog.passwordPlaceholder')" :disabled="!hasFile" @keyup.enter="manualParse" />
       </div>
     </div>
 
     <div class="tree-panes">
       <div class="tree-pane">
-        <div class="tree-pane-title">包内文件树（多选）</div>
+        <div class="tree-pane-title">{{ t('importDialog.pkgTreeTitle') }}</div>
         <n-scrollbar style="height: 220px" class="tree-scroller">
           <div v-if="pkgFlat.length > 0" class="tree">
             <div
@@ -409,13 +415,13 @@ function confirmClose() {
             </div>
           </div>
           <div v-else-if="pkgTreeError" class="tree-tip error">{{ pkgTreeError }}</div>
-          <div v-else-if="!hasFile" class="tree-tip">先选择 .as9 导入文件</div>
-          <div v-else-if="parsing" class="tree-tip">正在读取包内容...</div>
-          <div v-else class="tree-tip">点击右侧"确定"按钮解析包内容</div>
+          <div v-else-if="!hasFile" class="tree-tip">{{ t('importDialog.tipSelectFile') }}</div>
+          <div v-else-if="parsing" class="tree-tip">{{ t('importDialog.tipParsing') }}</div>
+          <div v-else class="tree-tip">{{ t('importDialog.tipClickConfirm') }}</div>
         </n-scrollbar>
       </div>
       <div class="tree-pane">
-        <div class="tree-pane-title">本地文件夹树（单选目标）</div>
+        <div class="tree-pane-title">{{ t('importDialog.localTreeTitle') }}</div>
         <n-scrollbar style="height: 220px" class="tree-scroller">
           <div class="tree">
             <div
@@ -432,35 +438,35 @@ function confirmClose() {
               <span class="tree-name">{{ n.name }}</span>
             </div>
           </div>
-          <div v-if="!localLoaded" class="tree-tip">加载中...</div>
-          <div v-else-if="localFlat.length === 0" class="tree-tip">没有本地子文件夹，将导入到根目录</div>
+          <div v-if="!localLoaded" class="tree-tip">{{ t('importDialog.loading') }}</div>
+          <div v-else-if="localFlat.length === 0" class="tree-tip">{{ t('importDialog.tipNoLocal') }}</div>
         </n-scrollbar>
       </div>
     </div>
 
-    <div v-if="pkgKeys.length > 0" class="key-tip">包内携带 {{ pkgKeys.length }} 个密钥（{{ pkgKeys.map(k => k.name).join('、') }}），导入时将一并导入密钥库</div>
+    <div v-if="pkgKeys.length > 0" class="key-tip">{{ t('importDialog.keyTip', { count: pkgKeys.length, names: pkgKeys.map(k => k.name).join('、') }) }}</div>
 
     <div class="bottom-hint">
       <span v-if="pwError" class="hint-error">{{ pwError }}</span>
-      <span v-else-if="parsedOk" class="hint-ok">解析成功，请在下方选择要导入的内容</span>
+      <span v-else-if="parsedOk" class="hint-ok">{{ t('importDialog.parseOk') }}</span>
       <span v-else-if="pwStrength && pwStrength !== 'ok'" class="hint-warn">{{ pwStrength }}</span>
-      <span v-else class="hint-muted">口令需 8~64 位，包含大写/小写/数字/符号中至少三类</span>
+      <span v-else class="hint-muted">{{ t('importDialog.strengthHint') }}</span>
     </div>
 
     <div class="bottom-row">
       <n-select v-model:value="overwrite" :disabled="!hasFile" size="small" style="width: 260px"
-        :options="[{ label: '跳过（保留本地已有会话）', value: 'skip' }, { label: '覆盖（用导入内容替换）', value: 'overwrite' }]" />
+        :options="overwriteOptions" />
       <div style="flex:1" />
       <n-button type="primary" size="small" :loading="importing"
         :disabled="!hasFile || !pwValid || !hasPkgSelection"
-        @click="openConfirm">导入</n-button>
+        @click="openConfirm">{{ t('importDialog.import') }}</n-button>
     </div>
   </n-modal>
 
   <!-- 二次确认:重排后的选中包内树 + 导入目标 -->
-  <n-modal v-model:show="showConfirm" title="确认导入" preset="dialog" :show-icon="false" style="width: 460px" :closable="false" :mask-closable="false">
-    <div class="confirm-target">导入目标文件夹：<b>{{ selectedPath ? '/' + selectedPath : '/ (根目录)' }}</b></div>
-    <div class="confirm-tree-title">将导入以下包内内容：</div>
+  <n-modal v-model:show="showConfirm" :title="t('importDialog.confirmTitle')" preset="dialog" :show-icon="false" style="width: 460px" :closable="false" :mask-closable="false">
+    <div class="confirm-target">{{ t('importDialog.confirmTarget') }}<b>{{ selectedPath ? '/' + selectedPath : t('importDialog.sessionRoot') }}</b></div>
+    <div class="confirm-tree-title">{{ t('importDialog.confirmTreeTitle') }}</div>
     <n-scrollbar style="height: 220px" class="tree-scroller">
       <div v-if="confirmFlat.length > 0" class="tree">
         <div
@@ -473,23 +479,23 @@ function confirmClose() {
             <n-icon v-if="n.isDir" :size="12" :component="ChevronForwardOutline" :class="{ rotated: n.expanded }" style="color:#888" />
           </span>
           <span class="tree-name" :class="{ file: !n.isDir }">{{ n.name }}</span>
-          <span v-if="n.path.startsWith('keys/')" class="key-badge">→ 密钥库</span>
+          <span v-if="n.path.startsWith('keys/')" class="key-badge">{{ t('importDialog.keyBadge') }}</span>
         </div>
       </div>
-      <div v-else class="tree-tip">未选择任何内容</div>
+      <div v-else class="tree-tip">{{ t('importDialog.tipNoSelection') }}</div>
     </n-scrollbar>
     <template #action>
-      <n-button @click="showConfirm = false">取消</n-button>
-      <n-button type="primary" :loading="importing" @click="doImport">确定导入</n-button>
+      <n-button @click="showConfirm = false">{{ t('common.cancel') }}</n-button>
+      <n-button type="primary" :loading="importing" @click="doImport">{{ t('importDialog.confirmImport') }}</n-button>
     </template>
   </n-modal>
 
   <!-- 关闭询问 -->
-  <n-modal v-model:show="showCloseAsk" title="关闭导入" preset="dialog" :show-icon="false" style="width: 380px" :closable="false" :mask-closable="false">
-    <div>关闭将清除已选择的文件与已解密内容，确定关闭吗？</div>
+  <n-modal v-model:show="showCloseAsk" :title="t('importDialog.closeAskTitle')" preset="dialog" :show-icon="false" style="width: 380px" :closable="false" :mask-closable="false">
+    <div>{{ t('importDialog.closeAskMsg') }}</div>
     <template #action>
-      <n-button @click="showCloseAsk = false">取消</n-button>
-      <n-button type="primary" @click="confirmClose">确定关闭</n-button>
+      <n-button @click="showCloseAsk = false">{{ t('common.cancel') }}</n-button>
+      <n-button type="primary" @click="confirmClose">{{ t('importDialog.confirmClose') }}</n-button>
     </template>
   </n-modal>
 </template>

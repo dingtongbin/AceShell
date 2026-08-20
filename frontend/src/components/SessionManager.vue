@@ -17,6 +17,7 @@ import {
 } from '@vicons/ionicons5'
 import { Events } from '@wailsio/runtime'
 import { useMessage } from 'naive-ui'
+import { useI18n } from 'vue-i18n'
 import { GetTree, DeleteSession, DeleteFolder, MoveFile, MoveFolder, RenameItem, LoadSession } from '../../bindings/changeme/internal/services/sessionfileservice.js'
 
 interface TreeNode {
@@ -51,6 +52,7 @@ const tree = ref<TreeNode[]>([])
 const flatList = ref<TreeNode[]>([])
 const searchQuery = ref('')
 const message = useMessage()
+const { t } = useI18n()
 let offTree: (() => void) | null = null
 
 const filteredList = computed(() => {
@@ -98,7 +100,7 @@ async function viewMeta(node: TreeNode) {
     if (metaInfo.value.protocol === 'serial') metaInfo.value.host = m.host || ''
     showMeta.value = true
   } catch {
-    message.error('无法读取会话元信息')
+    message.error(t('sessionManager.cannotReadMeta'))
   }
 }
 
@@ -202,23 +204,23 @@ function getProtocolColor(protocol?: string) {
 function getContextMenuOptions(node: TreeNode): DropdownOption[] {
   if (node.isDir) {
     return [
-      { label: '新建会话', key: 'new-session', icon: () => h(NIcon, { size: 14 }, { default: () => h(AddOutline) }) },
-      { label: '新建文件夹', key: 'new-folder', icon: () => h(NIcon, { size: 14 }, { default: () => h(AddOutline) }) },
+      { label: t('sessionManager.newSession'), key: 'new-session', icon: () => h(NIcon, { size: 14 }, { default: () => h(AddOutline) }) },
+      { label: t('sessionManager.newFolder'), key: 'new-folder', icon: () => h(NIcon, { size: 14 }, { default: () => h(AddOutline) }) },
       { type: 'divider', key: 'd1' },
-      { label: '导入会话文件', key: 'import', icon: () => h(NIcon, { size: 14 }, { default: () => h(AddOutline) }) },
-      { label: '导出会话文件', key: 'export', icon: () => h(NIcon, { size: 14 }, { default: () => h(AddOutline) }) },
+      { label: t('sessionManager.importSessions'), key: 'import', icon: () => h(NIcon, { size: 14 }, { default: () => h(AddOutline) }) },
+      { label: t('sessionManager.exportSessions'), key: 'export', icon: () => h(NIcon, { size: 14 }, { default: () => h(AddOutline) }) },
       { type: 'divider', key: 'd2' },
-      { label: '重命名', key: 'rename', icon: () => h(NIcon, { size: 14 }, { default: () => h(CreateOutline) }) },
-      { label: '删除文件夹', key: 'delete-folder', icon: () => h(NIcon, { size: 14 }, { default: () => h(TrashOutline) }) },
+      { label: t('sessionManager.rename'), key: 'rename', icon: () => h(NIcon, { size: 14 }, { default: () => h(CreateOutline) }) },
+      { label: t('sessionManager.deleteFolder'), key: 'delete-folder', icon: () => h(NIcon, { size: 14 }, { default: () => h(TrashOutline) }) },
     ]
   }
   return [
-    { label: '连接会话', key: 'connect', icon: () => h(NIcon, { size: 14 }, { default: () => h(LogInOutline) }) },
-    { label: '编辑会话', key: 'edit', icon: () => h(NIcon, { size: 14 }, { default: () => h(CreateOutline) }) },
-    { label: '查看元信息', key: 'meta', icon: () => h(NIcon, { size: 14 }, { default: () => h(SearchOutline) }) },
+    { label: t('sessionManager.connectSession'), key: 'connect', icon: () => h(NIcon, { size: 14 }, { default: () => h(LogInOutline) }) },
+    { label: t('sessionManager.editSession'), key: 'edit', icon: () => h(NIcon, { size: 14 }, { default: () => h(CreateOutline) }) },
+    { label: t('sessionManager.viewMeta'), key: 'meta', icon: () => h(NIcon, { size: 14 }, { default: () => h(SearchOutline) }) },
     { type: 'divider', key: 'd1' },
-    { label: '重命名', key: 'rename', icon: () => h(NIcon, { size: 14 }, { default: () => h(CreateOutline) }) },
-    { label: '删除会话', key: 'delete', icon: () => h(NIcon, { size: 14 }, { default: () => h(TrashOutline) }) },
+    { label: t('sessionManager.rename'), key: 'rename', icon: () => h(NIcon, { size: 14 }, { default: () => h(CreateOutline) }) },
+    { label: t('sessionManager.deleteSession'), key: 'delete', icon: () => h(NIcon, { size: 14 }, { default: () => h(TrashOutline) }) },
   ]
 }
 
@@ -228,17 +230,17 @@ function openContextMenu(e: MouseEvent, node: TreeNode) {
   ctxX.value = e.clientX; ctxY.value = e.clientY; ctxShow.value = true
 }
 
-const rootMenuOptions: DropdownOption[] = [
-  { label: '新建会话', key: 'root-new-session', icon: () => h(NIcon, { size: 14 }, { default: () => h(AddOutline) }) },
-  { label: '新建文件夹', key: 'root-new-folder', icon: () => h(NIcon, { size: 14 }, { default: () => h(FolderOutline) }) },
+const rootMenuOptions = computed<DropdownOption[]>(() => [
+  { label: t('sessionManager.newSession'), key: 'root-new-session', icon: () => h(NIcon, { size: 14 }, { default: () => h(AddOutline) }) },
+  { label: t('sessionManager.newFolder'), key: 'root-new-folder', icon: () => h(NIcon, { size: 14 }, { default: () => h(FolderOutline) }) },
   { type: 'divider', key: 'd1' },
-  { label: '导入会话文件', key: 'root-import', icon: () => h(NIcon, { size: 14 }, { default: () => h(AddOutline) }) },
-  { label: '导出会话文件', key: 'root-export', icon: () => h(NIcon, { size: 14 }, { default: () => h(AddOutline) }) },
-]
+  { label: t('sessionManager.importSessions'), key: 'root-import', icon: () => h(NIcon, { size: 14 }, { default: () => h(AddOutline) }) },
+  { label: t('sessionManager.exportSessions'), key: 'root-export', icon: () => h(NIcon, { size: 14 }, { default: () => h(AddOutline) }) },
+])
 
 function openRootContextMenu(e: MouseEvent) {
   ctxNode.value = null
-  ctxOptions.value = rootMenuOptions
+  ctxOptions.value = rootMenuOptions.value
   ctxX.value = e.clientX
   ctxY.value = e.clientY
   ctxShow.value = true
@@ -459,7 +461,7 @@ defineExpose({ renameSelected, deleteSelected })
 
 <template>
   <div class="session-manager">
-    <n-input v-model:value="searchQuery" size="tiny" placeholder="搜索会话..." clearable class="session-search-input">
+    <n-input v-model:value="searchQuery" size="tiny" :placeholder="t('sessionManager.searchPlaceholder')" clearable class="session-search-input">
       <template #prefix><n-icon :size="14" :component="SearchOutline" /></template>
     </n-input>
     <div
@@ -471,7 +473,7 @@ defineExpose({ renameSelected, deleteSelected })
       @contextmenu="(e: MouseEvent) => openRootContextMenu(e)"
     >
       <div v-if="filteredList.length === 0" class="session-empty">
-        <n-empty description="无会话" size="small" />
+        <n-empty :description="t('sessionManager.noSessions')" size="small" />
       </div>
 
       <div
@@ -508,37 +510,37 @@ defineExpose({ renameSelected, deleteSelected })
 
     <n-dropdown :show="ctxShow" :options="ctxOptions" :x="ctxX" :y="ctxY" placement="bottom-start" @select="handleCtxSelect" @clickoutside="ctxShow = false" />
 
-    <n-modal v-model:show="showConflict" title="名称冲突" preset="dialog" :show-icon="false" :mask-closable="false" style="width: 400px">
+    <n-modal v-model:show="showConflict" :title="t('sessionManager.conflictTitle')" preset="dialog" :show-icon="false" :mask-closable="false" style="width: 400px">
       <n-form label-placement="left">
-        <n-form-item label="目标文件夹已有同名项，请改名">
-          <n-input v-model:value="conflictName" placeholder="输入新名称" @keyup.enter="handleRenameAndMove" />
+        <n-form-item :label="t('sessionManager.conflictLabel')">
+          <n-input v-model:value="conflictName" :placeholder="t('sessionManager.newNamePlaceholder')" @keyup.enter="handleRenameAndMove" />
         </n-form-item>
       </n-form>
       <template #action>
-        <n-button @click="cancelMove">取消</n-button>
-        <n-button type="primary" :disabled="!canMove" @click="handleRenameAndMove">移动</n-button>
+        <n-button @click="cancelMove">{{ t('common.cancel') }}</n-button>
+        <n-button type="primary" :disabled="!canMove" @click="handleRenameAndMove">{{ t('sessionManager.move') }}</n-button>
       </template>
     </n-modal>
-    <n-modal v-model:show="showMeta" title="会话元信息" preset="dialog" :show-icon="false" style="width: 420px" :mask-closable="false">
+    <n-modal v-model:show="showMeta" :title="t('sessionManager.metaTitle')" preset="dialog" :show-icon="false" style="width: 420px" :mask-closable="false">
       <n-descriptions v-if="metaInfo" bordered :column="1" size="small" label-style="width:100px">
-        <n-descriptions-item label="会话名">{{ metaInfo.name || '--' }}</n-descriptions-item>
-        <n-descriptions-item label="类型">{{ metaInfo.protocol || '--' }}</n-descriptions-item>
-        <n-descriptions-item :label="metaInfo.protocol === 'serial' ? '设备路径' : 'IP 地址'">{{ metaInfo.host || '--' }}</n-descriptions-item>
-        <n-descriptions-item label="端口">{{ metaInfo.port || '--' }}</n-descriptions-item>
-        <n-descriptions-item v-if="metaInfo.username" label="用户名">{{ metaInfo.username }}</n-descriptions-item>
-        <n-descriptions-item label="创建时间">{{ metaInfo.created || '--' }}</n-descriptions-item>
-        <n-descriptions-item label="更新时间">{{ metaInfo.updated || '--' }}</n-descriptions-item>
+        <n-descriptions-item :label="t('sessionManager.sessionName')">{{ metaInfo.name || '--' }}</n-descriptions-item>
+        <n-descriptions-item :label="t('sessionManager.type')">{{ metaInfo.protocol || '--' }}</n-descriptions-item>
+        <n-descriptions-item :label="metaInfo.protocol === 'serial' ? t('sessionManager.devicePath') : t('sessionManager.ipAddress')">{{ metaInfo.host || '--' }}</n-descriptions-item>
+        <n-descriptions-item :label="t('common.port')">{{ metaInfo.port || '--' }}</n-descriptions-item>
+        <n-descriptions-item v-if="metaInfo.username" :label="t('common.username')">{{ metaInfo.username }}</n-descriptions-item>
+        <n-descriptions-item :label="t('sessionManager.createdTime')">{{ metaInfo.created || '--' }}</n-descriptions-item>
+        <n-descriptions-item :label="t('sessionManager.updatedTime')">{{ metaInfo.updated || '--' }}</n-descriptions-item>
       </n-descriptions>
-      <template #action><n-button @click="showMeta = false">关闭</n-button></template>
+      <template #action><n-button @click="showMeta = false">{{ t('common.close') }}</n-button></template>
     </n-modal>
-    <n-modal v-model:show="showDeleteConfirm" title="确认删除" preset="dialog" :show-icon="false" style="width: 420px" :closable="false" :mask-closable="false">
+    <n-modal v-model:show="showDeleteConfirm" :title="t('sessionManager.deleteConfirmTitle')" preset="dialog" :show-icon="false" style="width: 420px" :closable="false" :mask-closable="false">
       <div style="font-size:14px">
-        <p>确定要删除「<b>{{ deleteTarget?.name }}</b>」吗？</p>
-        <p v-if="deleteTarget?.isDir" style="margin-top:8px;color:#e45858;font-size:12px">该文件夹下的所有内容将被永久删除。</p>
+        <p>{{ t('sessionManager.deleteConfirmMsg', { name: deleteTarget?.name }) }}</p>
+        <p v-if="deleteTarget?.isDir" style="margin-top:8px;color:#e45858;font-size:12px">{{ t('sessionManager.deleteFolderWarn') }}</p>
       </div>
       <template #action>
-        <n-button @click="cancelDelete">取消</n-button>
-        <n-button type="error" @click="executeDelete">确认删除</n-button>
+        <n-button @click="cancelDelete">{{ t('common.cancel') }}</n-button>
+        <n-button type="error" @click="executeDelete">{{ t('sessionManager.confirmDelete') }}</n-button>
       </template>
     </n-modal>
   </div>

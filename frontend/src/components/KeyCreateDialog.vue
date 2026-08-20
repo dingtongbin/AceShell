@@ -1,7 +1,10 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { ref, watch, computed } from 'vue'
 import { NModal, NInput, NSelect, NButton, useMessage } from 'naive-ui'
 import { CreateKey } from '../../bindings/changeme/internal/services/globalkeyservice.js'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 const props = defineProps<{ show: boolean }>()
 const emit = defineEmits<{ (e: 'update:show', v: boolean): void; (e: 'created'): void }>()
@@ -13,19 +16,19 @@ const keyType = ref('ed25519')
 const passphrase = ref('')
 const creating = ref(false)
 
-const typeOptions = [
-  { label: 'Ed25519（推荐）', value: 'ed25519' },
+const typeOptions = computed(() => [
+  { label: t('keyCreateDialog.ed25519Recommended'), value: 'ed25519' },
   { label: 'RSA 2048', value: 'rsa2048' },
   { label: 'RSA 4096', value: 'rsa4096' },
-]
+])
 
 watch(() => props.show, (v) => {
   if (v) { keyName.value = ''; keyType.value = 'ed25519'; passphrase.value = '' }
 })
 
 function validate(): string | null {
-  if (!keyName.value.trim()) return '密钥名称不能为空'
-  if (passphrase.value && passphrase.value.length < 4) return '口令至少 4 个字符'
+  if (!keyName.value.trim()) return t('keyCreateDialog.nameRequired')
+  if (passphrase.value && passphrase.value.length < 4) return t('keyCreateDialog.passphraseTooShort')
   return null
 }
 
@@ -35,10 +38,10 @@ async function doCreate() {
   creating.value = true
   try {
     await CreateKey(keyName.value.trim(), keyType.value, passphrase.value)
-    message.success('密钥创建成功')
+    message.success(t('keyCreateDialog.created'))
     emit('created')
   } catch (e: any) {
-    message.error('创建失败: ' + (e.message || e))
+    message.error(t('keyCreateDialog.createFailed', { err: e.message || e }))
   } finally {
     creating.value = false
   }
@@ -46,25 +49,25 @@ async function doCreate() {
 </script>
 
 <template>
-  <n-modal :show="show" @update:show="emit('update:show', $event)" preset="dialog" title="新建 SSH 密钥" :show-icon="false" style="width: 440px" :mask-closable="false">
+  <n-modal :show="show" @update:show="emit('update:show', $event)" preset="dialog" :title="t('keyCreateDialog.title')" :show-icon="false" style="width: 440px" :mask-closable="false">
     <div class="key-form">
       <div class="form-group">
-        <label class="form-label">密钥名称 <span style="color: #e88070">*</span></label>
-        <n-input v-model:value="keyName" placeholder="如：办公服务器" />
+        <label class="form-label">{{ t('keyCreateDialog.keyName') }} <span style="color: #e88070">*</span></label>
+        <n-input v-model:value="keyName" :placeholder="t('keyCreateDialog.keyNamePlaceholder')" />
       </div>
       <div class="form-group">
-        <label class="form-label">密钥类型</label>
+        <label class="form-label">{{ t('keyCreateDialog.keyType') }}</label>
         <n-select v-model:value="keyType" :options="typeOptions" />
       </div>
       <div class="form-group">
-        <label class="form-label">口令（可选）</label>
-        <n-input v-model:value="passphrase" type="password" show-password-on="click" placeholder="私钥加密口令，可留空" />
-        <div class="form-hint">设置口令后，私钥将以该口令加密保存；连接时自动使用，无需重复输入。</div>
+        <label class="form-label">{{ t('keyCreateDialog.passphrase') }}</label>
+        <n-input v-model:value="passphrase" type="password" show-password-on="click" :placeholder="t('keyCreateDialog.passphrasePlaceholder')" />
+        <div class="form-hint">{{ t('keyCreateDialog.passphraseHint') }}</div>
       </div>
     </div>
     <template #action>
-      <n-button @click="emit('update:show', false)">取消</n-button>
-      <n-button type="primary" :loading="creating" @click="doCreate">创建</n-button>
+      <n-button @click="emit('update:show', false)">{{ t('common.cancel') }}</n-button>
+      <n-button type="primary" :loading="creating" @click="doCreate">{{ t('common.create') }}</n-button>
     </template>
   </n-modal>
 </template>

@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
 import { NModal, NButton, NInput, NCheckbox } from 'naive-ui'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 const props = defineProps<{
   show: boolean
@@ -39,18 +42,18 @@ function handleCancel() {
 </script>
 
 <template>
-  <n-modal :show="show" @update:show="emit('update:show', $event)" preset="dialog" title="SSH 密钥登录" :show-icon="false" style="width: 420px" :closable="false" :mask-closable="false">
-    <div style="margin-bottom: 12px; font-size: 13px; color: #999;">连接到 <b>{{ host }}</b></div>
+  <n-modal :show="show" @update:show="emit('update:show', $event)" preset="dialog" :title="t('keyCredentialsDialog.title')" :show-icon="false" style="width: 420px" :closable="false" :mask-closable="false">
+    <div style="margin-bottom: 12px; font-size: 13px; color: #999;">{{ t('keyCredentialsDialog.connectTo', { host }) }}</div>
     <div style="margin-bottom: 8px;">
-      <label style="display: block; font-size: 12px; color: #999; margin-bottom: 4px;">用户名</label>
-      <n-input v-model:value="inputUser" placeholder="输入登录账户" size="small" @keyup.enter="handleSubmit" />
+      <label style="display: block; font-size: 12px; color: #999; margin-bottom: 4px;">{{ t('common.username') }}</label>
+      <n-input v-model:value="inputUser" :placeholder="t('keyCredentialsDialog.usernamePlaceholder')" size="small" @keyup.enter="handleSubmit" />
     </div>
     <div style="display: flex; gap: 16px; margin-bottom: 8px;">
-      <n-checkbox v-model:checked="rememberUser">记住用户名</n-checkbox>
+      <n-checkbox v-model:checked="rememberUser">{{ t('common.rememberUsername') }}</n-checkbox>
     </div>
     <template #action>
-      <n-button @click="handleCancel">取消</n-button>
-      <n-button type="primary" @click="handleSubmit">连接</n-button>
+      <n-button @click="handleCancel">{{ t('common.cancel') }}</n-button>
+      <n-button type="primary" @click="handleSubmit">{{ t('common.connect') }}</n-button>
     </template>
   </n-modal>
 </template>

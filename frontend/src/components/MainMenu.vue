@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { NIcon, useMessage } from 'naive-ui'
 import {
   AddOutline,
@@ -20,6 +20,9 @@ import {
 } from '@vicons/ionicons5'
 import { useTheme } from '../stores/theme'
 import { SetTheme } from '../../bindings/changeme/internal/services/configservice.js'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 const props = defineProps<{
   showToolbar: boolean
@@ -60,50 +63,50 @@ interface MenuEntry {
   items: MenuItem[]
 }
 
-const menus: MenuEntry[] = [
+const menus = computed<MenuEntry[]>(() => [
   {
     key: 'file',
-    label: '文件',
+    label: t('mainMenu.file'),
     items: [
-      { key: 'new-session', label: '新建会话', icon: AddOutline },
-      { key: 'new-folder', label: '新建文件夹', icon: FolderOutline },
+      { key: 'new-session', label: t('mainMenu.newSession'), icon: AddOutline },
+      { key: 'new-folder', label: t('mainMenu.newFolder'), icon: FolderOutline },
       { key: 'd1', divider: true },
-      { key: 'import-sessions', label: '导入会话文件', icon: ArrowUpOutline },
-      { key: 'export-sessions', label: '导出会话文件', icon: DownloadOutline },
+      { key: 'import-sessions', label: t('mainMenu.importSessions'), icon: ArrowUpOutline },
+      { key: 'export-sessions', label: t('mainMenu.exportSessions'), icon: DownloadOutline },
       { key: 'd2', divider: true },
-      { key: 'exit', label: '退出', icon: LogOutOutline },
+      { key: 'exit', label: t('mainMenu.exit'), icon: LogOutOutline },
     ],
   },
   {
     key: 'edit',
-    label: '编辑',
+    label: t('mainMenu.edit'),
     items: [
-      { key: 'edit-active-session', label: '编辑当前活动会话', icon: CreateOutline },
+      { key: 'edit-active-session', label: t('mainMenu.editActiveSession'), icon: CreateOutline },
       { key: 'd1', divider: true },
-      { key: 'rename-selected', label: '重命名当前选中节点', icon: CreateOutline },
-      { key: 'delete-selected', label: '删除当前选中节点', icon: TrashOutline },
+      { key: 'rename-selected', label: t('mainMenu.renameSelected'), icon: CreateOutline },
+      { key: 'delete-selected', label: t('mainMenu.deleteSelected'), icon: TrashOutline },
     ],
   },
   {
     key: 'tool',
-    label: '工具',
+    label: t('mainMenu.tool'),
     items: [
-      { key: 'exec-script', label: '执行当前脚本', icon: CodeOutline },
+      { key: 'exec-script', label: t('mainMenu.execScript'), icon: CodeOutline },
       { key: 'sftp', label: 'SFTP', icon: FolderOpenOutline },
-      { key: 'toggle-theme', label: '切换主题', icon: isDark.value ? SunnyOutline : MoonOutline },
+      { key: 'toggle-theme', label: t('mainMenu.toggleTheme'), icon: isDark.value ? SunnyOutline : MoonOutline },
       { key: 'd1', divider: true },
-      { key: 'toggle-toolbar', label: '工具栏', checked: props.showToolbar },
+      { key: 'toggle-toolbar', label: t('mainMenu.toolbar'), checked: props.showToolbar },
     ],
   },
   {
     key: 'help',
-    label: '帮助',
+    label: t('mainMenu.help'),
     items: [
-      { key: 'about', label: '关于', icon: InformationCircleOutline },
-      { key: 'view-docs', label: '查看文档', icon: BookOutline },
+      { key: 'about', label: t('mainMenu.about'), icon: InformationCircleOutline },
+      { key: 'view-docs', label: t('mainMenu.viewDocs'), icon: BookOutline },
     ],
   },
-]
+])
 
 function handleSelect(key: string) {
   switch (key) {
@@ -119,12 +122,12 @@ function handleSelect(key: string) {
     case 'sftp': emit('sftp'); break
     case 'toggle-theme':
       toggleTheme()
-      SetTheme(isDark.value ? 'dark' : 'light').catch(() => message.error('保存主题失败'))
+      SetTheme(isDark.value ? 'dark' : 'light').catch(() => message.error(t('mainMenu.saveThemeFailed')))
       emit('toggle-theme')
       break
     case 'toggle-toolbar': emit('toggle-toolbar'); break
     case 'about': emit('about'); break
-    case 'view-docs': message.info('查看文档：请参考项目根目录 AceShell项目文档.md'); break
+    case 'view-docs': message.info(t('mainMenu.viewDocsHint')); break
     default: return
   }
   emit('close')

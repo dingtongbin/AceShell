@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, nextTick, h } from 'vue'
 import { NIcon, NButton, NInput, NModal, NProgress, NDropdown, useMessage } from 'naive-ui'
+import { useI18n } from 'vue-i18n'
 import type { DropdownOption } from 'naive-ui'
 import {
   FolderOutline, DocumentOutline, ArrowUpOutline, RefreshOutline, EyeOutline,
@@ -16,6 +17,7 @@ import hljs from 'highlight.js'
 import 'highlight.js/styles/vs2015.css'
 
 const message = useMessage()
+const { t } = useI18n()
 
 const props = defineProps<{ sessionID: string; tabId: string }>()
 
@@ -58,7 +60,7 @@ async function confirmNameDlg() {
   if (!name || !nameAction) return
   showNameDlg.value = false
   const action = nameAction; nameAction = null
-  try { await action() } catch (err: any) { message.error((err && err.message) || '操作失败') }
+  try { await action() } catch (err: any) { message.error((err && err.message) || t('sftpPanel.opFail')) }
 }
 
 // 右键菜单
@@ -123,9 +125,9 @@ async function loadRemote(path?: string) {
   try {
     const target = path ?? remotePath.value
     const r = JSON.parse(await List(props.sessionID, target))
-    if (r.error) { remoteFiles.value = []; message.error('加载远程目录失败: ' + r.error) }
+    if (r.error) { remoteFiles.value = []; message.error(t('sftpPanel.loadRemoteFail') + ': ' + r.error) }
     else { remotePath.value = r.path || target; pathInput.value = remotePath.value; remoteFiles.value = r.files || [] }
-  } catch { remoteFiles.value = []; message.error('加载远程目录失败') }
+  } catch { remoteFiles.value = []; message.error(t('sftpPanel.loadRemoteFail')) }
   remoteLoading.value = false
 }
 
@@ -135,9 +137,9 @@ async function loadLocal(path?: string) {
   try {
     const target = path ?? localPath.value
     const r = JSON.parse(await List('__local__', target))
-    if (r.error) { localFiles.value = []; message.error('加载本地目录失败: ' + r.error) }
+    if (r.error) { localFiles.value = []; message.error(t('sftpPanel.loadLocalFail') + ': ' + r.error) }
     else { localPath.value = r.path || target; localPathInput.value = localPath.value; localFiles.value = r.files || [] }
-  } catch { localFiles.value = []; message.error('加载本地目录失败') }
+  } catch { localFiles.value = []; message.error(t('sftpPanel.loadLocalFail')) }
   localLoading.value = false
 }
 
@@ -286,24 +288,24 @@ function ctxIcon(icon: any) {
 function buildMenuOptions(f: FileInfo, side: string): DropdownOption[] {
   const items: DropdownOption[] = []
   if (!f.isDir) {
-    if (side === 'remote') items.push({ label: '下载', key: 'download', icon: ctxIcon(CloudDownloadOutline) })
-    items.push({ label: '查看', key: 'view', icon: ctxIcon(EyeOutline) })
-    items.push({ label: '重命名', key: 'rename', icon: ctxIcon(PencilOutline) })
+    if (side === 'remote') items.push({ label: t('sftpPanel.menuDownload'), key: 'download', icon: ctxIcon(CloudDownloadOutline) })
+    items.push({ label: t('sftpPanel.menuView'), key: 'view', icon: ctxIcon(EyeOutline) })
+    items.push({ label: t('sftpPanel.menuRename'), key: 'rename', icon: ctxIcon(PencilOutline) })
     if (isEditable(f.name)) {
-      items.push({ label: '软件内编辑', key: 'edit', icon: ctxIcon(CodeSlashOutline) })
-      items.push({ label: '外部程序查看', key: 'open', icon: ctxIcon(OpenOutline) })
-      items.push({ label: '外部程序编辑', key: 'open-editor', icon: ctxIcon(CreateOutline) })
+      items.push({ label: t('sftpPanel.menuEdit'), key: 'edit', icon: ctxIcon(CodeSlashOutline) })
+      items.push({ label: t('sftpPanel.menuOpen'), key: 'open', icon: ctxIcon(OpenOutline) })
+      items.push({ label: t('sftpPanel.menuOpenEditor'), key: 'open-editor', icon: ctxIcon(CreateOutline) })
     }
-    items.push({ label: '复制路径', key: 'copy-path', icon: ctxIcon(CopyOutline) })
+    items.push({ label: t('sftpPanel.menuCopyPath'), key: 'copy-path', icon: ctxIcon(CopyOutline) })
   } else {
-    items.push({ label: '新建文件', key: 'new-file', icon: ctxIcon(DocumentOutline) })
-    items.push({ label: '新建文件夹', key: 'new-dir', icon: ctxIcon(AddCircleOutline) })
-    items.push({ label: '进入文件夹', key: 'enter', icon: ctxIcon(FolderOpenOutline) })
-    items.push({ label: '重命名', key: 'rename', icon: ctxIcon(PencilOutline) })
-    items.push({ label: '复制路径', key: 'copy-path', icon: ctxIcon(CopyOutline) })
+    items.push({ label: t('sftpPanel.menuNewFile'), key: 'new-file', icon: ctxIcon(DocumentOutline) })
+    items.push({ label: t('sftpPanel.menuNewDir'), key: 'new-dir', icon: ctxIcon(AddCircleOutline) })
+    items.push({ label: t('sftpPanel.menuEnter'), key: 'enter', icon: ctxIcon(FolderOpenOutline) })
+    items.push({ label: t('sftpPanel.menuRename'), key: 'rename', icon: ctxIcon(PencilOutline) })
+    items.push({ label: t('sftpPanel.menuCopyPath'), key: 'copy-path', icon: ctxIcon(CopyOutline) })
   }
   items.push({ type: 'divider', key: 'd' })
-  items.push({ label: '删除', key: 'delete', icon: ctxIcon(TrashOutline) })
+  items.push({ label: t('sftpPanel.menuDelete'), key: 'delete', icon: ctxIcon(TrashOutline) })
   return items
 }
 
@@ -321,10 +323,10 @@ async function remoteExternal(f: FileInfo, editor: boolean) {
   try {
     const result = await Download(props.sessionID, rp, tmpPath)
     const data = JSON.parse(result)
-    if (data.error) { message.error('下载失败: ' + data.error); return }
+    if (data.error) { message.error(t('sftpPanel.downloadFail', { err: data.error })); return }
     if (editor) await OpenWithEditor(tmpPath)
     else await OpenWithDefault(tmpPath)
-  } catch (err: any) { message.error((err && err.message) || '打开失败') }
+  } catch (err: any) { message.error((err && err.message) || t('sftpPanel.openFail')) }
 }
 
 async function handleCtxSelect(key: string) {
@@ -350,7 +352,7 @@ async function handleCtxSelect(key: string) {
   }
   if (key === 'delete') { confirmDelete(f, side); return }
   if (key === 'rename') {
-    openNameDlg('重命名', f.name, async () => {
+    openNameDlg(t('sftpPanel.menuRename'), f.name, async () => {
       const name = nameDlgValue.value.trim()
       if (!name || name === f.name) return
       if (side === 'local') await LocalRename(rp, name)
@@ -360,7 +362,7 @@ async function handleCtxSelect(key: string) {
     return
   }
   if (key === 'new-file') {
-    openNameDlg('新建文件', '新建文件', async () => {
+    openNameDlg(t('sftpPanel.menuNewFile'), t('sftpPanel.menuNewFile'), async () => {
       const name = nameDlgValue.value.trim()
       if (!name) return
       if (side === 'local') await LocalCreateFile(joinPath(localPath.value, name))
@@ -370,7 +372,7 @@ async function handleCtxSelect(key: string) {
     return
   }
   if (key === 'new-dir') {
-    openNameDlg('新建文件夹', '新建文件夹', async () => {
+    openNameDlg(t('sftpPanel.menuNewDir'), t('sftpPanel.menuNewDir'), async () => {
       const name = nameDlgValue.value.trim()
       if (!name) return
       if (side === 'local') await LocalCreateDir(joinPath(localPath.value, name))
@@ -395,7 +397,7 @@ async function doDelete() {
       else await Remove(props.sessionID, getRemotePath(f))
       loadRemote()
     }
-  } catch { message.error('删除失败') }
+  } catch { message.error(t('sftpPanel.deleteFail')) }
   showDelete.value = false; delTarget.value = null; delSide.value = ''
 }
 
@@ -424,7 +426,7 @@ async function openEditor(file: FileInfo) {
   editIsLocal.value = false
   const result = await ReadFile(props.sessionID, editPath.value)
   if (result.startsWith('{"error"')) {
-    try { const d = JSON.parse(result); if (d.error) { message.error('无法打开编辑: ' + d.error); return } } catch { /* 非错误 JSON,按内容处理 */ }
+    try { const d = JSON.parse(result); if (d.error) { message.error(t('sftpPanel.openEditorFail', { err: d.error })); return } } catch { /* 非错误 JSON,按内容处理 */ }
   }
   editContent.value = result
   lastLineCount = 0
@@ -439,7 +441,7 @@ async function openLocalEditor(file: FileInfo) {
   try {
     editContent.value = await LocalReadText(editPath.value)
   } catch (err: any) {
-    message.error('无法打开编辑: ' + ((err && err.message) || '读取失败'))
+    message.error(t('sftpPanel.openEditorFail', { err: (err && err.message) || t('sftpPanel.readFail') }))
     return
   }
   lastLineCount = 0
@@ -481,7 +483,7 @@ async function saveEditor() {
   try {
     if (editIsLocal.value) await LocalWriteText(editPath.value, editContent.value)
     else await WriteFile(props.sessionID, editPath.value, editContent.value)
-  } catch { message.error('保存失败'); return }
+  } catch { message.error(t('sftpPanel.saveFail')); return }
   showEditor.value = false
   if (editIsLocal.value) loadLocal(); else loadRemote()
 }
@@ -554,7 +556,7 @@ onMounted(async () => {
     <div class="sftp-panes" :style="{ height: `calc(100% - ${transferHeight + 4}px)` }">
       <!-- 左面板 -->
       <div class="sftp-pane" :style="{ width: splitLeft + '%' }" @dragover.prevent @drop="(e: DragEvent) => onDrop(e, 'local')">
-        <div class="pane-header">本地文件</div>
+        <div class="pane-header">{{ t('sftpPanel.localFiles') }}</div>
         <div class="pane-toolbar">
           <n-button size="tiny" quaternary @click="loadLocal('.')"><n-icon :size="14" :component="HomeOutline" /></n-button>
           <n-button size="tiny" quaternary @click="goUpLocal"><n-icon :size="14" :component="ArrowUpOutline" /></n-button>
@@ -563,7 +565,7 @@ onMounted(async () => {
           <n-button size="tiny" quaternary @click="doUploadPicker"><n-icon :size="14" :component="CloudUploadOutline" /></n-button>
         </div>
         <div class="pane-list">
-          <div v-if="localLoading" class="list-status">加载中...</div>
+          <div v-if="localLoading" class="list-status">{{ t('sftpPanel.loading') }}</div>
           <div v-for="f in localFiles" :key="localPath + '/' + f.name" class="file-row" :class="{ dir: f.isDir }" draggable="true"
             @dragstart="(e: DragEvent) => onDragStart(e, 'local', f)"
             @contextmenu="(e: MouseEvent) => openContextMenu(e, 'local', f)"
@@ -581,7 +583,7 @@ onMounted(async () => {
       <div class="h-handle" @mousedown="startHDrag"><div class="h-handle-line" /></div>
       <!-- 右面板 -->
       <div class="sftp-pane" :id="'sftp-remote-drop-' + props.sessionID" data-file-drop-target style="flex:1" @dragover.prevent @drop="(e: DragEvent) => onDrop(e, 'remote')">
-        <div class="pane-header">远程服务器</div>
+        <div class="pane-header">{{ t('sftpPanel.remoteServer') }}</div>
         <div class="pane-toolbar">
           <n-button size="tiny" quaternary @click="loadRemote('/')"><n-icon :size="14" :component="HomeOutline" /></n-button>
           <n-button size="tiny" quaternary @click="goUp"><n-icon :size="14" :component="ArrowUpOutline" /></n-button>
@@ -591,7 +593,7 @@ onMounted(async () => {
           <n-button size="tiny" quaternary @click="doUploadPicker"><n-icon :size="14" :component="CloudUploadOutline" /></n-button>
         </div>
         <div class="pane-list">
-          <div v-if="remoteLoading" class="list-status">加载中...</div>
+          <div v-if="remoteLoading" class="list-status">{{ t('sftpPanel.loading') }}</div>
           <div v-for="f in remoteFiles" :key="remotePath + '/' + f.name" class="file-row" :class="{ dir: f.isDir }" draggable="true"
             @dragstart="(e: DragEvent) => onDragStart(e, 'remote', f)"
             @contextmenu="(e: MouseEvent) => openContextMenu(e, 'remote', f)"
@@ -616,44 +618,44 @@ onMounted(async () => {
     <!-- 传输列表 -->
     <div class="tbar" :style="{ height: transferHeight + 'px' }">
       <div class="tbar-header">
-        <span>传输列表 ({{ transfers.length }})</span>
-        <n-button size="tiny" quaternary @click="clearDoneTransfers">清除已完成</n-button>
+        <span>{{ t('sftpPanel.transferList', { count: transfers.length }) }}</span>
+        <n-button size="tiny" quaternary @click="clearDoneTransfers">{{ t('sftpPanel.clearDone') }}</n-button>
       </div>
       <div class="tbar-body">
-        <div v-if="!transfers.length" class="tbar-empty">暂无传输任务</div>
-        <div v-for="t in transfers" :key="t.id" class="trow">
-          <span class="tname">{{ t.direction }} {{ t.name }}</span>
-          <n-progress :percentage="t.percent" :height="4" :show-text="false" style="flex:1;margin:0 6px" :color="t.status === 'error' ? '#e45858' : t.status === 'cancelled' ? '#f0a030' : '#4ec9b0'" />
-          <span class="tspeed">{{ t.speed }}</span>
-          <span class="tstatus" :class="'t-' + t.status">{{ t.status === 'done' ? '✓' : t.status === 'error' ? '✗' : t.status === 'cancelled' ? '⊘' : '' }}</span>
-          <n-button v-if="t.status === 'transferring'" size="tiny" quaternary @click="cancelTransfer(t.id)" title="取消"><n-icon :size="12" :component="TrashOutline" /></n-button>
+        <div v-if="!transfers.length" class="tbar-empty">{{ t('sftpPanel.noTransfer') }}</div>
+        <div v-for="tr in transfers" :key="tr.id" class="trow">
+          <span class="tname">{{ tr.direction }} {{ tr.name }}</span>
+          <n-progress :percentage="tr.percent" :height="4" :show-text="false" style="flex:1;margin:0 6px" :color="tr.status === 'error' ? '#e45858' : tr.status === 'cancelled' ? '#f0a030' : '#4ec9b0'" />
+          <span class="tspeed">{{ tr.speed }}</span>
+          <span class="tstatus" :class="'t-' + tr.status">{{ tr.status === 'done' ? '✓' : tr.status === 'error' ? '✗' : tr.status === 'cancelled' ? '⊘' : '' }}</span>
+          <n-button v-if="tr.status === 'transferring'" size="tiny" quaternary @click="cancelTransfer(tr.id)" :title="t('common.cancel')"><n-icon :size="12" :component="TrashOutline" /></n-button>
         </div>
       </div>
     </div>
 
     <!-- 新建文件夹弹窗 -->
-    <n-modal v-model:show="showMkdir" title="新建文件夹" preset="card" :show-icon="false" style="width:320px" :mask-closable="false">
-      <n-input v-model:value="mkdirName" placeholder="文件夹名称" @keyup.enter="doMkdir" />
-      <template #footer><n-button @click="showMkdir = false">取消</n-button><n-button type="primary" @click="doMkdir" style="margin-left:8px">创建</n-button></template>
+    <n-modal v-model:show="showMkdir" :title="t('sftpPanel.menuNewDir')" preset="card" :show-icon="false" style="width:320px" :mask-closable="false">
+      <n-input v-model:value="mkdirName" :placeholder="t('sftpPanel.folderName')" @keyup.enter="doMkdir" />
+      <template #footer><n-button @click="showMkdir = false">{{ t('common.cancel') }}</n-button><n-button type="primary" @click="doMkdir" style="margin-left:8px">{{ t('common.create') }}</n-button></template>
     </n-modal>
 
     <!-- 名称输入弹窗(新建文件/新建文件夹/重命名) -->
     <n-modal v-model:show="showNameDlg" :title="nameDlgTitle" preset="card" :show-icon="false" style="width:320px" :mask-closable="false">
-      <n-input v-model:value="nameDlgValue" placeholder="请输入名称" @keyup.enter="confirmNameDlg" />
-      <template #footer><n-button @click="showNameDlg = false">取消</n-button><n-button type="primary" @click="confirmNameDlg" style="margin-left:8px">确定</n-button></template>
+      <n-input v-model:value="nameDlgValue" :placeholder="t('sftpPanel.inputName')" @keyup.enter="confirmNameDlg" />
+      <template #footer><n-button @click="showNameDlg = false">{{ t('common.cancel') }}</n-button><n-button type="primary" @click="confirmNameDlg" style="margin-left:8px">{{ t('common.confirm') }}</n-button></template>
     </n-modal>
 
     <!-- 右键菜单 -->
     <n-dropdown :show="ctxShow" :options="ctxOptions" :x="ctxX" :y="ctxY" placement="bottom-start" @select="handleCtxSelect" @clickoutside="ctxShow = false" />
 
     <!-- 删除确认弹窗 -->
-    <n-modal v-model:show="showDelete" title="确认删除" preset="card" :show-icon="false" style="width:380px" :mask-closable="false">
-      <p style="margin:0">确定要删除 <b>{{ delTarget?.name }}</b> 吗？此操作不可撤销。</p>
-      <template #footer><n-button @click="showDelete = false">取消</n-button><n-button type="error" @click="doDelete" style="margin-left:8px">删除</n-button></template>
+    <n-modal v-model:show="showDelete" :title="t('sftpPanel.confirmDelete')" preset="card" :show-icon="false" style="width:380px" :mask-closable="false">
+      <p style="margin:0">{{ t('sftpPanel.deleteMsg1') }}<b>{{ delTarget?.name }}</b>{{ t('sftpPanel.deleteMsg2') }}</p>
+      <template #footer><n-button @click="showDelete = false">{{ t('common.cancel') }}</n-button><n-button type="error" @click="doDelete" style="margin-left:8px">{{ t('common.delete') }}</n-button></template>
     </n-modal>
 
     <!-- 编辑弹窗 -->
-    <n-modal v-model:show="showEditor" title="编辑文件" preset="card" :show-icon="false" style="width:820px;max-width:95vw" :mask-closable="false">
+    <n-modal v-model:show="showEditor" :title="t('sftpPanel.editFile')" preset="card" :show-icon="false" style="width:820px;max-width:95vw" :mask-closable="false">
       <div class="editor-meta">
         <span class="editor-path">{{ editPath }}</span>
         <span class="editor-lang">{{ getLang(editFile) }}</span>
@@ -665,7 +667,7 @@ onMounted(async () => {
           <pre ref="editorHlRef" class="editor-hl" v-html="editHtml" />
         </div>
       </div>
-      <template #footer><n-button @click="showEditor = false">取消</n-button><n-button type="primary" @click="saveEditor" style="margin-left:8px">保存</n-button></template>
+      <template #footer><n-button @click="showEditor = false">{{ t('common.cancel') }}</n-button><n-button type="primary" @click="saveEditor" style="margin-left:8px">{{ t('common.save') }}</n-button></template>
     </n-modal>
 
     <!-- 预览弹窗 -->
@@ -673,9 +675,9 @@ onMounted(async () => {
       <div class="preview-content">
         <img v-if="previewType === 'image'" :src="previewUrl" class="preview-media" @error="() => previewUrl = ''" />
         <video v-else-if="previewType === 'video'" :src="previewUrl" class="preview-media" controls autoplay />
-        <div v-else class="preview-unsupported">不支持预览此文件类型</div>
+        <div v-else class="preview-unsupported">{{ t('sftpPanel.previewUnsupported') }}</div>
       </div>
-      <template #footer><n-button @click="showPreview = false">关闭</n-button></template>
+      <template #footer><n-button @click="showPreview = false">{{ t('common.close') }}</n-button></template>
     </n-modal>
   </div>
 </template>

@@ -17,6 +17,7 @@ type AppConfig struct {
 	Serial       SerialConfig       `toml:"serial" json:"serial"`
 	Terminal     TerminalConfig     `toml:"terminal" json:"terminal"`
 	FileEditing  FileEditingConfig  `toml:"fileEditing" json:"fileEditing"`
+	Language     string             `toml:"language" json:"language"`
 }
 
 type FileEditingConfig struct {
@@ -130,6 +131,7 @@ func (c *ConfigService) Init() {
 		FileEditing: FileEditingConfig{
 			AutoSave: true,
 		},
+		Language: "zh-CN",
 	}
 	c.load()
 }
@@ -368,6 +370,23 @@ func (c *ConfigService) SetTheme(theme string) string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.config.View.Theme = theme
+	c.save()
+	data, _ := json.Marshal(c.config)
+	return string(data)
+}
+
+// GetLanguage 返回当前语言（如 zh-CN / en-US）。
+func (c *ConfigService) GetLanguage() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.config.Language
+}
+
+// SetLanguage 设置语言并持久化（如 zh-CN / en-US）。
+func (c *ConfigService) SetLanguage(lang string) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.config.Language = lang
 	c.save()
 	data, _ := json.Marshal(c.config)
 	return string(data)
