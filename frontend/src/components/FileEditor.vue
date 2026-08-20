@@ -1,5 +1,8 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, nextTick, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 import { useMessage } from 'naive-ui'
 import { ReadFile, WriteFile } from '../../bindings/changeme/internal/services/scriptfileservice.js'
 import { GetConfig } from '../../bindings/changeme/internal/services/configservice.js'
@@ -127,10 +130,10 @@ async function doSave(showTip: boolean): Promise<boolean> {
     dirty.value = false
     saved.value = true
     props.onDirtyChange?.(false)
-    if (showTip) message.success('已保存')
+    if (showTip) message.success(t('fileEditor.saved'))
     return true
   } catch (err: any) {
-    if (showTip) message.error('保存失败: ' + ((err && err.message) || '未知错误'))
+    if (showTip) message.error(t('fileEditor.saveFailed', { err: (err && err.message) || t('fileEditor.unknownError') }))
     return false
   }
 }
@@ -162,7 +165,7 @@ onMounted(async () => {
     updateLineNumbers()
     updateHl()
   } catch (err: any) {
-    message.error('无法打开编辑: ' + ((err && err.message) || '读取失败'))
+    message.error(t('fileEditor.openEditFailed', { err: (err && err.message) || t('fileEditor.readFail') }))
   }
   loading.value = false
   nextTick(() => {
@@ -203,7 +206,7 @@ onUnmounted(() => {
 
 <template>
   <div class="file-editor">
-    <div v-if="loading" class="fe-loading">加载中...</div>
+    <div v-if="loading" class="fe-loading">{{ t('common.loading') }}</div>
     <div v-else class="fe-wrap" @keydown="onKeydown">
       <div ref="lineNumRef" class="fe-lines">{{ lineNumbers }}</div>
       <div class="fe-body">

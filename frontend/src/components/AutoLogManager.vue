@@ -3,6 +3,9 @@ import { ref, onMounted, computed } from 'vue'
 import { NIcon, NEmpty, NInput, NModal } from 'naive-ui'
 import { CaretForwardOutline, DocumentOutline, TerminalOutline, RadioOutline, SearchOutline } from '@vicons/ionicons5'
 import { GetLogTree, GetLogContent, GetLogMeta } from '../../bindings/changeme/internal/services/logservice.js'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 interface LogNode {
   name: string
@@ -129,12 +132,12 @@ onMounted(loadTree)
 
 <template>
   <div class="autolog-panel">
-    <n-input v-model:value="searchQuery" size="tiny" placeholder="搜索日志..." clearable class="autolog-search-input">
+    <n-input v-model:value="searchQuery" size="tiny" :placeholder="t('autoLogManager.searchPlaceholder')" clearable class="autolog-search-input">
       <template #prefix><n-icon :size="14" :component="SearchOutline" /></template>
     </n-input>
     <div class="autolog-list">
       <div v-if="filteredList.length === 0" class="autolog-empty">
-        <n-empty description="暂无日志记录" size="small" />
+        <n-empty :description="t('autoLogManager.empty')" size="small" />
       </div>
       <div v-for="node in filteredList" :key="node.path" class="autolog-row" :style="{ paddingLeft: (8 + (node.depth || 0) * 16) + 'px' }" @click="node.isDir ? toggleFolder(node.path) : viewLog(node)">
         <n-icon v-if="node.isDir" :size="12" :component="CaretForwardOutline" class="autolog-arrow" :class="{ rotated: node.expanded }" />
@@ -144,12 +147,12 @@ onMounted(loadTree)
     </div>
 
     <n-modal v-model:show="showContent" class="log-dialog" preset="dialog" :show-icon="false" :mask-closable="false" style="width: 820px; max-width: 92vw">
-      <template #header><span class="log-title">日志详情</span></template>
+      <template #header><span class="log-title">{{ t('autoLogManager.logTitle') }}</span></template>
       <div v-if="logMeta" class="log-meta">
-        <span v-if="logMeta.startTime">开始: {{ logMeta.startTime }}</span>
-        <span v-if="logMeta.endTime"> | 结束: {{ logMeta.endTime }}</span>
-        <span v-if="logMeta.totalLines"> | 行数: {{ logMeta.totalLines }}</span>
-        <span v-if="logMeta.totalBytes"> | 大小: {{ (logMeta.totalBytes / 1024).toFixed(1) }}KB</span>
+        <span v-if="logMeta.startTime">{{ t('autoLogManager.start', { t: logMeta.startTime }) }}</span>
+        <span v-if="logMeta.endTime">{{ t('autoLogManager.end', { t: logMeta.endTime }) }}</span>
+        <span v-if="logMeta.totalLines">{{ t('autoLogManager.lines', { n: logMeta.totalLines }) }}</span>
+        <span v-if="logMeta.totalBytes">{{ t('autoLogManager.size', { s: (logMeta.totalBytes / 1024).toFixed(1) }) }}</span>
       </div>
       <div class="log-viewer">
         <div ref="logLineRef" class="log-lines">{{ logLineNumbers }}</div>
@@ -158,7 +161,7 @@ onMounted(loadTree)
         </div>
       </div>
       <template #action>
-        <n-button @click="showContent = false">关闭</n-button>
+        <n-button @click="showContent = false">{{ t('common.close') }}</n-button>
       </template>
     </n-modal>
   </div>

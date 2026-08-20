@@ -15,6 +15,7 @@ import { GetVersion } from '../../bindings/changeme/internal/services/versionser
 import { GetConfig, SetShowSession, SetShowSerial, SetShowToolbar } from '../../bindings/changeme/internal/services/configservice.js'
 import { ListPorts } from '../../bindings/changeme/internal/services/serialservice.js'
 import { OpenUrl as BrowserOpenUrl } from '../../bindings/changeme/internal/services/browserservice.js'
+import { useI18n } from 'vue-i18n'
 import { ListKeys, DeleteKey } from '../../bindings/changeme/internal/services/globalkeyservice.js'
 import { ScanBrowsers } from '../../bindings/changeme/internal/services/browserservice.js'
 import { GetRdpTestServers } from '../../bindings/changeme/internal/services/rdpservice.js'
@@ -24,6 +25,7 @@ import FileEditor from './FileEditor.vue'
 import type { FileEditorApi } from './FileEditor.vue'
 
 const message = useMessage()
+const { t } = useI18n()
 
 const emit = defineEmits<{
   (e: 'open-settings'): void
@@ -32,7 +34,7 @@ const emit = defineEmits<{
 const showSessionManager = ref(true)
 const mainMenuShow = ref(false)
 const showAbout = ref(false)
-const globalStatus = ref<{ text: string; row: number; col: number; encoding: string; hasTab: boolean }>({ text: '未连接', row: 0, col: 0, encoding: '', hasTab: false })
+const globalStatus = ref<{ text: string; row: number; col: number; encoding: string; hasTab: boolean }>({ text: t('shellPanel.notConnected'), row: 0, col: 0, encoding: '', hasTab: false })
 
 function onTabStatus(info: { text: string; row: number; col: number; encoding: string; hasTab: boolean }) {
   globalStatus.value = info
@@ -145,7 +147,7 @@ async function loadBrowsers() {
 
 const browserOptions = computed(() =>
   browserList.value.map(b => ({
-    label: b.id === 'default' ? `${b.name}（系统默认）` : b.name + (b.isDefault ? '（系统默认）' : ''),
+    label: b.id === 'default' ? `${b.name}${t('shellPanel.defaultBrowser')}` : b.name + (b.isDefault ? t('shellPanel.defaultBrowser') : ''),
     value: b.id,
   })),
 )
@@ -177,8 +179,8 @@ const legacyCiphers = [
   'arcfour128',
 ]
 const cipherGroups = [
-  { label: '现代安全算法', children: modernCiphers, cls: 'cipher-group-modern' },
-  { label: '兼容性算法', children: legacyCiphers, cls: 'cipher-group-legacy' },
+  { label: t('shellPanel.cipherModern'), children: modernCiphers, cls: 'cipher-group-modern' },
+  { label: t('shellPanel.cipherLegacy'), children: legacyCiphers, cls: 'cipher-group-legacy' },
 ]
 const sessAllowedCiphers = ref<string[]>([])
 function setModernCiphers() { sessAllowedCiphers.value = [...modernCiphers] }
@@ -190,13 +192,13 @@ const stopBitsOptions = [
   { label: '1.5', value: '1.5' },
   { label: '2', value: '2' },
 ]
-const parityOptions = [
-  { label: '无', value: 'none' },
-  { label: '奇校验 (Odd)', value: 'odd' },
-  { label: '偶校验 (Even)', value: 'even' },
-  { label: '标记 (Mark)', value: 'mark' },
-  { label: '空格 (Space)', value: 'space' },
-]
+const parityOptions = computed(() => [
+  { label: t('shellPanel.parityNone'), value: 'none' },
+  { label: 'Odd', value: 'odd' },
+  { label: 'Even', value: 'even' },
+  { label: 'Mark', value: 'mark' },
+  { label: 'Space', value: 'space' },
+])
 
 // ==================== Config ====================
 
@@ -214,17 +216,17 @@ async function loadConfig() {
 
 function toggleSessionManager() {
   showSessionManager.value = !showSessionManager.value
-  SetShowSession(showSessionManager.value).catch(() => message.error('保存配置失败'))
+  SetShowSession(showSessionManager.value).catch(() => message.error(t('shellPanel.saveConfigFailed')))
 }
 
 function toggleToolbar() {
   showToolbar.value = !showToolbar.value
-  SetShowToolbar(showToolbar.value).catch(() => message.error('保存配置失败'))
+  SetShowToolbar(showToolbar.value).catch(() => message.error(t('shellPanel.saveConfigFailed')))
 }
 
 function toggleSerial() {
   showSerial.value = !showSerial.value
-  SetShowSerial(showSerial.value).catch(() => message.error('保存配置失败'))
+  SetShowSerial(showSerial.value).catch(() => message.error(t('shellPanel.saveConfigFailed')))
 }
 
 // ==================== Resize ====================
@@ -254,45 +256,45 @@ function stopResize() {
 // ==================== Validation ====================
 
 function validateName(name: string): string | null {
-  if (!name || name.trim().length === 0) return '名称不能为空'
-  if (name.length > 255) return '名称过长'
-  if (name !== name.trim()) return '名称首尾不能有空格'
-  if (/[<>:"\/\\|?*]/.test(name)) return '不能包含: < > : " / \\ | ? *'
-  if (/[.]$/.test(name) || /\s$/.test(name)) return '不能以点号或空格结尾'
+  if (!name || name.trim().length === 0) return t('shellPanel.nameRequired')
+  if (name.length > 255) return t('shellPanel.nameTooLong')
+  if (name !== name.trim()) return t('shellPanel.nameTrimError')
+  if (/[<>:"\/\\|?*]/.test(name)) return t('shellPanel.nameInvalidChars')
+  if (/[.]$/.test(name) || /\s$/.test(name)) return t('shellPanel.nameTrailingDot')
   return null
 }
 
 function validateSSH(): string | null {
-  if (!sshHost.value.trim()) return 'SSH 主机不能为空'
-  if (sshPort.value < 1 || sshPort.value > 65535) return 'SSH 端口范围 1-65535'
-  if (sshAuthMode.value === 'key' && !sshKeyRef.value) return '请选择要使用的密钥'
+  if (!sshHost.value.trim()) return t('shellPanel.sshHostRequired')
+  if (sshPort.value < 1 || sshPort.value > 65535) return t('shellPanel.sshPortRange')
+  if (sshAuthMode.value === 'key' && !sshKeyRef.value) return t('shellPanel.sshKeyRequired')
   return null
 }
 
 function validateTelnet(): string | null {
-  if (!telnetHost.value.trim()) return 'Telnet 主机不能为空'
-  if (telnetPort.value < 1 || telnetPort.value > 65535) return 'Telnet 端口范围 1-65535'
+  if (!telnetHost.value.trim()) return t('shellPanel.telnetHostRequired')
+  if (telnetPort.value < 1 || telnetPort.value > 65535) return t('shellPanel.telnetPortRange')
   return null
 }
 
 function validateSerial(): string | null {
-  if (!serialDevice.value.trim()) return '串口设备路径不能为空'
+  if (!serialDevice.value.trim()) return t('shellPanel.serialDeviceRequired')
   return null
 }
 
 function validateHttp(): string | null {
   const url = httpUrl.value.trim()
-  if (!url) return 'URL 不能为空'
+  if (!url) return t('shellPanel.urlRequired')
   const lower = url.toLowerCase()
   if (!lower.startsWith('http://') && !lower.startsWith('https://')) {
-    return 'URL 必须以 http:// 或 https:// 开头'
+    return t('shellPanel.urlScheme')
   }
   return null
 }
 
 function validateRdp(): string | null {
-  if (!rdpHost.value.trim()) return 'RDP 主机不能为空'
-  if (rdpPort.value < 1 || rdpPort.value > 65535) return 'RDP 端口范围 1-65535'
+  if (!rdpHost.value.trim()) return t('shellPanel.rdpHostRequired')
+  if (rdpPort.value < 1 || rdpPort.value > 65535) return t('shellPanel.rdpPortRange')
   return null
 }
 
@@ -307,7 +309,7 @@ function validateCurrent(): string | null {
     case 'serial': return validateSerial()
     case 'http': return validateHttp()
     case 'rdp': return validateRdp()
-    default: return '未知协议'
+    default: return t('shellPanel.unknownProtocol')
   }
 }
 
@@ -340,9 +342,9 @@ async function handleDeleteKey(keyRef: string) {
     await DeleteKey(entry.id)
     await loadKeyList()
     if (sshKeyRef.value === keyRef) sshKeyRef.value = ''
-    message.success('密钥已删除')
+    message.success(t('shellPanel.keyDeleted'))
   } catch (e: any) {
-    message.error('删除失败: ' + (e.message || e))
+    message.error(t('shellPanel.deleteFailed', { err: e.message || e }))
   }
 }
 
@@ -453,23 +455,23 @@ async function getDefaultName(parentPath: string, base: string, isDir: boolean):
 // ==================== Folder ====================
 
 async function handleNewFolder(parentPath: string) {
-  newFolderName.value = await getDefaultName(parentPath, '新建文件夹', true)
+  newFolderName.value = await getDefaultName(parentPath, t('shellPanel.newFolderTitle'), true)
   newFolderParent.value = parentPath
   showNewFolder.value = true
 }
 
 async function handleCreateFolder() {
   let n = newFolderName.value.trim()
-  if (!n) n = await getDefaultName(newFolderParent.value, '新建文件夹', true)
+  if (!n) n = await getDefaultName(newFolderParent.value, t('shellPanel.newFolderTitle'), true)
   const err = validateName(n)
   if (err) { message.error(err); return }
-  if (await checkDuplicate(newFolderParent.value, n, true)) { message.error('已存在同名文件夹'); return }
+  if (await checkDuplicate(newFolderParent.value, n, true)) { message.error(t('shellPanel.duplicateFolder')); return }
   try {
     await CreateFolder((newFolderParent.value ? newFolderParent.value + '/' : '') + n)
     showNewFolder.value = false
-    message.success('创建成功')
+    message.success(t('shellPanel.created'))
   } catch (e: any) {
-    message.error('失败: ' + (e.message || e))
+    message.error(t('shellPanel.failed', { err: e.message || e }))
   }
 }
 
@@ -521,12 +523,12 @@ async function handleCreateSession() {
   const err = validateCurrent()
   if (err) { message.error(err); return }
   const name = sessName.value.trim()
-  if (await checkDuplicate(sessFolder.value || '.', name, false)) { message.error('该目录下已存在同名会话'); return }
+  if (await checkDuplicate(sessFolder.value || '.', name, false)) { message.error(t('shellPanel.duplicateSession')); return }
   try {
     await SaveSession(sessFolder.value || '.', buildToml(name))
     showSessionDialog.value = false
-    message.success('创建成功')
-  } catch (e: any) { message.error('失败: ' + (e.message || e)) }
+    message.success(t('shellPanel.created'))
+  } catch (e: any) { message.error(t('shellPanel.failed', { err: e.message || e })) }
 }
 
 // ==================== Edit session ====================
@@ -590,8 +592,8 @@ async function handleUpdateSession() {
   try {
     await UpdateSession(sessPath.value, buildToml(name))
     showSessionDialog.value = false
-    message.success('保存成功')
-  } catch (e: any) { message.error('失败: ' + (e.message || e)) }
+    message.success(t('shellPanel.saved'))
+  } catch (e: any) { message.error(t('shellPanel.failed', { err: e.message || e })) }
 }
 
 // ==================== Tab ====================
@@ -608,7 +610,7 @@ function handleEditActiveSession() {
   if (!tm) return
   const path = tm.getActiveSessionPath()
   if (!path) {
-    message.info('当前活动标签页不是会话连接，无法编辑')
+    message.info(t('shellPanel.notEditable'))
     return
   }
   openEditSession(path)
@@ -706,7 +708,7 @@ function onConfigChanged() { loadConfig() }
 // 用系统默认浏览器打开外部链接
 async function openExternal(url: string) {
   const err = await BrowserOpenUrl('', url)
-  if (err) message.error('打开链接失败: ' + err)
+  if (err) message.error(t('shellPanel.openLinkFailed', { err }))
 }
 
 onMounted(() => {
@@ -746,7 +748,7 @@ onBeforeUnmount(() => {
         @exec-script="handleToolAction('exec-script')"
         @sftp="handleToolAction('sftp')"
         @toggle-toolbar="toggleToolbar"
-        @about="message.info('AceShell 网络 Shell 终端管理工具')"
+        @about="message.info(t('shellPanel.aboutMsg'))"
       />
       <div class="right-area">
         <div class="right-content">
@@ -784,127 +786,127 @@ onBeforeUnmount(() => {
     </div>
 
     <!-- Folder dialog -->
-    <n-modal v-model:show="showNewFolder" title="新建文件夹" preset="dialog" :show-icon="false" style="width: 360px" :mask-closable="false">
-      <div class="form-group"><label class="form-label">名称 <span class="required">*</span></label><n-input v-model:value="newFolderName" @keyup.enter="handleCreateFolder" /></div>
-      <template #action><n-button @click="showNewFolder = false">取消</n-button><n-button type="primary" @click="handleCreateFolder">创建</n-button></template>
+    <n-modal v-model:show="showNewFolder" :title="t('shellPanel.newFolderTitle')" preset="dialog" :show-icon="false" style="width: 360px" :mask-closable="false">
+      <div class="form-group"><label class="form-label">{{ t('common.name') }} <span class="required">*</span></label><n-input v-model:value="newFolderName" @keyup.enter="handleCreateFolder" /></div>
+      <template #action><n-button @click="showNewFolder = false">{{ t('common.cancel') }}</n-button><n-button type="primary" @click="handleCreateFolder">{{ t('common.create') }}</n-button></template>
     </n-modal>
 
     <!-- Session dialog (new / edit) -->
-    <n-modal v-model:show="showSessionDialog" :title="isEditMode ? '编辑会话' : '新建会话'" preset="dialog" :show-icon="false" style="width: 720px" :mask-closable="false">
+    <n-modal v-model:show="showSessionDialog" :title="isEditMode ? t('shellPanel.editSession') : t('shellPanel.newSession')" preset="dialog" :show-icon="false" style="width: 720px" :mask-closable="false">
       <div class="session-dialog">
         <n-scrollbar style="width: 140px; flex-shrink: 0;">
           <div class="session-type-list">
             <div class="type-item" :class="{ active: selectedProtocol === 'ssh' }" @click="selectedProtocol = 'ssh'">
               <span class="type-name">SSH</span>
-              <span class="type-desc">安全外壳协议</span>
+              <span class="type-desc">{{ t('shellPanel.sshDesc') }}</span>
             </div>
             <div class="type-item" :class="{ active: selectedProtocol === 'sftp' }" @click="selectedProtocol = 'sftp'">
               <span class="type-name">SFTP</span>
-              <span class="type-desc">文件传输协议</span>
+              <span class="type-desc">{{ t('shellPanel.sftpDesc') }}</span>
             </div>
             <div class="type-item" :class="{ active: selectedProtocol === 'telnet' }" @click="selectedProtocol = 'telnet'">
               <span class="type-name">Telnet</span>
-              <span class="type-desc">远程登录协议</span>
+              <span class="type-desc">{{ t('shellPanel.telnetDesc') }}</span>
             </div>
             <div class="type-item" :class="{ active: selectedProtocol === 'serial' }" @click="selectedProtocol = 'serial'">
-              <span class="type-name">串口</span>
-              <span class="type-desc">串行设备连接</span>
+              <span class="type-name">{{ t('shellPanel.serialType') }}</span>
+              <span class="type-desc">{{ t('shellPanel.serialDesc') }}</span>
             </div>
             <div class="type-item" :class="{ active: selectedProtocol === 'http' }" @click="selectedProtocol = 'http'; loadBrowsers()">
               <span class="type-name">HTTP</span>
-              <span class="type-desc">网页链接访问</span>
+              <span class="type-desc">{{ t('shellPanel.httpDesc') }}</span>
             </div>
             <div class="type-item" :class="{ active: selectedProtocol === 'rdp' }" @click="selectedProtocol = 'rdp'; loadRdpTestServers()">
               <span class="type-name">RDP</span>
-              <span class="type-desc">远程桌面协议</span>
+              <span class="type-desc">{{ t('shellPanel.rdpDesc') }}</span>
             </div>
           </div>
         </n-scrollbar>
         <n-scrollbar style="flex: 1; min-width: 0;">
           <div class="session-main">
             <div v-if="sessionSide === 'settings'" class="anim-fade">
-            <div class="form-group"><label class="form-label">名称 <span class="required">*</span></label><n-input v-model:value="sessName" placeholder="会话名" /></div>
+            <div class="form-group"><label class="form-label">{{ t('common.name') }} <span class="required">*</span></label><n-input v-model:value="sessName" :placeholder="t('shellPanel.sessionName')" /></div>
             <template v-if="selectedProtocol === 'ssh' || selectedProtocol === 'sftp'">
-              <div class="form-group"><label class="form-label">IP 地址 <span class="required">*</span></label><n-input v-model:value="sshHost" placeholder="IP 或域名" /></div>
-              <div class="form-group"><label class="form-label">端口</label><n-input-number v-model:value="sshPort" :min="1" :max="65535" style="width: 100%" /></div>
-              <div class="form-group"><label class="form-label">用户名</label><n-input v-model:value="sshUser" placeholder="留空则连接时输入" /></div>
+              <div class="form-group"><label class="form-label">{{ t('shellPanel.ipAddress') }} <span class="required">*</span></label><n-input v-model:value="sshHost" :placeholder="t('shellPanel.ipOrDomain')" /></div>
+              <div class="form-group"><label class="form-label">{{ t('common.port') }}</label><n-input-number v-model:value="sshPort" :min="1" :max="65535" style="width: 100%" /></div>
+              <div class="form-group"><label class="form-label">{{ t('common.username') }}</label><n-input v-model:value="sshUser" :placeholder="t('shellPanel.emptyAtConnect')" /></div>
               <div class="form-group">
-                <label class="form-label">登录方式</label>
+                <label class="form-label">{{ t('shellPanel.loginMethod') }}</label>
                 <n-radio-group v-model:value="sshAuthMode" size="small">
-                  <n-radio-button value="password">密码登录</n-radio-button>
-                  <n-radio-button value="key">密钥登录</n-radio-button>
+                  <n-radio-button value="password">{{ t('shellPanel.passwordLogin') }}</n-radio-button>
+                  <n-radio-button value="key">{{ t('shellPanel.keyLogin') }}</n-radio-button>
                 </n-radio-group>
               </div>
-              <div v-if="sshAuthMode === 'password'" class="form-group"><label class="form-label">密码</label><n-input v-model:value="sshPassword" type="password" show-password-on="click" placeholder="留空则连接时输入" /></div>
+              <div v-if="sshAuthMode === 'password'" class="form-group"><label class="form-label">{{ t('common.password') }}</label><n-input v-model:value="sshPassword" type="password" show-password-on="click" :placeholder="t('shellPanel.emptyAtConnect')" /></div>
               <div v-else class="form-group">
-                <label class="form-label">密钥</label>
+                <label class="form-label">{{ t('shellPanel.key') }}</label>
                 <div style="display: flex; gap: 6px; align-items: center; width: 100%">
-                  <n-select v-model:value="sshKeyRef" :options="keyOptions" placeholder="选择密钥" filterable clearable style="flex: 1; min-width: 0" @focus="loadKeyList" />
-                  <n-button size="small" @click="openKeyCreate">新建</n-button>
-                  <n-button size="small" @click="openKeyCopy">部署到主机</n-button>
-                  <n-button size="small" :disabled="!sshKeyRef" @click="handleDeleteKey(sshKeyRef)">删除</n-button>
+                  <n-select v-model:value="sshKeyRef" :options="keyOptions" :placeholder="t('shellPanel.selectKey')" filterable clearable style="flex: 1; min-width: 0" @focus="loadKeyList" />
+                  <n-button size="small" @click="openKeyCreate">{{ t('common.create') }}</n-button>
+                  <n-button size="small" @click="openKeyCopy">{{ t('shellPanel.deployToHost') }}</n-button>
+                  <n-button size="small" :disabled="!sshKeyRef" @click="handleDeleteKey(sshKeyRef)">{{ t('common.delete') }}</n-button>
                 </div>
               </div>
             </template>
             <template v-else-if="selectedProtocol === 'telnet'">
-              <div class="form-group"><label class="form-label">IP 地址 <span class="required">*</span></label><n-input v-model:value="telnetHost" placeholder="IP 或域名" /></div>
-              <div class="form-group"><label class="form-label">端口</label><n-input-number v-model:value="telnetPort" :min="1" :max="65535" style="width: 100%" /></div>
-              <div class="form-group"><label class="form-label">账号</label><n-input v-model:value="telnetAccount" placeholder="登录账号" /></div>
-              <div class="form-group"><label class="form-label">密码</label><n-input v-model:value="telnetPassword" type="password" show-password-on="click" placeholder="登录密码" /></div>
+              <div class="form-group"><label class="form-label">{{ t('shellPanel.ipAddress') }} <span class="required">*</span></label><n-input v-model:value="telnetHost" :placeholder="t('shellPanel.ipOrDomain')" /></div>
+              <div class="form-group"><label class="form-label">{{ t('common.port') }}</label><n-input-number v-model:value="telnetPort" :min="1" :max="65535" style="width: 100%" /></div>
+              <div class="form-group"><label class="form-label">{{ t('shellPanel.account') }}</label><n-input v-model:value="telnetAccount" :placeholder="t('shellPanel.loginAccount')" /></div>
+              <div class="form-group"><label class="form-label">{{ t('common.password') }}</label><n-input v-model:value="telnetPassword" type="password" show-password-on="click" :placeholder="t('shellPanel.loginPassword')" /></div>
             </template>
             <template v-else-if="selectedProtocol === 'serial'">
               <div class="form-group">
-                <label class="form-label">串口设备路径 <span class="required">*</span></label>
-                <n-select v-model:value="serialDevice" :options="serialPorts" placeholder="自动扫描串口中..." filterable allow-create clearable :loading="scanningPorts" @focus="refreshSerialPorts" />
+                <label class="form-label">{{ t('shellPanel.serialDevicePath') }} <span class="required">*</span></label>
+                <n-select v-model:value="serialDevice" :options="serialPorts" :placeholder="t('shellPanel.scanningPorts')" filterable allow-create clearable :loading="scanningPorts" @focus="refreshSerialPorts" />
               </div>
-              <div class="form-group"><label class="form-label">波特率</label><n-select v-model:value="serialBaud" :options="serialBaudOptions" /></div>
-              <div class="form-group"><label class="form-label">数据位</label><n-input-number v-model:value="serialDataBits" :min="5" :max="8" style="width: 100%" /></div>
-              <div class="form-group"><label class="form-label">停止位</label><n-select v-model:value="serialStopBits" :options="stopBitsOptions" /></div>
-              <div class="form-group"><label class="form-label">校验位</label><n-select v-model:value="serialParity" :options="parityOptions" /></div>
+              <div class="form-group"><label class="form-label">{{ t('shellPanel.baudRate') }}</label><n-select v-model:value="serialBaud" :options="serialBaudOptions" /></div>
+              <div class="form-group"><label class="form-label">{{ t('shellPanel.dataBits') }}</label><n-input-number v-model:value="serialDataBits" :min="5" :max="8" style="width: 100%" /></div>
+              <div class="form-group"><label class="form-label">{{ t('shellPanel.stopBits') }}</label><n-select v-model:value="serialStopBits" :options="stopBitsOptions" /></div>
+              <div class="form-group"><label class="form-label">{{ t('shellPanel.parity') }}</label><n-select v-model:value="serialParity" :options="parityOptions" /></div>
             </template>
             <template v-else-if="selectedProtocol === 'http'">
               <div class="form-group"><label class="form-label">URL <span class="required">*</span></label><n-input v-model:value="httpUrl" placeholder="https://example.com" /></div>
               <div class="form-group">
-                <label class="form-label">浏览器</label>
+                <label class="form-label">{{ t('shellPanel.browser') }}</label>
                 <div style="display: flex; gap: 6px; align-items: center; width: 100%">
-                  <n-select v-model:value="httpBrowser" :options="browserOptions" placeholder="选择浏览器" clearable style="flex: 1; min-width: 0" @focus="loadBrowsers" />
-                  <n-button size="small" @click="loadBrowsers">重新扫描</n-button>
+                  <n-select v-model:value="httpBrowser" :options="browserOptions" :placeholder="t('shellPanel.selectBrowser')" clearable style="flex: 1; min-width: 0" @focus="loadBrowsers" />
+                  <n-button size="small" @click="loadBrowsers">{{ t('shellPanel.rescan') }}</n-button>
                 </div>
               </div>
               <div class="http-hint">
-                使用说明：
-                <br />1. URL 必须以 http:// 或 https:// 开头（https 优先）。
-                <br />2. 浏览器列表为自动扫描的本机浏览器；留空或选择"默认浏览器（系统默认）"时使用系统默认浏览器。
-                <br />3. 双击会话即直接打开所选浏览器的新标签页，不占用本应用标签页。
-                <br />4. 若打开时所选浏览器已不存在或不可用，将不会打开网页，并弹出提示让您重新选择浏览器。
+                {{ t('shellPanel.httpHint') }}
+                <br />{{ t('shellPanel.httpHint1') }}
+                <br />2. {{ t('shellPanel.httpHint2') }}
+                <br />{{ t('shellPanel.httpHint3') }}
+                <br />{{ t('shellPanel.httpHint4') }}
               </div>
             </template>
             <template v-else-if="selectedProtocol === 'rdp'">
-              <div class="form-group"><label class="form-label">IP 地址 <span class="required">*</span></label><n-input v-model:value="rdpHost" placeholder="IP 或域名" /></div>
-              <div class="form-group"><label class="form-label">端口</label><n-input-number v-model:value="rdpPort" :min="1" :max="65535" style="width: 100%" /></div>
-              <div class="form-group"><label class="form-label">用户名</label><n-input v-model:value="rdpUser" placeholder="登录账号" /></div>
-              <div class="form-group"><label class="form-label">密码</label><n-input v-model:value="rdpPassword" type="password" show-password-on="click" placeholder="登录密码" /></div>
+              <div class="form-group"><label class="form-label">{{ t('shellPanel.ipAddress') }} <span class="required">*</span></label><n-input v-model:value="rdpHost" :placeholder="t('shellPanel.ipOrDomain')" /></div>
+              <div class="form-group"><label class="form-label">{{ t('common.port') }}</label><n-input-number v-model:value="rdpPort" :min="1" :max="65535" style="width: 100%" /></div>
+              <div class="form-group"><label class="form-label">{{ t('common.username') }}</label><n-input v-model:value="rdpUser" :placeholder="t('shellPanel.loginAccount')" /></div>
+              <div class="form-group"><label class="form-label">{{ t('common.password') }}</label><n-input v-model:value="rdpPassword" type="password" show-password-on="click" :placeholder="t('shellPanel.loginPassword')" /></div>
               <div class="form-group">
-                <label class="form-label">测试服务器</label>
-                <n-select v-model:value="rdpTestSel" :options="rdpTestServers" placeholder="选择测试服务器自动填充（本地配置，不入库）" filterable clearable style="width: 100%" @update:value="applyRdpTestServer" />
+                <label class="form-label">{{ t('shellPanel.testServer') }}</label>
+                <n-select v-model:value="rdpTestSel" :options="rdpTestServers" :placeholder="t('shellPanel.testServerPlaceholder')" filterable clearable style="width: 100%" @update:value="applyRdpTestServer" />
               </div>
             </template>
           </div>
           <div v-else-if="sessionSide === 'meta'" class="anim-fade">
             <n-descriptions bordered :column="1" size="medium" label-style="width:100px" style="max-width: 400px; margin: 0 auto">
-              <n-descriptions-item label="创建时间">{{ sessCreated || '--' }}</n-descriptions-item>
-              <n-descriptions-item label="更新时间">{{ sessUpdated || '--' }}</n-descriptions-item>
-              <n-descriptions-item label="协议">{{ selectedProtocol }}</n-descriptions-item>
+              <n-descriptions-item :label="t('shellPanel.createdTime')">{{ sessCreated || '--' }}</n-descriptions-item>
+              <n-descriptions-item :label="t('shellPanel.updatedTime')">{{ sessUpdated || '--' }}</n-descriptions-item>
+              <n-descriptions-item :label="t('shellPanel.protocol')">{{ selectedProtocol }}</n-descriptions-item>
             </n-descriptions>
           </div>
           <div v-else-if="sessionSide === 'advanced'" class="anim-fade">
             <div style="font-size: 13px; color: var(--text-color, #d4d4d4); margin-bottom: 12px; line-height: 1.6">
-              自定义 SSH 加密算法。留空则使用服务端协商的默认算法。
+              {{ t('shellPanel.advancedHint') }}
             </div>
             <div class="cipher-buttons">
-              <n-button size="tiny" @click="setModernCiphers">现代 (默认)</n-button>
-              <n-button size="tiny" @click="setAllCiphers">全部选择</n-button>
-              <n-button size="tiny" @click="sessAllowedCiphers = []">清除</n-button>
+              <n-button size="tiny" @click="setModernCiphers">{{ t('shellPanel.modernDefault') }}</n-button>
+              <n-button size="tiny" @click="setAllCiphers">{{ t('shellPanel.selectAll') }}</n-button>
+              <n-button size="tiny" @click="sessAllowedCiphers = []">{{ t('common.clear') }}</n-button>
             </div>
             <n-checkbox-group v-model:value="sessAllowedCiphers">
               <div v-for="g in cipherGroups" :key="g.label" class="cipher-group" :class="g.cls">
@@ -919,10 +921,10 @@ onBeforeUnmount(() => {
         </n-scrollbar>
       </div>
       <template #action>
-        <n-button @click="showSessionDialog = false">取消</n-button>
-        <n-button v-if="isEditMode && (selectedProtocol === 'ssh' || selectedProtocol === 'sftp')" size="small" style="margin-right: 8px" @click="sessionSide = sessionSide === 'advanced' ? 'settings' : 'advanced'">高级选项</n-button>
-        <n-button v-if="isEditMode && (selectedProtocol === 'ssh' || selectedProtocol === 'sftp')" size="small" style="margin-right: 8px" @click="sessionSide = sessionSide === 'meta' ? 'settings' : 'meta'">元数据</n-button>
-        <n-button type="primary" @click="isEditMode ? handleUpdateSession() : handleCreateSession()">{{ isEditMode ? '保存' : '创建' }}</n-button>
+        <n-button @click="showSessionDialog = false">{{ t('common.cancel') }}</n-button>
+        <n-button v-if="isEditMode && (selectedProtocol === 'ssh' || selectedProtocol === 'sftp')" size="small" style="margin-right: 8px" @click="sessionSide = sessionSide === 'advanced' ? 'settings' : 'advanced'">{{ t('shellPanel.advanced') }}</n-button>
+        <n-button v-if="isEditMode && (selectedProtocol === 'ssh' || selectedProtocol === 'sftp')" size="small" style="margin-right: 8px" @click="sessionSide = sessionSide === 'meta' ? 'settings' : 'meta'">{{ t('shellPanel.meta') }}</n-button>
+        <n-button type="primary" @click="isEditMode ? handleUpdateSession() : handleCreateSession()">{{ isEditMode ? t('common.save') : t('common.create') }}</n-button>
       </template>
     </n-modal>
     <ExportDialog v-model:show="showExport" @done="()=>{}" />
@@ -931,29 +933,29 @@ onBeforeUnmount(() => {
     <SshCopyDialog v-model:show="showKeyCopy" :selected-key="sshKeyRef" :host="sshHost" :port="sshPort" :user="sshUser" @done="handleKeyCopied" />
 
     <!-- About / help dialog -->
-    <n-modal v-model:show="showAbout" title="帮助" preset="dialog" :show-icon="false" style="width: 420px" :mask-closable="false">
+    <n-modal v-model:show="showAbout" :title="t('shellPanel.helpTitle')" preset="dialog" :show-icon="false" style="width: 420px" :mask-closable="false">
       <div class="about-body">
         <div class="about-name">AceShell</div>
-        <div class="about-desc">跨平台网络终端管理工具</div>
-        <div class="about-version">版本 v{{ appVersion }}</div>
+        <div class="about-desc">{{ t('shellPanel.aboutDesc') }}</div>
+        <div class="about-version">{{ t('shellPanel.versionLabel', { ver: appVersion }) }}</div>
         <div class="about-links">
-          <div class="about-item"><span class="about-label">项目地址</span><a class="about-link" href="#" @click.prevent="openExternal('https://github.com/dingtongbin/AceShell')">https://github.com/dingtongbin/AceShell</a></div>
-          <div class="about-item"><span class="about-label">作者博客</span><a class="about-link" href="#" @click.prevent="openExternal('https://dingtongbin.cn/')">https://dingtongbin.cn/</a></div>
+          <div class="about-item"><span class="about-label">{{ t('shellPanel.projectUrl') }}</span><a class="about-link" href="#" @click.prevent="openExternal('https://github.com/dingtongbin/AceShell')">https://github.com/dingtongbin/AceShell</a></div>
+          <div class="about-item"><span class="about-label">{{ t('shellPanel.authorBlog') }}</span><a class="about-link" href="#" @click.prevent="openExternal('https://dingtongbin.cn/')">https://dingtongbin.cn/</a></div>
         </div>
       </div>
-      <template #action><n-button type="primary" @click="showAbout = false">确定</n-button></template>
+      <template #action><n-button type="primary" @click="showAbout = false">{{ t('common.confirm') }}</n-button></template>
     </n-modal>
 
     <!-- 文件编辑器未保存关闭确认 -->
-    <n-modal :show="!!editorClosePending" title="未保存的修改" preset="dialog" :show-icon="false" style="width: 400px" :mask-closable="false">
+    <n-modal :show="!!editorClosePending" :title="t('shellPanel.unsavedTitle')" preset="dialog" :show-icon="false" style="width: 400px" :mask-closable="false">
       <div style="font-size: 14px">
-        <p>「<b>{{ editorClosePending?.fileName }}</b>」有未保存的修改。</p>
-        <p style="margin-top: 8px; color: #e45858; font-size: 12px">关闭前是否保存？</p>
+        <p>{{ t('shellPanel.unsavedMsg', { file: editorClosePending?.fileName }) }}</p>
+        <p style="margin-top: 8px; color: #e45858; font-size: 12px">{{ t('shellPanel.unsavedAsk') }}</p>
       </div>
       <template #action>
-        <n-button @click="cancelEditorClose">取消</n-button>
-        <n-button @click="confirmEditorCloseDiscard">不保存</n-button>
-        <n-button type="primary" @click="confirmEditorCloseSave">保存并关闭</n-button>
+        <n-button @click="cancelEditorClose">{{ t('common.cancel') }}</n-button>
+        <n-button @click="confirmEditorCloseDiscard">{{ t('shellPanel.discard') }}</n-button>
+        <n-button type="primary" @click="confirmEditorCloseSave">{{ t('shellPanel.saveAndClose') }}</n-button>
       </template>
     </n-modal>
   </div>

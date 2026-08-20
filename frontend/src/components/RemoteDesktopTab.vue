@@ -3,6 +3,9 @@ import { ref, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { NSpin, NEmpty } from 'naive-ui'
 import { ensureRdpRuntime, rdpUI, connectRdp, formatIronError, type RdpConnectionInfo } from '../composables/useRdp'
 import type { UserInteraction } from '@devolutions/iron-remote-desktop'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 const props = defineProps<{
   conn: RdpConnectionInfo
@@ -77,7 +80,7 @@ function onReady(e: Event) {
   ui = detail?.irgUserInteraction ?? null
   if (!ui) {
     status.value = 'error'
-    errorMsg.value = 'IronRDP 组件就绪事件缺少 UserInteraction'
+    errorMsg.value = t('remoteDesktopTab.missingUI')
     return
   }
   rdpUI.value = ui
@@ -91,7 +94,7 @@ onMounted(async () => {
     rdpModule.value = await ensureRdpRuntime()
   } catch (e: any) {
     status.value = 'error'
-    errorMsg.value = 'IronRDP 运行时加载失败: ' + formatIronError(e)
+    errorMsg.value = t('remoteDesktopTab.runtimeLoadFailed', { err: formatIronError(e) })
     return
   }
   applyDprScale()
@@ -129,16 +132,16 @@ function retry() {
     </div>
     <div v-if="status === 'loading'" class="rdp-overlay">
       <n-spin size="small" />
-      <span class="rdp-overlay-text">正在加载 IronRDP 运行时…</span>
+      <span class="rdp-overlay-text">{{ t('remoteDesktopTab.loadingRuntime') }}</span>
     </div>
     <div v-else-if="status === 'ready' || status === 'connecting'" class="rdp-overlay">
       <n-spin size="small" />
-      <span class="rdp-overlay-text">{{ status === 'ready' ? '准备连接…' : '正在连接 RDP 服务器…' }}</span>
+      <span class="rdp-overlay-text">{{ status === 'ready' ? t('remoteDesktopTab.readyToConnect') : t('remoteDesktopTab.connecting') }}</span>
     </div>
     <div v-else-if="status === 'error'" class="rdp-overlay">
-      <n-empty description="连接失败" size="small" />
+      <n-empty :description="t('remoteDesktopTab.connectFailed')" size="small" />
       <div class="rdp-error">{{ errorMsg }}</div>
-      <button class="rdp-retry" @click="retry">重试</button>
+      <button class="rdp-retry" @click="retry">{{ t('common.retry') }}</button>
     </div>
   </div>
 </template>

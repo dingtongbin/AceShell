@@ -23,6 +23,7 @@ import { Disconnect as SftpDisconnect } from '../../bindings/changeme/internal/s
 import { Copy as ClipboardCopy, Paste as ClipboardPaste } from '../../bindings/changeme/internal/services/clipboardservice.js'
 import type { Pane, Tab, TabPaneApi, ComponentTabOptions, ComponentTabPatch, PaneActions, PaneCtx } from './tabTypes'
 import { dragState } from './tabTypes'
+import { useI18n } from 'vue-i18n'
 
 const props = defineProps<{
   pane: Pane
@@ -53,6 +54,7 @@ const actions: PaneActions = ctx?.actions ?? {
 }
 
 const message = useMessage()
+const { t } = useI18n()
 
 function findTabById(id: string): Tab | null {
   for (const { tabs } of paneTabRegistry.values()) {
@@ -76,9 +78,9 @@ async function sendToTab(id: string, p: string, d: string) {
     else if (p === 'serial') await SerialSend(id, d)
     else await TelnetSend(id, d)
   } catch {
-    const t = findTabById(id)
-    if (t?.terminal) {
-      t.terminal.write('\r\n\x1b[31m发送失败，连接可能已断开\x1b[0m\r\n')
+const tab = findTabById(id)
+    if (tab?.terminal) {
+      tab.terminal.write('\r\n\x1b[31m' + t('tabPane.sendFailed') + '\x1b[0m\r\n')
     }
   }
 }
@@ -204,7 +206,7 @@ async function openSession(sessionPath: string) {
       tab.status = 'connected'
     } catch (e: any) {
       tab.status = 'error'
-      tab.terminal?.write(`\r\n\x1b[31m连接失败: ${e.message || e}\x1b[0m\r\n`)
+      tab.terminal?.write(`\r\n\x1b[31m${t('tabPane.connectFailed', { err: e.message || e })}\x1b[0m\r\n`)
     }
   })
 }
@@ -385,26 +387,26 @@ function openTabContextMenu(e: MouseEvent, tab: Tab) {
 function getTabContextMenu(tab: Tab): DropdownOption[] {
   const items: DropdownOption[] = []
   if (tab.kind === 'component') {
-    items.push({ label: '关闭标签页', key: 'close', icon: () => h(NIcon, { size: 14 }, { default: () => h(CloseOutline) }) })
+    items.push({ label: t('tabPane.closeTab'), key: 'close', icon: () => h(NIcon, { size: 14 }, { default: () => h(CloseOutline) }) })
     return items
   }
   if (tab.protocol === 'ssh' && tab.status === 'connected') {
-    items.push({ label: '打开 SFTP', key: 'sftp', icon: () => h(NIcon, { size: 14 }, { default: () => h(FolderOpenOutline) }) })
+    items.push({ label: t('tabPane.openSftp'), key: 'sftp', icon: () => h(NIcon, { size: 14 }, { default: () => h(FolderOpenOutline) }) })
     items.push({ type: 'divider', key: 'd1' })
   }
-  items.push({ label: '重新连接', key: 'reconnect', icon: () => h(NIcon, { size: 14 }, { default: () => h(RefreshOutline) }) })
-  items.push({ label: '在新标签页打开会话', key: 'new-tab', icon: () => h(NIcon, { size: 14 }, { default: () => h(OpenOutline) }) })
+  items.push({ label: t('tabPane.reconnect'), key: 'reconnect', icon: () => h(NIcon, { size: 14 }, { default: () => h(RefreshOutline) }) })
+  items.push({ label: t('tabPane.reopenInNewTab'), key: 'new-tab', icon: () => h(NIcon, { size: 14 }, { default: () => h(OpenOutline) }) })
   if (!props.isVertical) {
     items.push({ type: 'divider', key: 'd2' })
-    items.push({ label: '向右拆分', key: 'split-right', icon: () => h(NIcon, { size: 14 }, { default: () => h(ChevronForwardOutline) }) })
-    items.push({ label: '向下拆分', key: 'split-down', icon: () => h(NIcon, { size: 14 }, { default: () => h(ChevronDownOutline) }) })
+    items.push({ label: t('tabPane.splitRight'), key: 'split-right', icon: () => h(NIcon, { size: 14 }, { default: () => h(ChevronForwardOutline) }) })
+    items.push({ label: t('tabPane.splitDown'), key: 'split-down', icon: () => h(NIcon, { size: 14 }, { default: () => h(ChevronDownOutline) }) })
   }
   if (tab.status === 'connected' || tab.status === 'connecting') {
     items.push({ type: 'divider', key: 'd3' })
-    items.push({ label: '断开连接', key: 'disconnect', icon: () => h(NIcon, { size: 14 }, { default: () => h(CloseOutline) }) })
+    items.push({ label: t('tabPane.disconnectConn'), key: 'disconnect', icon: () => h(NIcon, { size: 14 }, { default: () => h(CloseOutline) }) })
   }
   items.push({ type: 'divider', key: 'd4' })
-  items.push({ label: '关闭标签页', key: 'close', icon: () => h(NIcon, { size: 14 }, { default: () => h(CloseOutline) }) })
+  items.push({ label: t('tabPane.closeTab'), key: 'close', icon: () => h(NIcon, { size: 14 }, { default: () => h(CloseOutline) }) })
   return items
 }
 
@@ -530,7 +532,7 @@ function closeSftpPanelsOf(connID: string) {
 
 function disconnectSession(tab: Tab) {
   disconnectTab(tab)
-  tab.terminal?.write('\r\n\x1b[33m已断开连接\x1b[0m\r\n')
+  tab.terminal?.write('\r\n\x1b[33m' + t('tabPane.disconnected') + '\x1b[0m\r\n')
 }
 
 async function reconnectTab(tab: Tab) {
@@ -552,7 +554,7 @@ async function reconnectTab(tab: Tab) {
       tab.status = 'connected'
     } catch (e: any) {
       tab.status = 'error'
-      ;(tab.terminal as any)?.write(`\r\n\x1b[31m连接失败: ${e.message || e}\x1b[0m\r\n`)
+      ;(tab.terminal as any)?.write(`\r\n\x1b[31m${t('tabPane.connectFailed', { err: e.message || e })}\x1b[0m\r\n`)
     }
     return
   }
@@ -586,17 +588,17 @@ async function reconnectTab(tab: Tab) {
     tab.status = 'connected'
   } catch (e: any) {
     tab.status = 'error'
-    ;(tab.terminal as any)?.write(`\r\n\x1b[31m连接失败: ${e.message || e}\x1b[0m\r\n`)
+    ;(tab.terminal as any)?.write(`\r\n\x1b[31m${t('tabPane.connectFailed', { err: e.message || e })}\x1b[0m\r\n`)
   }
 }
 
-const tabMenuOptions: DropdownOption[] = [
-  { label: '重连断开连接的会话', key: 'reconnectDisconnected' },
-  { label: '重连所有会话', key: 'reconnectAll' },
+const tabMenuOptions = computed<DropdownOption[]>(() => [
+  { label: t('tabPane.reconnectDisconnected'), key: 'reconnectDisconnected' },
+  { label: t('tabPane.reconnectAll'), key: 'reconnectAll' },
   { type: 'divider', key: 'd1' },
-  { label: '关闭已断开的标签页', key: 'closeDisconnected' },
-  { label: '关闭所有标签页', key: 'closeAll' },
-]
+  { label: t('tabPane.closeDisconnected'), key: 'closeDisconnected' },
+  { label: t('tabPane.closeAll'), key: 'closeAll' },
+])
 
 function handleTabMenu(key: string) {
   switch (key) { case 'reconnectDisconnected': reconnectAll(); break; case 'reconnectAll': pane.tabs.forEach(t => reconnectTab(t)); break; case 'closeDisconnected': closeDisconnected(); break; case 'closeAll': closeAll(); break }
@@ -911,15 +913,15 @@ function getFileTypeLabel(name: string): string {
 // 状态栏左侧文本:未连接/远程连接(协议:ip:端口)/文件编辑(文件类型)/空
 function getStatusLeft(): string {
   const tab = pane.tabs.find(t => t.id === pane.activeTabId)
-  if (!tab) return '未连接'
+  if (!tab) return t('tabPane.notConnected')
   if (tab.kind === 'terminal') {
     if (tab.protocol === 'ssh') {
       const u = tab.username
       return u ? `SSH:${u}@${tab.host || ''}:${tab.port || ''}` : `SSH:${tab.host || ''}:${tab.port || ''}`
     }
     if (tab.protocol === 'telnet') return `Telnet:${tab.host || ''}:${tab.port || ''}`
-    if (tab.protocol === 'serial') return `串口:${tab.host || ''}:${tab.port || ''}`
-    return '就绪'
+    if (tab.protocol === 'serial') return t('tabPane.serialStatus', { host: tab.host || '', port: tab.port || '' })
+    return t('tabPane.notConnected')
   }
   if (tab.kind === 'component') {
     const fp = (tab.componentProps as any)?.fileName
@@ -1040,15 +1042,15 @@ async function copySelection() {
   const active = getActiveTerminal()
   const sel = active?.terminal?.getSelection()
   if (!sel) {
-    message.info('当前终端没有选中的文本')
+    message.info(t('tabPane.noSelection'))
     return
   }
   try {
     const err = await ClipboardCopy(sel)
     if (err) { message.error(err); return }
-    message.success('已复制')
+    message.success(t('tabPane.copied'))
   } catch (e: any) {
-    message.error('复制失败: ' + (e.message || e))
+    message.error(t('tabPane.copyFailed', { err: e.message || e }))
   }
 }
 
@@ -1060,11 +1062,11 @@ async function pasteClipboard() {
   try {
     text = await ClipboardPaste()
   } catch (e: any) {
-    message.error('读取剪贴板失败: ' + (e.message || e))
+    message.error(t('tabPane.readClipboardFailed', { err: e.message || e }))
     return
   }
   if (!text) {
-    message.info('剪贴板为空')
+    message.info(t('tabPane.clipboardEmpty'))
     return
   }
   const targetId = active.tab.id
@@ -1074,9 +1076,9 @@ async function pasteClipboard() {
     openPasteEditor(text)
   } else if (isConnectedFor(targetId)) {
     sendToTab(targetId, active.tab.protocol, text)
-    message.success('已粘贴到终端')
+    message.success(t('tabPane.pastedToTerminal'))
   } else {
-    message.warning('当前标签页未连接')
+    message.warning(t('tabPane.tabNotConnected'))
   }
 }
 
@@ -1109,9 +1111,9 @@ const dropZoneLabel = computed(() => {
   // 被拖标签来自本 pane(自己):左上合并无意义,提示必须准确反映"无任何操作"
   const isSelf = dragState.srcPaneId === pane.id && dragState.tabId !== ''
   switch (dropZone.value) {
-    case 'merge': return isSelf ? '无任何操作' : '合并到此处'
-    case 'split-h': return '向右拆分'
-    case 'split-v': return '向下拆分'
+    case 'merge': return isSelf ? t('tabPane.mergeNoOp') : t('tabPane.mergeHere')
+    case 'split-h': return t('tabPane.splitRight')
+    case 'split-v': return t('tabPane.splitDown')
     default: return ''
   }
 })
@@ -1128,7 +1130,7 @@ const dropZoneLabel = computed(() => {
       <div ref="tabsContainerRef" class="v-tabs-list" @wheel="onTabsWheel" @dragover="onTabsContainerDragOver" @dragleave="onTabsDragLeave" @drop="onTabsContainerDrop">
         <template v-for="(tab, idx) in pane.tabs" :key="tab.id">
           <div class="tab-insert-mark v" :class="{ active: insertIdx === idx }">
-            <span class="tab-insert-label">移动到此处</span>
+            <span class="tab-insert-label">{{ t('tabPane.moveHere') }}</span>
           </div>
           <div class="v-tab-item" :class="{ active: pane.activeTabId === tab.id }" @click="switchTab(tab.id)" draggable="true"
             @dragstart="(e: DragEvent) => onTabDragStart(e, idx, tab)" @dragend="onTabDragEnd"
@@ -1141,7 +1143,7 @@ const dropZoneLabel = computed(() => {
           </div>
         </template>
         <div class="tab-insert-mark v" :class="{ active: insertIdx === pane.tabs.length }">
-          <span class="tab-insert-label">移动到此处</span>
+          <span class="tab-insert-label">{{ t('tabPane.moveHere') }}</span>
         </div>
       </div>
       <div class="v-tabs-resize-handle" @mousedown="startVerticalResize"></div>
@@ -1153,11 +1155,11 @@ const dropZoneLabel = computed(() => {
           <div class="welcome-content">
             <div class="welcome-logo"><n-icon :size="36" :component="TerminalOutline" /></div>
             <h2>AceShell</h2>
-            <p class="welcome-desc">网络 Shell 终端管理工具</p>
+            <p class="welcome-desc">{{ t('tabPane.welcomeDesc') }}</p>
             <div class="welcome-shortcuts">
-              <div class="shortcut-item" @click="emitWelcome('new-ssh')"><n-icon :size="16" :component="ServerOutline" class="shortcut-icon" /><span class="shortcut-key">SSH</span><span>新建 SSH 连接</span></div>
-              <div class="shortcut-item" @click="emitWelcome('new-telnet')"><n-icon :size="16" :component="GlobeOutline" class="shortcut-icon" /><span class="shortcut-key">Telnet</span><span>新建 Telnet 连接</span></div>
-              <div class="shortcut-item" @click="emitWelcome('new-serial')"><n-icon :size="16" :component="HardwareChipOutline" class="shortcut-icon" /><span class="shortcut-key">串口</span><span>新建串口连接</span></div>
+              <div class="shortcut-item" @click="emitWelcome('new-ssh')"><n-icon :size="16" :component="ServerOutline" class="shortcut-icon" /><span class="shortcut-key">SSH</span><span>{{ t('tabPane.newSshConn') }}</span></div>
+              <div class="shortcut-item" @click="emitWelcome('new-telnet')"><n-icon :size="16" :component="GlobeOutline" class="shortcut-icon" /><span class="shortcut-key">Telnet</span><span>{{ t('tabPane.newTelnetConn') }}</span></div>
+              <div class="shortcut-item" @click="emitWelcome('new-serial')"><n-icon :size="16" :component="HardwareChipOutline" class="shortcut-icon" /><span class="shortcut-key">{{ t('tabPane.serial') }}</span><span>{{ t('tabPane.newSerialConn') }}</span></div>
             </div>
           </div>
         </div>
@@ -1168,7 +1170,7 @@ const dropZoneLabel = computed(() => {
           <div ref="tabsContainerRef" class="h-tabs-container" @wheel="onTabsWheel" @scroll="onTabsScroll" @dragover="onTabsContainerDragOver" @dragleave="onTabsDragLeave" @drop="onTabsContainerDrop">
             <template v-for="(tab, idx) in pane.tabs" :key="tab.id">
               <div class="tab-insert-mark" :class="{ active: insertIdx === idx }">
-                <span class="tab-insert-label">移动到此处</span>
+                <span class="tab-insert-label">{{ t('tabPane.moveHere') }}</span>
               </div>
               <div class="tab-item" :class="{ active: pane.activeTabId === tab.id }" @click="switchTab(tab.id)" draggable="true"
                 @dragstart="(e: DragEvent) => onTabDragStart(e, idx, tab)" @dragend="onTabDragEnd"
@@ -1181,7 +1183,7 @@ const dropZoneLabel = computed(() => {
               </div>
             </template>
             <div class="tab-insert-mark" :class="{ active: insertIdx === pane.tabs.length }">
-              <span class="tab-insert-label">移动到此处</span>
+              <span class="tab-insert-label">{{ t('tabPane.moveHere') }}</span>
             </div>
           </div>
           <div class="scroll-arrow" :class="{ disabled: !canScrollRight }" @click="scrollTabs(1)">
@@ -1196,21 +1198,21 @@ const dropZoneLabel = computed(() => {
         <div class="term-wrapper">
           <div v-if="showToolbar && activeTab && activeTab.kind === 'terminal'" class="tab-toolbar">
             <div class="toolbar-btns">
-              <div class="toolbar-icon-btn" title="复制选中内容" @click="copySelection()">
+              <div class="toolbar-icon-btn" :title="t('tabPane.copySelection')" @click="copySelection()">
                 <n-icon :size="15" :component="CopyOutline" />
               </div>
-              <div class="toolbar-icon-btn" title="粘贴到当前终端" @click="pasteClipboard()">
+              <div class="toolbar-icon-btn" :title="t('tabPane.pasteToTerminal')" @click="pasteClipboard()">
                 <n-icon :size="15" :component="ClipboardOutline" />
               </div>
-              <n-button v-if="activeTab.protocol === 'ssh'" size="tiny" :disabled="activeTab.status !== 'connected'" @click="openSftp(activeTab)" title="打开SFTP">SFTP</n-button>
-              <n-button size="tiny" @click="openScriptDialog(activeTab)" title="执行脚本">执行脚本</n-button>
-              <n-button size="tiny" @click="exportLog(activeTab)" title="导出日志">导出日志</n-button>
-              <n-button size="tiny" @click="clearScrollback(activeTab)" title="清除回滚">清回滚</n-button>
-              <n-button size="tiny" @click="clearScreen(activeTab)" title="清除屏幕">清屏</n-button>
+              <n-button v-if="activeTab.protocol === 'ssh'" size="tiny" :disabled="activeTab.status !== 'connected'" @click="openSftp(activeTab)" :title="t('tabPane.openSftp')">SFTP</n-button>
+              <n-button size="tiny" @click="openScriptDialog(activeTab)" :title="t('tabPane.execScript')">{{ t('tabPane.execScript') }}</n-button>
+              <n-button size="tiny" @click="exportLog(activeTab)" :title="t('tabPane.exportLog')">{{ t('tabPane.exportLog') }}</n-button>
+              <n-button size="tiny" @click="clearScrollback(activeTab)" :title="t('tabPane.clearScrollback')">{{ t('tabPane.clearScrollback') }}</n-button>
+              <n-button size="tiny" @click="clearScreen(activeTab)" :title="t('tabPane.clearScreen')">{{ t('tabPane.clearScreen') }}</n-button>
             </div>
           </div>
           <div class="term-area" @mousedown="onTermAreaMousedown" @dragover="onTermAreaDragOver" @dragleave="onTermAreaDragLeave" @drop="onTermAreaDrop">
-            <div v-if="pane.tabs.length === 0 && showWelcomePaneId !== pane.id" class="term-placeholder"><n-empty description="选择一个会话开始连接" size="small" /></div>
+            <div v-if="pane.tabs.length === 0 && showWelcomePaneId !== pane.id" class="term-placeholder"><n-empty :description="t('tabPane.selectSessionHint')" size="small" /></div>
             <template v-for="tab in pane.tabs" :key="tab.id">
               <div v-if="tab.kind === 'component'" class="term-container" :class="{ visible: pane.activeTabId === tab.id }">
                 <div class="tab-content-host">
@@ -1227,57 +1229,57 @@ const dropZoneLabel = computed(() => {
       </div>
     </div>
 
-    <n-modal v-model:show="showCloseConfirm" title="关闭标签页" preset="dialog" :show-icon="false" :mask-closable="false" style="width: 400px">
-      <div>确定要关闭此标签页吗？正在进行的连接将会断开。</div>
-      <n-checkbox v-if="confirmTab?.sessionPath" v-model:checked="confirmNoAsk" style="margin-top: 16px">以后不再提醒</n-checkbox>
-      <div v-else class="close-confirm-hint">跟随系统标签页设置（设置-标签-关闭标签页不弹确认）</div>
+    <n-modal v-model:show="showCloseConfirm" :title="t('tabPane.closeConfirmTitle')" preset="dialog" :show-icon="false" :mask-closable="false" style="width: 400px">
+      <div>{{ t('tabPane.closeConfirmMsg') }}</div>
+      <n-checkbox v-if="confirmTab?.sessionPath" v-model:checked="confirmNoAsk" style="margin-top: 16px">{{ t('tabPane.dontAskAgain') }}</n-checkbox>
+      <div v-else class="close-confirm-hint">{{ t('tabPane.closeConfirmHint') }}</div>
       <template #action>
-        <n-button @click="cancelClose">取消</n-button>
-        <n-button type="error" @click="confirmCloseTab">关闭</n-button>
+        <n-button @click="cancelClose">{{ t('common.cancel') }}</n-button>
+        <n-button type="error" @click="confirmCloseTab">{{ t('common.close') }}</n-button>
       </template>
     </n-modal>
 
-    <n-modal v-model:show="showPasteConfirm" title="确认粘贴多行内容" preset="dialog" :show-icon="false" :mask-closable="false" class="paste-confirm-modal" style="width: 620px">
+    <n-modal v-model:show="showPasteConfirm" :title="t('tabPane.pasteConfirmTitle')" preset="dialog" :show-icon="false" :mask-closable="false" class="paste-confirm-modal" style="width: 620px">
       <div class="paste-confirm-body">
         <div class="paste-confirm-editor-wrap">
-          <div class="paste-confirm-hint">粘贴前可编辑,内容将按行发送到终端</div>
+          <div class="paste-confirm-hint">{{ t('tabPane.pasteHint') }}</div>
           <div ref="pasteEditorEl" class="paste-confirm-editor" />
         </div>
         <div class="paste-confirm-actions">
-          <n-button type="primary" @click="confirmPaste">粘贴</n-button>
-          <n-button @click="cancelPaste">取消</n-button>
+          <n-button type="primary" @click="confirmPaste">{{ t('tabPane.paste') }}</n-button>
+          <n-button @click="cancelPaste">{{ t('common.cancel') }}</n-button>
         </div>
       </div>
     </n-modal>
 
-    <n-modal v-model:show="showScriptDialog" title="执行脚本" preset="dialog" :show-icon="false" :mask-closable="false" class="script-dialog-modal" style="width: 620px">
+    <n-modal v-model:show="showScriptDialog" :title="t('tabPane.scriptTitle')" preset="dialog" :show-icon="false" :mask-closable="false" class="script-dialog-modal" style="width: 620px">
       <div class="script-dialog-body">
         <div class="script-dialog-editor-wrap">
-          <div class="script-dialog-hint">输入脚本内容，每行一条命令，发送到当前活动终端</div>
+          <div class="script-dialog-hint">{{ t('tabPane.scriptHint') }}</div>
           <div ref="scriptEditorEl" class="script-dialog-editor" />
         </div>
         <div class="script-dialog-actions">
-          <n-button size="tiny" @click="readScriptFile" title="读取脚本文件内容到输入框">读取文本</n-button>
-          <n-button size="tiny" :disabled="!scriptContent.trim()" @click="sendScript">发送</n-button>
-          <n-button size="tiny" type="primary" :disabled="!scriptContent.trim()" @click="sendScript">发送并关闭</n-button>
-          <n-button size="tiny" @click="cancelScript">取消</n-button>
+          <n-button size="tiny" @click="readScriptFile" :title="t('tabPane.loadScriptFile')">{{ t('tabPane.loadText') }}</n-button>
+          <n-button size="tiny" :disabled="!scriptContent.trim()" @click="sendScript">{{ t('tabPane.send') }}</n-button>
+          <n-button size="tiny" type="primary" :disabled="!scriptContent.trim()" @click="sendScript">{{ t('tabPane.sendAndClose') }}</n-button>
+          <n-button size="tiny" @click="cancelScript">{{ t('common.cancel') }}</n-button>
         </div>
       </div>
     </n-modal>
     <input ref="scriptFileInputRef" type="file" accept=".txt,.sh,.bat,.ps1,.py" style="display:none" @change="onScriptFileChange" />
 
-    <n-modal v-model:show="showBrowserFail" title="浏览器不可用" preset="dialog" :show-icon="false" style="width: 520px" :mask-closable="false">
+    <n-modal v-model:show="showBrowserFail" :title="t('tabPane.browserFailTitle')" preset="dialog" :show-icon="false" style="width: 520px" :mask-closable="false">
       <div style="line-height: 1.7; color: var(--text-color, #d4d4d4)">
-        <div>所选的浏览器不存在或不可用，未打开网页：</div>
+<div>{{ t('tabPane.browserFailMsg') }}</div>
         <div style="word-break: break-all; margin: 6px 0">{{ browserFailUrl }}</div>
-        <div>请重新选择本机可用的浏览器后重试（选择将保存到该会话）：</div>
+<div>{{ t('tabPane.browserFailHint') }}</div>
       </div>
       <div style="margin-top: 12px">
-        <n-select v-model:value="browserFailSel" :options="browserFailOptions" placeholder="选择浏览器" clearable @focus="loadBrowserFailOptions" />
+        <n-select v-model:value="browserFailSel" :options="browserFailOptions" :placeholder="t('tabPane.selectBrowser')" clearable @focus="loadBrowserFailOptions" />
       </div>
       <template #action>
-        <n-button @click="closeBrowserFail">取消</n-button>
-        <n-button type="primary" :disabled="!browserFailSel" @click="retryOpenUrlWithBrowser">重新打开</n-button>
+        <n-button @click="closeBrowserFail">{{ t('common.cancel') }}</n-button>
+        <n-button type="primary" :disabled="!browserFailSel" @click="retryOpenUrlWithBrowser">{{ t('tabPane.retryOpen') }}</n-button>
       </template>
     </n-modal>
 

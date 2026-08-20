@@ -15,6 +15,9 @@ import {
 } from '@vicons/ionicons5'
 import { GetScriptTree, CreateScriptFolder, DeleteScriptItem, MoveScriptItem } from '../../bindings/changeme/internal/services/filetreeservice.js'
 import { CreateFile, RenameFile } from '../../bindings/changeme/internal/services/scriptfileservice.js'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 interface TreeNode {
   name: string
@@ -143,7 +146,7 @@ async function finishRename() {
     renamePath.value = null
     loadTree()
   } catch (err: any) {
-    message.error('重命名失败: ' + ((err && err.message) || '未知错误'))
+    message.error(t('scriptManager.renameFailed', { err: (err && err.message) || t('scriptManager.unknownError') }))
     renamePath.value = null
   }
 }
@@ -161,7 +164,7 @@ async function executeDelete() {
     deleteTarget.value = null
     loadTree()
   } catch (err: any) {
-    message.error('删除失败: ' + ((err && err.message) || '未知错误'))
+    message.error(t('scriptManager.deleteFailed', { err: (err && err.message) || t('scriptManager.unknownError') }))
   }
 }
 
@@ -170,18 +173,18 @@ function cancelDelete() { showDeleteConfirm.value = false; deleteTarget.value = 
 function getContextMenuOptions(node: TreeNode): DropdownOption[] {
   if (node.isDir) {
     return [
-      { label: '新建脚本', key: 'new-script', icon: () => h(NIcon, { size: 14 }, { default: () => h(DocumentTextOutline) }) },
-      { label: '新建文件夹', key: 'new-folder', icon: () => h(NIcon, { size: 14 }, { default: () => h(AddOutline) }) },
+      { label: t('scriptManager.newScript'), key: 'new-script', icon: () => h(NIcon, { size: 14 }, { default: () => h(DocumentTextOutline) }) },
+      { label: t('scriptManager.newFolder'), key: 'new-folder', icon: () => h(NIcon, { size: 14 }, { default: () => h(AddOutline) }) },
       { type: 'divider', key: 'd1' },
-      { label: '重命名', key: 'rename', icon: () => h(NIcon, { size: 14 }, { default: () => h(CreateOutline) }) },
-      { label: '删除文件夹', key: 'delete', icon: () => h(NIcon, { size: 14 }, { default: () => h(TrashOutline) }) },
+      { label: t('scriptManager.rename'), key: 'rename', icon: () => h(NIcon, { size: 14 }, { default: () => h(CreateOutline) }) },
+      { label: t('scriptManager.deleteFolder'), key: 'delete', icon: () => h(NIcon, { size: 14 }, { default: () => h(TrashOutline) }) },
     ]
   }
   return [
-    { label: '打开', key: 'open', icon: () => h(NIcon, { size: 14 }, { default: () => h(DocumentTextOutline) }) },
+    { label: t('scriptManager.open'), key: 'open', icon: () => h(NIcon, { size: 14 }, { default: () => h(DocumentTextOutline) }) },
     { type: 'divider', key: 'd1' },
-    { label: '重命名', key: 'rename', icon: () => h(NIcon, { size: 14 }, { default: () => h(CreateOutline) }) },
-    { label: '删除', key: 'delete', icon: () => h(NIcon, { size: 14 }, { default: () => h(TrashOutline) }) },
+    { label: t('scriptManager.rename'), key: 'rename', icon: () => h(NIcon, { size: 14 }, { default: () => h(CreateOutline) }) },
+    { label: t('scriptManager.delete'), key: 'delete', icon: () => h(NIcon, { size: 14 }, { default: () => h(TrashOutline) }) },
   ]
 }
 
@@ -191,14 +194,14 @@ function openContextMenu(e: MouseEvent, node: TreeNode) {
   ctxX.value = e.clientX; ctxY.value = e.clientY; ctxShow.value = true
 }
 
-const rootMenuOptions: DropdownOption[] = [
-  { label: '新建脚本', key: 'root-new-script', icon: () => h(NIcon, { size: 14 }, { default: () => h(DocumentTextOutline) }) },
-  { label: '新建文件夹', key: 'root-new-folder', icon: () => h(NIcon, { size: 14 }, { default: () => h(FolderOutline) }) },
-]
+const rootMenuOptions = computed<DropdownOption[]>(() => [
+  { label: t('scriptManager.newScript'), key: 'root-new-script', icon: () => h(NIcon, { size: 14 }, { default: () => h(DocumentTextOutline) }) },
+  { label: t('scriptManager.newFolder'), key: 'root-new-folder', icon: () => h(NIcon, { size: 14 }, { default: () => h(FolderOutline) }) },
+])
 
 function openRootContextMenu(e: MouseEvent) {
   ctxNode.value = null
-  ctxOptions.value = rootMenuOptions
+  ctxOptions.value = rootMenuOptions.value
   ctxX.value = e.clientX
   ctxY.value = e.clientY
   ctxShow.value = true
@@ -225,10 +228,10 @@ async function handleContextAction(key: string, node: TreeNode) {
 }
 
 async function createFolder(parent: string) {
-  const name = await uniqueName(parent, '新建文件夹', true)
+  const name = await uniqueName(parent, t('scriptManager.newFolder'), true)
   if (!name) return
   const path = parent ? parent + '/' + name : name
-  try { await CreateScriptFolder(path); loadTree() } catch (err: any) { message.error('新建文件夹失败: ' + ((err && err.message) || '未知错误')) }
+  try { await CreateScriptFolder(path); loadTree() } catch (err: any) { message.error(t('scriptManager.createFolderFailed', { err: (err && err.message) || t('scriptManager.unknownError') })) }
 }
 
 // ====== 新建脚本弹窗:预填"新建脚本.sh",以用户输入为准,不自动追加后缀 ======
@@ -240,7 +243,7 @@ const newScriptError = ref('')
 
 function openNewScript(parent: string) {
   newScriptParent.value = parent
-  newScriptName.value = '新建脚本.sh'
+  newScriptName.value = t('scriptManager.newScriptPlaceholder')
   newScriptError.value = ''
   showNewScript.value = true
   nextTick(() => {
@@ -252,10 +255,10 @@ function openNewScript(parent: string) {
 async function confirmNewScript() {
   let name = newScriptName.value.trim()
   if (!name) {
-    name = await uniqueName(newScriptParent.value, '新建脚本.sh', false)
+    name = await uniqueName(newScriptParent.value, t('scriptManager.newScriptPlaceholder'), false)
   } else {
     const exists = await checkNameConflict(newScriptParent.value, name, false)
-    if (exists) { newScriptError.value = '当前层级已存在同名文件'; return }
+    if (exists) { newScriptError.value = t('scriptManager.nameConflict'); return }
   }
   const path = newScriptParent.value ? newScriptParent.value + '/' + name : name
   try {
@@ -263,7 +266,7 @@ async function confirmNewScript() {
     showNewScript.value = false
     loadTree()
   } catch (err: any) {
-    newScriptError.value = (err && err.message) || '创建失败'
+    newScriptError.value = (err && err.message) || t('scriptManager.createFailed')
   }
 }
 
@@ -418,7 +421,7 @@ async function doMove(path: string, destFolder: string, isDir: boolean) {
   try {
     await MoveScriptItem(path, destFolder || '.')
     await loadTree()
-  } catch (err: any) { message.error('移动失败: ' + ((err && err.message) || '未知错误')) }
+  } catch (err: any) { message.error(t('scriptManager.moveFailed', { err: (err && err.message) || t('scriptManager.unknownError') })) }
 }
 
 async function handleRenameAndMove() {
@@ -428,12 +431,12 @@ async function handleRenameAndMove() {
   const renamePath = pendingDragPath.value
 
   const stillConflict = await checkNameConflict(dest === '.' ? '' : dest, newName, pendingIsDir.value, renamePath)
-  if (stillConflict) { message.warning('目标位置仍有同名项'); return }
+  if (stillConflict) { message.warning(t('scriptManager.stillConflict')); return }
 
   try {
     await MoveScriptItem(renamePath, dest || '.')
     await loadTree()
-  } catch (err: any) { message.error('移动失败: ' + ((err && err.message) || '未知错误')) }
+  } catch (err: any) { message.error(t('scriptManager.moveFailed', { err: (err && err.message) || t('scriptManager.unknownError') })) }
 
   showConflict.value = false
   pendingDragPath.value = null; pendingDestFolder.value = ''
@@ -462,7 +465,7 @@ onMounted(loadTree)
 
 <template>
   <div class="script-manager">
-    <n-input v-model:value="searchQuery" size="tiny" placeholder="搜索文件..." clearable class="script-search-input">
+    <n-input v-model:value="searchQuery" size="tiny" :placeholder="t('scriptManager.searchPlaceholder')" clearable class="script-search-input">
       <template #prefix><n-icon :size="14" :component="SearchOutline" /></template>
     </n-input>
     <div
@@ -474,7 +477,7 @@ onMounted(loadTree)
       @contextmenu="(e: MouseEvent) => openRootContextMenu(e)"
     >
       <div v-if="filteredList.length === 0" class="script-empty">
-        <n-empty description="无文件" size="small" />
+        <n-empty :description="t('scriptManager.noFiles')" size="small" />
       </div>
 
       <div
@@ -511,37 +514,37 @@ onMounted(loadTree)
 
     <n-dropdown :show="ctxShow" :options="ctxOptions" :x="ctxX" :y="ctxY" placement="bottom-start" @select="handleCtxSelect" @clickoutside="ctxShow = false" />
 
-    <n-modal v-model:show="showConflict" title="名称冲突" preset="dialog" :show-icon="false" :mask-closable="false" style="width: 400px">
+    <n-modal v-model:show="showConflict" :title="t('scriptManager.conflictTitle')" preset="dialog" :show-icon="false" :mask-closable="false" style="width: 400px">
       <n-form label-placement="left">
-        <n-form-item label="目标文件夹已有同名项，请改名">
-          <n-input v-model:value="conflictName" placeholder="输入新名称" @keyup.enter="handleRenameAndMove" />
+        <n-form-item :label="t('scriptManager.conflictLabel')">
+          <n-input v-model:value="conflictName" :placeholder="t('scriptManager.newNamePlaceholder')" @keyup.enter="handleRenameAndMove" />
         </n-form-item>
       </n-form>
       <template #action>
-        <n-button @click="cancelMove">取消</n-button>
-        <n-button type="primary" :disabled="!canMove" @click="handleRenameAndMove">移动</n-button>
+        <n-button @click="cancelMove">{{ t('common.cancel') }}</n-button>
+        <n-button type="primary" :disabled="!canMove" @click="handleRenameAndMove">{{ t('scriptManager.move') }}</n-button>
       </template>
     </n-modal>
-    <n-modal v-model:show="showDeleteConfirm" title="确认删除" preset="dialog" :show-icon="false" style="width: 420px" :closable="false" :mask-closable="false">
+    <n-modal v-model:show="showDeleteConfirm" :title="t('scriptManager.deleteConfirmTitle')" preset="dialog" :show-icon="false" style="width: 420px" :closable="false" :mask-closable="false">
       <div style="font-size:14px">
-        <p>确定要删除「<b>{{ deleteTarget?.name }}</b>」吗？</p>
-        <p v-if="deleteTarget?.isDir" style="margin-top:8px;color:#e45858;font-size:12px">该文件夹下的所有内容将被永久删除。</p>
+        <p>{{ t('scriptManager.deleteConfirmMsg', { name: deleteTarget?.name }) }}</p>
+        <p v-if="deleteTarget?.isDir" style="margin-top:8px;color:#e45858;font-size:12px">{{ t('scriptManager.deleteFolderWarn') }}</p>
       </div>
       <template #action>
-        <n-button @click="cancelDelete">取消</n-button>
-        <n-button type="error" @click="executeDelete">确认删除</n-button>
+        <n-button @click="cancelDelete">{{ t('common.cancel') }}</n-button>
+        <n-button type="error" @click="executeDelete">{{ t('scriptManager.confirmDelete') }}</n-button>
       </template>
     </n-modal>
-    <n-modal v-model:show="showNewScript" title="新建脚本" preset="dialog" :show-icon="false" style="width: 380px" :closable="false" :mask-closable="false">
+    <n-modal v-model:show="showNewScript" :title="t('scriptManager.newScriptTitle')" preset="dialog" :show-icon="false" style="width: 380px" :closable="false" :mask-closable="false">
       <div class="form-group">
-        <label class="form-label">名称</label>
-        <n-input v-model:value="newScriptName" class="new-script-input" placeholder="新建脚本.sh" @keyup.enter="confirmNewScript" @keyup.esc="cancelNewScript" />
+        <label class="form-label">{{ t('scriptManager.nameLabel') }}</label>
+        <n-input v-model:value="newScriptName" class="new-script-input" :placeholder="t('scriptManager.newScriptPlaceholder')" @keyup.enter="confirmNewScript" @keyup.esc="cancelNewScript" />
         <p v-if="newScriptError" style="margin-top: 8px; color: #e45858; font-size: 12px;">{{ newScriptError }}</p>
-        <p style="margin-top: 8px; color: var(--icon-color); font-size: 12px;">留空使用默认名；可带或不带扩展名，按输入原样创建。</p>
+        <p style="margin-top: 8px; color: var(--icon-color); font-size: 12px;">{{ t('scriptManager.newScriptHint') }}</p>
       </div>
       <template #action>
-        <n-button @click="cancelNewScript">取消</n-button>
-        <n-button type="primary" @click="confirmNewScript">确定</n-button>
+        <n-button @click="cancelNewScript">{{ t('common.cancel') }}</n-button>
+        <n-button type="primary" @click="confirmNewScript">{{ t('common.confirm') }}</n-button>
       </template>
     </n-modal>
   </div>

@@ -3,6 +3,7 @@ import { ref, watch, onMounted, defineComponent, h, computed } from 'vue'
 import { NModal, NButton, NInput, NCheckbox, NIcon, NEmpty, NScrollbar } from 'naive-ui'
 import { ChevronForwardOutline } from '@vicons/ionicons5'
 import { GetExportTree, ExportSessions } from '../../bindings/changeme/internal/services/sessionfileservice.js'
+import { useI18n } from 'vue-i18n'
 
 interface TreeNode {
   name: string; path: string; isDir: boolean
@@ -16,6 +17,7 @@ const tree = ref<TreeNode[]>([])
 const password = ref('')
 const pwError = ref('')
 const exporting = ref(false)
+const { t } = useI18n()
 
 // 口令规则:必填、8~64 位、大写/小写/数字/符号至少三类
 function passwordCategories(pw: string): number {
@@ -33,16 +35,16 @@ const pwStrength = computed(() => {
   if (!password.value) return ''
   const n = [...password.value].length
   const cats = passwordCategories(password.value)
-  if (n < 8 || n > 64) return '长度须为 8~64 个字符'
-  if (cats < 3) return '需包含大写/小写/数字/符号中至少三类'
+  if (n < 8 || n > 64) return t('exportDialog.pwLengthError')
+  if (cats < 3) return t('exportDialog.pwCategoryError')
   return 'ok'
 })
 
 function validatePassword(pw: string): string | null {
-  if (!pw) return '导出口令不能为空'
+  if (!pw) return t('exportDialog.pwEmptyError')
   const n = [...pw].length
-  if (n < 8 || n > 64) return '口令长度须为 8~64 个字符'
-  if (passwordCategories(pw) < 3) return '口令需包含大写字母、小写字母、数字、符号中的至少三类'
+  if (n < 8 || n > 64) return t('exportDialog.pwLengthError')
+  if (passwordCategories(pw) < 3) return t('exportDialog.pwFullCategoryError')
   return null
 }
 
@@ -161,7 +163,7 @@ const TreeRow = defineComponent({
 async function doExport() {
   pwError.value = ''
   const paths = getCheckedPaths()
-  if (paths.length === 0) { pwError.value = '请勾选要导出的内容（单击左侧文件或勾选框）'; return }
+  if (paths.length === 0) { pwError.value = t('exportDialog.noSelectionError'); return }
   const err = validatePassword(password.value)
   if (err) { pwError.value = err; return }
   exporting.value = true
@@ -169,7 +171,7 @@ async function doExport() {
     await ExportSessions(paths, password.value, '', [])
     emit('update:show', false)
     emit('done')
-  } catch (e: any) { pwError.value = e.message || '导出失败' }
+  } catch (e: any) { pwError.value = e.message || t('exportDialog.exportFailed') }
   exporting.value = false
 }
 
@@ -178,31 +180,31 @@ watch(() => props.show, (val) => { if (val) { loadTree() } })
 </script>
 
 <template>
-  <n-modal :show="props.show" title="导出会话" preset="dialog" :show-icon="false" :closable="false" :mask-closable="false" style="width: 720px; max-width: 94vw">
+  <n-modal :show="props.show" :title="t('exportDialog.title')" preset="dialog" :show-icon="false" :closable="false" :mask-closable="false" style="width: 720px; max-width: 94vw">
     <div class="export-body">
       <div class="export-left">
-        <div class="export-left-title">选择要导出的内容（单击勾选，密钥将从密钥库导出）</div>
+        <div class="export-left-title">{{ t('exportDialog.leftTitle') }}</div>
         <n-scrollbar style="height: 320px" class="export-scroller">
           <div class="tree">
-            <div v-if="tree.length===0" style="padding:20px;text-align:center"><n-empty description="无会话" size="small" /></div>
+            <div v-if="tree.length===0" style="padding:20px;text-align:center"><n-empty :description="t('exportDialog.noSessions')" size="small" /></div>
             <TreeRow v-for="n in tree" :key="n.path" :node="n" :depth="0" />
           </div>
         </n-scrollbar>
       </div>
       <div class="export-right">
         <div class="form-group">
-          <label class="form-label">导出密码 <span style="color:#e88070">*</span>（8~64 字符，需包含大写/小写/数字/符号中至少三类）</label>
-          <n-input v-model:value="password" type="password" show-password-on="click" placeholder="设置导出口令（必填）" />
+          <label class="form-label">{{ t('exportDialog.passwordLabel') }} <span style="color:#e88070">*</span>{{ t('exportDialog.passwordHint') }}</label>
+          <n-input v-model:value="password" type="password" show-password-on="click" :placeholder="t('exportDialog.passwordPlaceholder')" />
         </div>
         <div class="right-hint">
           <span v-if="pwError" style="color:#e45858;font-size:12px">{{ pwError }}</span>
           <span v-else-if="pwStrength && pwStrength !== 'ok'" style="color:#dca54c;font-size:12px">{{ pwStrength }}</span>
-          <span v-else-if="pwStrength === 'ok'" style="color:#4ec9b0;font-size:12px">口令强度符合要求</span>
-          <span v-else style="color:var(--icon-color,#888);font-size:12px">口令需 8~64 位，包含大写/小写/数字/符号中至少三类</span>
+          <span v-else-if="pwStrength === 'ok'" style="color:#4ec9b0;font-size:12px">{{ t('exportDialog.strengthOk') }}</span>
+          <span v-else style="color:var(--icon-color,#888);font-size:12px">{{ t('exportDialog.strengthHint') }}</span>
         </div>
         <div class="right-actions">
-          <n-button @click="emit('update:show',false)">取消</n-button>
-          <n-button type="primary" :loading="exporting" @click="doExport">确定导出</n-button>
+          <n-button @click="emit('update:show',false)">{{ t('common.cancel') }}</n-button>
+          <n-button type="primary" :loading="exporting" @click="doExport">{{ t('exportDialog.confirmExport') }}</n-button>
         </div>
       </div>
     </div>

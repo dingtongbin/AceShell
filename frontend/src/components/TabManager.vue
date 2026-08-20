@@ -12,6 +12,9 @@ import SplitPane from './SplitPane.vue'
 import RemoteDesktopTab from './RemoteDesktopTab.vue'
 import type { LayoutNode, SplitNode } from './tabTypes'
 import type { Pane, PaneCtx, TabPaneApi, SplitDir, Tab } from './tabTypes'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 const props = defineProps<{ showToolbar: boolean; tabOrientation: string; verticalTabWidth: number }>()
 
@@ -87,7 +90,7 @@ async function openRdp(meta: { sessionPath: string; name: string; host: string; 
   try {
     conn = JSON.parse(await GetRdpConnection(meta.sessionPath))
   } catch (e: any) {
-    message.error('获取 RDP 连接信息失败: ' + (e?.message || e))
+    message.error(t('tabManager.getRdpConnFailed', { err: e?.message || e }))
     return
   }
   focusApi()?.openComponentTab({

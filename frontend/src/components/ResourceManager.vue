@@ -7,6 +7,9 @@ import ScriptManager from './ScriptManager.vue'
 import AutoLogManager from './AutoLogManager.vue'
 import SerialManager from './SerialManager.vue'
 import { GetConfig, SetSectionsState } from '../../bindings/changeme/internal/services/configservice.js'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 const props = defineProps<{
   activeSessionPath: string | null
@@ -38,7 +41,7 @@ const activeTab = ref<'session' | 'script' | 'log'>('session')
 interface Section { key: string; label: string; icon: any; expanded: boolean; size: number }
 
 const sections = ref<Section[]>([
-  { key: 'serial', label: '串口', icon: PulseOutline, expanded: false, size: 0 },
+  { key: 'serial', label: t('common.serial'), icon: PulseOutline, expanded: false, size: 0 },
 ])
 
 async function loadState() {
@@ -67,9 +70,9 @@ onMounted(loadState)
 <template>
   <div class="resource-manager">
     <div class="resource-header">
-      <span class="resource-title">资源管理器</span>
+      <span class="resource-title">{{ t('resourceManager.title') }}</span>
       <div class="resource-close">
-        <n-button text size="tiny" title="隐藏面板" @click="emit('close')">
+        <n-button text size="tiny" :title="t('resourceManager.hidePanel')" @click="emit('close')">
           <n-icon :size="14" :component="CloseOutline" />
         </n-button>
       </div>
@@ -77,15 +80,15 @@ onMounted(loadState)
     <div class="resource-tabs">
       <div class="rm-tab" :class="{ active: activeTab === 'session' }" @click="activeTab = 'session'">
         <n-icon :size="12" :component="TerminalOutline" />
-        <span>会话</span>
+        <span>{{ t('resourceManager.session') }}</span>
       </div>
       <div class="rm-tab" :class="{ active: activeTab === 'script' }" @click="activeTab = 'script'">
         <n-icon :size="12" :component="DocumentTextOutline" />
-        <span>脚本</span>
+        <span>{{ t('resourceManager.script') }}</span>
       </div>
       <div class="rm-tab" :class="{ active: activeTab === 'log' }" @click="activeTab = 'log'">
         <n-icon :size="12" :component="DocumentTextOutline" />
-        <span>日志</span>
+        <span>{{ t('resourceManager.log') }}</span>
       </div>
     </div>
     <div class="resource-body">
@@ -99,7 +102,7 @@ onMounted(loadState)
           <div class="section-header" @click="toggleSection(sections[0])">
             <n-icon :size="12" :component="ChevronForwardOutline" class="section-arrow" :class="{ rotated: sections[0].expanded }" />
             <n-icon :size="14" :component="sections[0].icon" class="section-icon" />
-            <span class="section-label">串口</span>
+            <span class="section-label">{{ t('common.serial') }}</span>
           </div>
           <div v-show="sections[0].expanded" class="section-content">
             <SerialManager @connect="(pn, br, db, sb, p) => emit('connect', pn, br, db, sb, p)" />

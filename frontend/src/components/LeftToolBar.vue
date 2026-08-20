@@ -6,6 +6,9 @@ import {
   HelpCircleOutline,
   SettingsOutline,
 } from '@vicons/ionicons5'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 defineProps<{
   showSession: boolean
@@ -28,7 +31,7 @@ const emit = defineEmits<{
             <n-icon :size="24" :component="showSession ? FolderOpenOutline : FolderOutline" />
           </div>
         </template>
-        资源管理器
+        {{ t('common.explorer') }}
       </n-tooltip>
     </div>
     <div class="ltb-bottom">
@@ -38,7 +41,7 @@ const emit = defineEmits<{
             <n-icon :size="24" :component="HelpCircleOutline" />
           </div>
         </template>
-        帮助
+        {{ t('common.help') }}
       </n-tooltip>
       <n-tooltip placement="right" trigger="hover" :delay="300">
         <template #trigger>
@@ -46,7 +49,7 @@ const emit = defineEmits<{
             <n-icon :size="24" :component="SettingsOutline" />
           </div>
         </template>
-        设置
+        {{ t('common.settings') }}
       </n-tooltip>
     </div>
   </div>
