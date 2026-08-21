@@ -75,11 +75,14 @@ jobs:
         shell: bash
         run: task build
 
-      - name: 打包 MSIX 验证
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          powershell -NoProfile -ExecutionPolicy Bypass -File build\windows\msix\build-msix.ps1 -Version 0.1.0
+        - name: 打包 MSIX 验证
+          if: runner.os == 'Windows'
+          shell: pwsh
+          run: |
+            $ver = (Select-String -Path internal/services/version.go -Pattern 'AppVersion = "([^"]+)"').Matches.Groups[1].Value
+            if (-not $ver) { $ver = '0.0.0' }
+            Write-Host "MSIX verify version: $ver"
+            powershell -NoProfile -ExecutionPolicy Bypass -File build\windows\msix\build-msix.ps1 -Version $ver
 
       - name: Stage MSIX (模拟 release)
         if: runner.os == 'Windows'
