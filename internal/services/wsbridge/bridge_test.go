@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -78,6 +79,54 @@ func TestBridge_EchoRoundTrip(t *testing.T) {
 	}
 	if string(data) != string(payload) {
 		t.Fatalf("echo mismatch: got %q want %q", data, payload)
+	}
+}
+
+func TestOriginAllowed(t *testing.T) {
+	allowed := []string{
+		"",                        // 非浏览器本机客户端
+		"null",                    // 自定义 scheme webview (macOS/Linux/iOS)
+		"http://wails.localhost",  // Windows webview
+		"https://wails.localhost", // Android webview
+		"wails://wails.localhost",
+		"http://localhost:9245", // dev server
+		"http://127.0.0.1:34115",
+		"http://[::1]:34115",
+	}
+	for _, o := range allowed {
+		if !originAllowed(o) {
+			t.Errorf("expected origin %q to be allowed", o)
+		}
+	}
+	denied := []string{
+		"http://evil.example.com",
+		"https://attacker.com",
+		"http://wails.localhost.evil.com", // 后缀伪装
+		"http://evil.localhost",
+		"file:///etc/passwd",
+		"http://wails.localhost:1@evil.com",
+	}
+	for _, o := range denied {
+		if originAllowed(o) {
+			t.Errorf("expected origin %q to be denied", o)
+		}
+	}
+}
+
+func TestBridge_RejectsBadOrigin(t *testing.T) {
+	echoAddr := startEchoServer(t)
+	baseURL, _, err := Start(func(token string) (string, bool) { return echoAddr, token == "ok" })
+	if err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	wsURL := strings.Replace(baseURL, "http://", "ws://", 1) + "/bridge?token=ok&target=" + echoAddr
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	opts := &websocket.DialOptions{HTTPHeader: http.Header{"Origin": []string{"http://evil.example.com"}}}
+	_, _, err = websocket.Dial(ctx, wsURL, opts)
+	if err == nil {
+		t.Fatal("expected handshake to be rejected for bad origin")
 	}
 }
 

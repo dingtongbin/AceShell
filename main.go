@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"os/signal"
 	"strings"
 	"syscall"
@@ -83,14 +82,8 @@ func setupCleanup(onExit func()) {
 	}()
 }
 
-// killChildProcesses 杀死所有 node 子进程（开发服务器）。
-func killChildProcesses() {
-	if _, err := exec.LookPath("taskkill"); err == nil {
-		cmd := exec.Command("taskkill", "/f", "/im", "node.exe")
-		appservices.HideWindow(cmd)
-		cmd.Run()
-	}
-}
+// killChildProcesses 的实现按构建模式拆分:
+// 开发模式见 main_cleanup_dev.go,生产模式见 main_cleanup_prod.go。
 
 // initServices 创建并初始化所有后端服务实例。
 func initServices() *services {

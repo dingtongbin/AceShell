@@ -206,8 +206,8 @@ func TestCredentialKey_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read master key file failed: %v", err)
 	}
-	if !strings.HasPrefix(string(raw), masterKeyPrefix) {
-		t.Fatalf("master key file should start with %s", masterKeyPrefix)
+	if !strings.HasPrefix(string(raw), masterKeyV1Prefix) && !strings.HasPrefix(string(raw), masterKeyV2Prefix) {
+		t.Fatalf("master key file should start with %s or %s", masterKeyV1Prefix, masterKeyV2Prefix)
 	}
 
 	// 空值原样
