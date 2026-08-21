@@ -62,7 +62,7 @@ export function normalizeTermConfig(raw: any): TermConfig {
     copyOnSelect: raw?.copyOnSelect ?? d.copyOnSelect,
     cursorBlink: raw?.cursorBlink ?? d.cursorBlink,
     cursorStyle: ['bar', 'block', 'underline'].includes(raw?.cursorStyle) ? raw.cursorStyle : d.cursorStyle,
-    scrollback: raw?.scrollback ?? d.scrollback,
+    scrollback: Math.min(Math.max(raw?.scrollback ?? 1000, 0), 100000),
   }
 }
 
@@ -219,6 +219,7 @@ const cleanupFns: (() => void)[] = []
 if (cfg.copyOnSelect) {
   const onDocumentMouseUp = (e: MouseEvent) => {
     if (e.button !== 0) return
+    if (!termEl?.contains(e.target as Node)) return
     let sel = ''
     try {
       sel = terminal.getSelection()
@@ -268,13 +269,13 @@ const doPaste = async () => {
     handlers.onClipboardFeedback?.('paste-fail', '当前终端未连接,无法粘贴')
     return
   }
-  const lines = text.split(/\r?\n/)
-  if (lines.length > 1) {
+  const stripped = text.replace(/(\r?\n)+$/, '')
+  if (stripped.includes('\n')) {
     handlers.onMultiLinePaste(text)
   } else {
     handlers.onPaste(text)
+    handlers.onClipboardFeedback?.('paste-ok', '已粘贴到终端')
   }
-  handlers.onClipboardFeedback?.('paste-ok', '已粘贴到终端')
 }
 
 const onContextMenu = (e: Event) => {

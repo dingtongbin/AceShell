@@ -37,6 +37,7 @@ const lineNumRef = ref<HTMLElement | null>(null)
 const lineNumbers = ref('1')
 let lastLineCount = 1
 let autoSaveTimer: ReturnType<typeof setTimeout> | null = null
+let saveInFlight: Promise<boolean> | null = null
 
 const AUTO_SAVE_DELAY = 5000
 
@@ -125,17 +126,23 @@ function onTab(e: KeyboardEvent) {
 }
 
 async function doSave(showTip: boolean): Promise<boolean> {
-  try {
-    await WriteFile(props.filePath, content.value)
-    dirty.value = false
-    saved.value = true
-    props.onDirtyChange?.(false)
-    if (showTip) message.success(t('fileEditor.saved'))
-    return true
-  } catch (err: any) {
-    if (showTip) message.error(t('fileEditor.saveFailed', { err: (err && err.message) || t('fileEditor.unknownError') }))
-    return false
-  }
+  if (saveInFlight) return saveInFlight
+  saveInFlight = (async () => {
+    try {
+      await WriteFile(props.filePath, content.value)
+      dirty.value = false
+      saved.value = true
+      props.onDirtyChange?.(false)
+      if (showTip) message.success(t('fileEditor.saved'))
+      return true
+    } catch (err: any) {
+      if (showTip) message.error(t('fileEditor.saveFailed', { err: (err && err.message) || t('fileEditor.unknownError') }))
+      return false
+    } finally {
+      saveInFlight = null
+    }
+  })()
+  return saveInFlight
 }
 
 async function save(): Promise<boolean> {
@@ -196,10 +203,13 @@ watch(() => props.active, (act) => {
   })
 })
 
-onUnmounted(() => {
+onUnmounted(async () => {
   if (autoSaveTimer) { clearTimeout(autoSaveTimer); autoSaveTimer = null }
   if (dirty.value && !saved.value) {
-    props.onDirtyChange?.(false)
+    if (saveInFlight) { await saveInFlight; return }
+    if (autoSave.value) {
+      try { await WriteFile(props.filePath, content.value) } catch (err: any) { message.error(t('fileEditor.saveFailed', { err: (err && err.message) || t('fileEditor.unknownError') })) }
+    }
   }
 })
 </script>

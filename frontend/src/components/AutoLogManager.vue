@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
-import { NIcon, NEmpty, NInput, NModal } from 'naive-ui'
+import { NIcon, NEmpty, NInput, NModal, useMessage } from 'naive-ui'
 import { CaretForwardOutline, DocumentOutline, TerminalOutline, RadioOutline, SearchOutline } from '@vicons/ionicons5'
-import { GetLogTree, GetLogContent, GetLogMeta } from '../../bindings/changeme/internal/services/logservice.js'
+import { GetLogTree, GetLogTail, GetLogContent, GetLogMeta } from '../../bindings/changeme/internal/services/logservice.js'
 import { useI18n } from 'vue-i18n'
 
 const { t } = useI18n()
+const message = useMessage()
 
 interface LogNode {
   name: string
@@ -95,16 +96,21 @@ async function viewLog(node: LogNode) {
   if (node.isDir) return
   activeLogId.value = node.path
   try {
-    const [content, meta] = await Promise.all([
-      GetLogContent(node.path),
-      GetLogMeta(node.path)
-    ])
-    logContent.value = content || ''
-    logMeta.value = JSON.parse(meta)
+    const metaRaw = await GetLogMeta(node.path)
+    const meta = JSON.parse(metaRaw)
+    logMeta.value = meta
+    const totalLines: number = (meta && meta.totalLines) || 0
+    if (totalLines > 50000) {
+      logContent.value = (await GetLogTail(node.path, 50000)) || ''
+    } else {
+      logContent.value = (await GetLogContent(node.path)) || ''
+    }
     logLineCount = 0
     buildLogLineNumbers()
     showContent.value = true
-  } catch {}
+  } catch (err: any) {
+    message.error(t('autoLogManager.loadFailed', { err: (err && err.message) || t('autoLogManager.unknownError') }))
+  }
 }
 
 function getProtoIcon(p?: string) {

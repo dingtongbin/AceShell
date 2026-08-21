@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { ref, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { NSpin, NEmpty } from 'naive-ui'
 import { ensureRdpRuntime, rdpUI, connectRdp, formatIronError, type RdpConnectionInfo } from '../composables/useRdp'
 import type { UserInteraction } from '@devolutions/iron-remote-desktop'
@@ -108,6 +108,7 @@ onBeforeUnmount(() => {
   if (resizeTimer) clearTimeout(resizeTimer)
   resizeObserver?.disconnect()
   ui?.shutdown()
+  if (rdpUI.value === ui) rdpUI.value = null
   // 注意:不在此释放桥接 token。跨 pane 拖动标签页会销毁重建本组件,
   // 重建后需用同一 token 重连 WS;token 由 TabManager 在标签页真正关闭时释放。
 })
@@ -117,6 +118,15 @@ function retry() {
   running = false
   connect()
 }
+
+// 标签切到后台时暂停 RDP 解码/渲染/收帧,切回时恢复,避免多分屏 CPU/带宽浪费。
+watch(
+  () => props.active,
+  (val) => {
+    ui?.setVisibility(val)
+  },
+  { immediate: true },
+)
 </script>
 
 <template>
@@ -137,6 +147,7 @@ function retry() {
     <div v-else-if="status === 'ready' || status === 'connecting'" class="rdp-overlay">
       <n-spin size="small" />
       <span class="rdp-overlay-text">{{ status === 'ready' ? t('remoteDesktopTab.readyToConnect') : t('remoteDesktopTab.connecting') }}</span>
+      <button v-if="status === 'ready'" class="rdp-retry" @click="retry">{{ t('common.retry') }}</button>
     </div>
     <div v-else-if="status === 'error'" class="rdp-overlay">
       <n-empty :description="t('remoteDesktopTab.connectFailed')" size="small" />

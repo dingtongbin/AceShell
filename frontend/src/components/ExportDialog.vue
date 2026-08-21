@@ -176,7 +176,7 @@ async function doExport() {
 }
 
 onMounted(() => { loadTree() })
-watch(() => props.show, (val) => { if (val) { loadTree() } })
+watch(() => props.show, (val) => { if (val) { password.value = ''; pwError.value = ''; loadTree() } })
 </script>
 
 <template>

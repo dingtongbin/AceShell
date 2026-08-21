@@ -71,6 +71,11 @@ func (s *SFTPService) connect(sessionID string) (*sftp.Client, error) {
 	}
 
 	s.mu.Lock()
+	if existing, ok := s.clients[sessionID]; ok {
+		s.mu.Unlock()
+		client.Close()
+		return existing, nil
+	}
 	s.clients[sessionID] = client
 	s.mu.Unlock()
 
@@ -99,11 +104,11 @@ func (s *SFTPService) List(sessionID, remotePath string) string {
 	}
 	client, err := s.connect(sessionID)
 	if err != nil {
-		return fmt.Sprintf(`{"error":"%s"}`, err.Error())
+		return sftpErrorResult(err)
 	}
 	entries, err := client.ReadDir(remotePath)
 	if err != nil {
-		return fmt.Sprintf(`{"error":"%s"}`, err.Error())
+		return sftpErrorResult(err)
 	}
 	var files []SFTPFileInfo
 	for _, entry := range entries {
@@ -122,10 +127,13 @@ func (s *SFTPService) List(sessionID, remotePath string) string {
 func (s *SFTPService) listLocal(dir string) string {
 	if dir == "" || dir == "." { dir, _ = os.Getwd() }
 	entries, err := os.ReadDir(dir)
-	if err != nil { return fmt.Sprintf(`{"error":"%s"}`, err.Error()) }
+	if err != nil { return sftpErrorResult(err) }
 	var files []SFTPFileInfo
 	for _, entry := range entries {
-		info, _ := entry.Info()
+		info, ierr := entry.Info()
+		if ierr != nil {
+			continue
+		}
 		files = append(files, SFTPFileInfo{
 			Name: entry.Name(), Size: info.Size(), Mode: info.Mode().String(),
 			ModTime: info.ModTime().Format(time.RFC3339), IsDir: entry.IsDir(),
@@ -139,12 +147,12 @@ func (s *SFTPService) listLocal(dir string) string {
 func (s *SFTPService) Stat(sessionID, remotePath string) string {
 	client, err := s.connect(sessionID)
 	if err != nil {
-		return fmt.Sprintf(`{"error":"%s"}`, err.Error())
+		return sftpErrorResult(err)
 	}
 
 	info, err := client.Stat(remotePath)
 	if err != nil {
-		return fmt.Sprintf(`{"error":"%s"}`, err.Error())
+		return sftpErrorResult(err)
 	}
 
 	file := SFTPFileInfo{
@@ -231,29 +239,29 @@ func (s *SFTPService) Rename(sessionID, oldPath, newPath string) error {
 func (s *SFTPService) Upload(sessionID, localPath, remotePath string) string {
 	client, err := s.connect(sessionID)
 	if err != nil {
-		return fmt.Sprintf(`{"error":"%s"}`, err.Error())
+		return sftpErrorResult(err)
 	}
 
 	localFile, err := os.Open(localPath)
 	if err != nil {
-		return fmt.Sprintf(`{"error":"%s"}`, err.Error())
+		return sftpErrorResult(err)
 	}
 	defer localFile.Close()
 
 	stat, err := localFile.Stat()
 	if err != nil {
-		return fmt.Sprintf(`{"error":"%s"}`, err.Error())
+		return sftpErrorResult(err)
 	}
 
 	remoteFile, err := client.Create(remotePath)
 	if err != nil {
-		return fmt.Sprintf(`{"error":"%s"}`, err.Error())
+		return sftpErrorResult(err)
 	}
 	defer remoteFile.Close()
 
 	written, err := io.Copy(remoteFile, localFile)
 	if err != nil {
-		return fmt.Sprintf(`{"error":"%s"}`, err.Error())
+		return sftpErrorResult(err)
 	}
 
 	data, _ := json.Marshal(map[string]interface{}{
@@ -268,30 +276,30 @@ func (s *SFTPService) Upload(sessionID, localPath, remotePath string) string {
 func (s *SFTPService) Download(sessionID, remotePath, localPath string) string {
 	client, err := s.connect(sessionID)
 	if err != nil {
-		return fmt.Sprintf(`{"error":"%s"}`, err.Error())
+		return sftpErrorResult(err)
 	}
 
 	remoteFile, err := client.Open(remotePath)
 	if err != nil {
-		return fmt.Sprintf(`{"error":"%s"}`, err.Error())
+		return sftpErrorResult(err)
 	}
 	defer remoteFile.Close()
 
 	stat, err := remoteFile.Stat()
 	if err != nil {
-		return fmt.Sprintf(`{"error":"%s"}`, err.Error())
+		return sftpErrorResult(err)
 	}
 
 	os.MkdirAll(filepath.Dir(localPath), 0755)
 	localFile, err := os.Create(localPath)
 	if err != nil {
-		return fmt.Sprintf(`{"error":"%s"}`, err.Error())
+		return sftpErrorResult(err)
 	}
 	defer localFile.Close()
 
 	written, err := io.Copy(localFile, remoteFile)
 	if err != nil {
-		return fmt.Sprintf(`{"error":"%s"}`, err.Error())
+		return sftpErrorResult(err)
 	}
 
 	data, _ := json.Marshal(map[string]interface{}{
@@ -306,12 +314,12 @@ func (s *SFTPService) Download(sessionID, remotePath, localPath string) string {
 func (s *SFTPService) Getwd(sessionID string) string {
 	client, err := s.connect(sessionID)
 	if err != nil {
-		return fmt.Sprintf(`{"error":"%s"}`, err.Error())
+		return sftpErrorResult(err)
 	}
 
 	dir, err := client.Getwd()
 	if err != nil {
-		return fmt.Sprintf(`{"error":"%s"}`, err.Error())
+		return sftpErrorResult(err)
 	}
 
 	return fmt.Sprintf(`{"path":"%s"}`, dir)
@@ -321,22 +329,32 @@ func (s *SFTPService) Getwd(sessionID string) string {
 func (s *SFTPService) ReadFile(sessionID, remotePath string) string {
 	client, err := s.connect(sessionID)
 	if err != nil {
-		return fmt.Sprintf(`{"error":"%s"}`, err.Error())
+		return sftpErrorResult(err)
 	}
 
 	f, err := client.Open(remotePath)
 	if err != nil {
-		return fmt.Sprintf(`{"error":"%s"}`, err.Error())
+		return sftpErrorResult(err)
 	}
 	defer f.Close()
 
-	data, err := io.ReadAll(f)
+	stat, err := f.Stat()
 	if err != nil {
-		return fmt.Sprintf(`{"error":"%s"}`, err.Error())
+		return sftpErrorResult(err)
+	}
+	if stat.Size() > maxEditableSize {
+		return sftpErrorResult(fmt.Errorf("文件过大(超过 %d KB),无法在编辑器中打开", maxEditableSize/1024))
+	}
+	data, err := io.ReadAll(io.LimitReader(f, maxEditableSize+1))
+	if err != nil {
+		return sftpErrorResult(err)
+	}
+	if int64(len(data)) > maxEditableSize {
+		return sftpErrorResult(fmt.Errorf("文件过大,无法在编辑器中打开"))
 	}
 
 	if err := validateEditableText(data); err != nil {
-		return fmt.Sprintf(`{"error":"%s"}`, err.Error())
+		return sftpErrorResult(err)
 	}
 
 	return string(data)
@@ -379,6 +397,12 @@ func (s *SFTPService) isSSHConnected(sessionID string) bool {
 // CheckSSH 检查指定会话的 SSH 连接是否可用。
 func (s *SFTPService) CheckSSH(sessionID string) bool {
 	return s.isSSHConnected(sessionID)
+}
+
+// sftpErrorResult 安全地构造错误 JSON 字符串(对错误消息做 JSON 转义,避免引号/控制字符破坏前端解析)。
+func sftpErrorResult(err error) string {
+	b, _ := json.Marshal(map[string]string{"error": err.Error()})
+	return string(b)
 }
 
 func (s *SFTPService) emitProgress(id, name, direction string, size, transferred int64, status, errMsg string) {
@@ -468,26 +492,26 @@ func (s *SFTPService) UploadProgress(sessionID, localPath, remotePath, transferI
 	client, err := s.connect(sessionID)
 	if err != nil {
 		s.emitProgress(transferID, filepath.Base(localPath), "upload", 0, 0, "error", err.Error())
-		return fmt.Sprintf(`{"error":"%s"}`, err.Error())
+		return sftpErrorResult(err)
 	}
 
 	localFile, err := os.Open(localPath)
 	if err != nil {
 		s.emitProgress(transferID, filepath.Base(localPath), "upload", 0, 0, "error", err.Error())
-		return fmt.Sprintf(`{"error":"%s"}`, err.Error())
+		return sftpErrorResult(err)
 	}
 	defer localFile.Close()
 
 	stat, err := localFile.Stat()
 	if err != nil {
 		s.emitProgress(transferID, filepath.Base(localPath), "upload", 0, 0, "error", err.Error())
-		return fmt.Sprintf(`{"error":"%s"}`, err.Error())
+		return sftpErrorResult(err)
 	}
 
 	remoteFile, err := client.Create(remotePath)
 	if err != nil {
 		s.emitProgress(transferID, filepath.Base(localPath), "upload", 0, 0, "error", err.Error())
-		return fmt.Sprintf(`{"error":"%s"}`, err.Error())
+		return sftpErrorResult(err)
 	}
 	defer remoteFile.Close()
 
@@ -518,7 +542,7 @@ func (s *SFTPService) UploadProgress(sessionID, localPath, remotePath, transferI
 	case err := <-errCh:
 		if err != nil {
 			s.emitProgress(transferID, filepath.Base(localPath), "upload", stat.Size(), pr.Progress(), "error", err.Error())
-			return fmt.Sprintf(`{"error":"%s"}`, err.Error())
+			return sftpErrorResult(err)
 		}
 	}
 
@@ -551,27 +575,27 @@ func (s *SFTPService) DownloadProgress(sessionID, remotePath, localPath, transfe
 	client, err := s.connect(sessionID)
 	if err != nil {
 		s.emitProgress(transferID, filepath.Base(remotePath), "download", 0, 0, "error", err.Error())
-		return fmt.Sprintf(`{"error":"%s"}`, err.Error())
+		return sftpErrorResult(err)
 	}
 
 	remoteFile, err := client.Open(remotePath)
 	if err != nil {
 		s.emitProgress(transferID, filepath.Base(remotePath), "download", 0, 0, "error", err.Error())
-		return fmt.Sprintf(`{"error":"%s"}`, err.Error())
+		return sftpErrorResult(err)
 	}
 	defer remoteFile.Close()
 
 	stat, err := remoteFile.Stat()
 	if err != nil {
 		s.emitProgress(transferID, filepath.Base(remotePath), "download", 0, 0, "error", err.Error())
-		return fmt.Sprintf(`{"error":"%s"}`, err.Error())
+		return sftpErrorResult(err)
 	}
 
 	os.MkdirAll(filepath.Dir(localPath), 0755)
 	localFile, err := os.Create(localPath)
 	if err != nil {
 		s.emitProgress(transferID, filepath.Base(remotePath), "download", 0, 0, "error", err.Error())
-		return fmt.Sprintf(`{"error":"%s"}`, err.Error())
+		return sftpErrorResult(err)
 	}
 	defer localFile.Close()
 
@@ -602,7 +626,7 @@ func (s *SFTPService) DownloadProgress(sessionID, remotePath, localPath, transfe
 	case err := <-errCh:
 		if err != nil {
 			s.emitProgress(transferID, filepath.Base(remotePath), "download", stat.Size(), pw.Progress(), "error", err.Error())
-			return fmt.Sprintf(`{"error":"%s"}`, err.Error())
+			return sftpErrorResult(err)
 		}
 	}
 
@@ -619,6 +643,9 @@ func (s *SFTPService) DownloadProgress(sessionID, remotePath, localPath, transfe
 func (s *SFTPService) CancelTransfer(transferID string) error {
 	s.cancelMu.Lock()
 	ch, ok := s.cancels[transferID]
+	if ok {
+		delete(s.cancels, transferID)
+	}
 	s.cancelMu.Unlock()
 	if !ok {
 		return fmt.Errorf("传输任务未找到: %s", transferID)

@@ -340,6 +340,7 @@ onMounted(async () => {
         if (tab?.terminal) {
           tab.terminal.write(info.data)
           tab.logBuffer += info.data
+          if (tab.logBuffer.length > 512 * 1024) tab.logBuffer = tab.logBuffer.slice(-256 * 1024)
           return
         }
       }
@@ -362,8 +363,6 @@ onMounted(async () => {
       }
     } catch {}
   })
-
-  nextTick(() => {})
 })
 
 onBeforeUnmount(() => {
@@ -372,6 +371,7 @@ onBeforeUnmount(() => {
   offStatus?.()
   for (const p of panes.value) {
     for (const t of p.tabs) {
+      t.terminalCleanup?.()
       t.terminal?.dispose()
     }
   }

@@ -111,7 +111,7 @@ func encodeFakeRequest(destination, token string, x224 []byte) []byte {
 
 func TestRdcleanpathBridgeE2E(t *testing.T) {
 	addr, certDER := startFakeRDPServer(t)
-	baseURL, err := Start(func(token string) bool { return token == "my-token" })
+	baseURL, _, err := Start(func(token string) (string, bool) { return addr, token == "my-token" })
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
@@ -160,7 +160,7 @@ func TestRdcleanpathBridgeE2E(t *testing.T) {
 
 func TestRdcleanpathBridgeBadToken(t *testing.T) {
 	addr, _ := startFakeRDPServer(t)
-	baseURL, err := Start(func(token string) bool { return token == "good" })
+	baseURL, _, err := Start(func(token string) (string, bool) { return addr, token == "good" })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +191,7 @@ func TestRdcleanpathBridgeServerDown(t *testing.T) {
 	closedAddr := ln.Addr().String()
 	_ = ln.Close()
 
-	baseURL, err := Start(func(token string) bool { return token == "good" })
+	baseURL, _, err := Start(func(token string) (string, bool) { return closedAddr, token == "good" })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,7 +238,7 @@ func TestRdcleanpathBridgeNoTLS(t *testing.T) {
 	}()
 	t.Cleanup(func() { _ = ln.Close() })
 
-	baseURL, err := Start(func(token string) bool { return token == "good" })
+	baseURL, _, err := Start(func(token string) (string, bool) { return ln.Addr().String(), token == "good" })
 	if err != nil {
 		t.Fatal(err)
 	}

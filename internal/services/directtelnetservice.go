@@ -19,6 +19,7 @@ const (
 	dont = 0xFE
 	sb   = 0xFA
 	se   = 0xF0
+	nop  = 0xF1
 )
 
 const (
@@ -180,6 +181,7 @@ type TelnetSession struct {
 	password   string
 	loginState int
 	tail       string
+	closed     bool
 }
 
 // DirectTelnetService 提供 Telnet 会话的直连管理(连接/收发/断开)。
@@ -220,7 +222,7 @@ func (d *DirectTelnetService) connect(id, host string, port int, username, passw
 
 	conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, fmt.Sprintf("%d", port)), 10*time.Second)
 	if err != nil {
-		d.emit("session-status-changed", fmt.Sprintf(`{"id":"%s","status":"error","message":"%s"}`, id, err.Error()))
+		d.emit("session-status-changed", fmt.Sprintf(`{"id":"%s","status":"error","message":"%s"}`, id, escapeJSON(err.Error())))
 		return err
 	}
 
@@ -234,6 +236,7 @@ func (d *DirectTelnetService) connect(id, host string, port int, username, passw
 	conn.Write([]byte{iac, doo, optSuppressGA})
 
 	go d.readLoop(sess)
+	go d.keepaliveLoop(sess)
 	return nil
 }
 
@@ -251,16 +254,11 @@ func (d *DirectTelnetService) readLoop(sess *TelnetSession) {
 			}
 		}
 		if err != nil {
-			d.mu.Lock()
-			delete(d.sess, sess.ID)
-			d.mu.Unlock()
-			sess.conn.Close()
 			if MainLogService != nil { MainLogService.EndSession(sess.ID) }
 			if err != io.EOF {
-				d.emit("session-status-changed", fmt.Sprintf(`{"id":"%s","status":"error","message":"%s"}`, sess.ID, err.Error()))
-			} else {
-				d.emit("session-status-changed", fmt.Sprintf(`{"id":"%s","status":"disconnected"}`, sess.ID))
+				d.emit("session-status-changed", fmt.Sprintf(`{"id":"%s","status":"error","message":"%s"}`, sess.ID, escapeJSON(err.Error())))
 			}
+			d.closeSession(sess)
 			return
 		}
 	}
@@ -330,6 +328,9 @@ func (d *DirectTelnetService) Send(id, data string) error {
 	}
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
+	if sess.closed {
+		return fmt.Errorf("会话已关闭")
+	}
 	_, err := sess.conn.Write([]byte(data))
 	return err
 }
@@ -338,14 +339,45 @@ func (d *DirectTelnetService) Send(id, data string) error {
 func (d *DirectTelnetService) Disconnect(id string) error {
 	d.mu.Lock()
 	sess, ok := d.sess[id]
+	d.mu.Unlock()
 	if !ok {
-		d.mu.Unlock()
 		return fmt.Errorf("会话未找到")
 	}
-	delete(d.sess, id)
-	d.mu.Unlock()
-
-	sess.conn.Close()
-	d.emit("session-status-changed", fmt.Sprintf(`{"id":"%s","status":"disconnected"}`, id))
+	d.closeSession(sess)
 	return nil
+}
+
+// closeSession 幂等地关闭 Telnet 会话:只关闭一次连接、删除会话并发送 disconnected 事件。
+func (d *DirectTelnetService) closeSession(sess *TelnetSession) {
+	sess.mu.Lock()
+	if sess.closed {
+		sess.mu.Unlock()
+		return
+	}
+	sess.closed = true
+	conn := sess.conn
+	sess.mu.Unlock()
+	if conn != nil {
+		conn.Close()
+	}
+	d.mu.Lock()
+	delete(d.sess, sess.ID)
+	d.mu.Unlock()
+	d.emit("session-status-changed", fmt.Sprintf(`{"id":"%s","status":"disconnected"}`, sess.ID))
+}
+
+// keepaliveLoop 周期性发送 Telnet NOP 保活探测,检测对端存活;会话关闭后退出。
+func (d *DirectTelnetService) keepaliveLoop(sess *TelnetSession) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for range ticker.C {
+		sess.mu.Lock()
+		if sess.closed || sess.conn == nil {
+			sess.mu.Unlock()
+			return
+		}
+		conn := sess.conn
+		sess.mu.Unlock()
+		conn.Write([]byte{iac, nop})
+	}
 }

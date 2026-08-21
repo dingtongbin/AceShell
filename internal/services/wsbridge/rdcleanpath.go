@@ -20,14 +20,14 @@ import (
 //	  server_addr         [9] EXPLICIT UTF8String OPTIONAL,
 //	}
 const (
-	ctxVersion   = 0
-	ctxError     = 1
-	ctxDest      = 2
-	ctxProxyAuth = 3
+	ctxVersion    = 0
+	ctxError      = 1
+	ctxDest       = 2
+	ctxProxyAuth  = 3
 	ctxServerAuth = 4
-	ctxPCB       = 5
-	ctxX224      = 6
-	ctxCertChain = 7
+	ctxPCB        = 5
+	ctxX224       = 6
+	ctxCertChain  = 7
 	ctxServerAddr = 9
 )
 
@@ -37,6 +37,7 @@ const rdcleanpathVersion = 3390
 
 // rdcleanpathRequest RDCleanPath 请求报文(客户端→代理)的已解析字段。
 type rdcleanpathRequest struct {
+	version     int
 	destination string
 	proxyAuth   string
 	x224Request []byte
@@ -59,6 +60,12 @@ func decodeRdcleanpathRequest(data []byte) (rdcleanpathRequest, error) {
 		}
 		content = r
 		switch t {
+		case ctxVersion | 0xa0:
+			v, err := parseIntegerField(c)
+			if err != nil {
+				return req, fmt.Errorf("version 字段无效: %w", err)
+			}
+			req.version = v
 		case ctxDest | 0xa0:
 			s, err := parseUtf8Field(c)
 			if err != nil {
@@ -78,6 +85,9 @@ func decodeRdcleanpathRequest(data []byte) (rdcleanpathRequest, error) {
 			}
 			req.x224Request = o
 		}
+	}
+	if req.version != rdcleanpathVersion {
+		return req, fmt.Errorf("不支持的 RDCleanPath 协议版本: %d", req.version)
 	}
 	if req.destination == "" || req.proxyAuth == "" || len(req.x224Request) == 0 {
 		return req, fmt.Errorf("RDCleanPath 请求缺少必要字段(destination/proxy_auth/x224_connection_pdu)")

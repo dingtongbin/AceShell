@@ -174,3 +174,75 @@ func TestProtoLabel(t *testing.T) {
 		}
 	}
 }
+
+func TestLogService_GetLogTail(t *testing.T) {
+	withTestDataDir(t)
+	svc := &LogService{}
+	svc.Init()
+	defer os.RemoveAll(filepath.Join(sessionsDir, "..", "autolog"))
+
+	id := "tail-" + time.Now().Format("150405")
+	svc.StartSession(id, "ssh", "10.0.0.1", 22, "root", "Tail Test")
+	var sb strings.Builder
+	for i := 1; i <= 100; i++ {
+		sb.WriteString("line\n")
+	}
+	svc.LogOutput(id, sb.String())
+	svc.EndSession(id)
+	time.Sleep(200 * time.Millisecond)
+
+	tail := svc.GetLogTail(id, 10)
+	lines := strings.Split(strings.TrimRight(tail, "\n"), "\n")
+	if len(lines) != 10 {
+		t.Fatalf("expected 10 tail lines, got %d", len(lines))
+	}
+	if lines[len(lines)-1] != "line" {
+		t.Fatalf("tail content mismatch: %q", lines[len(lines)-1])
+	}
+
+	// maxLines 大于文件总行数时应返回完整内容
+	full := svc.GetLogTail(id, 1000)
+	if strings.Count(full, "\n") != 100 {
+		t.Fatalf("expected 100 lines for oversized maxLines, got %d", strings.Count(full, "\n"))
+	}
+}
+
+func TestTailFile_Boundaries(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "log.txt")
+	var sb strings.Builder
+	for i := 1; i <= 50; i++ {
+		sb.WriteString("L")
+		sb.WriteString(string(rune('0' + i%10)))
+		sb.WriteString("\n")
+	}
+	if err := os.WriteFile(path, []byte(sb.String()), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := tailFile(path, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimRight(got, "\n"), "\n")
+	if len(lines) != 5 {
+		t.Fatalf("expected 5 lines, got %d (%q)", len(lines), got)
+	}
+	if lines[0] != "L6" {
+		t.Fatalf("expected first tail line L6, got %q", lines[0])
+	}
+
+	// maxLines 超过文件行数返回完整内容
+	got, _ = tailFile(path, 1000)
+	if strings.Count(got, "\n") != 50 {
+		t.Fatalf("expected 50 lines, got %d", strings.Count(got, "\n"))
+	}
+
+	// 空文件
+	empty := filepath.Join(dir, "empty.txt")
+	os.WriteFile(empty, []byte(""), 0600)
+	got, _ = tailFile(empty, 10)
+	if got != "" {
+		t.Fatalf("expected empty for empty file, got %q", got)
+	}
+}

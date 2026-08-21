@@ -12,29 +12,43 @@ import (
 )
 
 // Start 启动仅绑定 127.0.0.1 的 WebSocket↔TCP 字节桥服务。
-// tokenCheck 校验每会话令牌，防止本机其他进程蹭用；
-// 返回基础 URL（如 http://127.0.0.1:51234），前端据此拼桥接地址。
-func Start(tokenCheck func(string) bool) (string, error) {
+// tokenCheck 校验每会话令牌并返回其绑定的目标地址,防止本机其他进程利用
+// 一个有效令牌让桥连到任意内网 TCP 服务(SSRF 跳板)。返回基础 URL 与
+// *http.Server,调用方应在退出时 Shutdown 以释放监听端口。
+func Start(tokenCheck func(string) (string, bool)) (string, *http.Server, error) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/bridge", func(w http.ResponseWriter, r *http.Request) {
 		handleBridge(w, r, tokenCheck)
 	})
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		return "", fmt.Errorf("wsbridge listen: %w", err)
+		return "", nil, fmt.Errorf("wsbridge listen: %w", err)
 	}
-	server := &http.Server{Handler: mux}
+	server := &http.Server{
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
 	go func() { _ = server.Serve(ln) }()
-	return "http://" + ln.Addr().String(), nil
+	return "http://" + ln.Addr().String(), server, nil
 }
 
-func handleBridge(w http.ResponseWriter, r *http.Request, tokenCheck func(string) bool) {
-	if !tokenCheck(r.URL.Query().Get("token")) {
+func handleBridge(w http.ResponseWriter, r *http.Request, tokenCheck func(string) (string, bool)) {
+	boundTarget, ok := tokenCheck(r.URL.Query().Get("token"))
+	if !ok {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	target := r.URL.Query().Get("target")
-	if !validTarget(target) {
+	if r.URL.Query().Get("rdp") == "1" {
+		ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
+		if err != nil {
+			return
+		}
+		handleRdcleanpathBridge(ws, r, boundTarget)
+		return
+	}
+	// 非 RDP 路径:强制使用令牌绑定的目标,忽略 URL 中的 target 参数(防 SSRF)。
+	// 目标在令牌绑定阶段即确定,握手前校验,避免为非法目标做无意义 Accept。
+	if !validTarget(boundTarget) {
 		http.Error(w, "bad target", http.StatusBadRequest)
 		return
 	}
@@ -42,16 +56,63 @@ func handleBridge(w http.ResponseWriter, r *http.Request, tokenCheck func(string
 	if err != nil {
 		return
 	}
-	if r.URL.Query().Get("rdp") == "1" {
-		handleRdcleanpathBridge(ws, r, tokenCheck)
-		return
-	}
-	tcp, err := net.DialTimeout("tcp", target, 10*time.Second)
+	tcp, err := net.DialTimeout("tcp", boundTarget, 10*time.Second)
 	if err != nil {
 		_ = ws.Close(websocket.StatusInternalError, "dial failed")
 		return
 	}
 	relay(ws, tcp)
+}
+
+// handleRdcleanpathBridge 处理 RDP 模式的桥接:解析 IronRDP 的 RDCleanPath 握手,
+// 校验代理令牌后连接目标,以 TLS 客户端终止服务器加密会话,把服务器 X.224 确认
+// 与证书链装回响应,随后以解密后的明文 RDP 流与客户端双向透传。
+func handleRdcleanpathBridge(ws *websocket.Conn, r *http.Request, boundTarget string) {
+	ctx := context.Background()
+	ws.SetReadLimit(-1)
+	_, data, err := ws.Read(ctx)
+	if err != nil {
+		_ = ws.Close(websocket.StatusProtocolError, "missing rdcleanpath request")
+		return
+	}
+	req, err := decodeRdcleanpathRequest(data)
+	if err != nil {
+		_ = ws.Close(websocket.StatusProtocolError, "invalid rdcleanpath request")
+		return
+	}
+	// RDP 路径:校验客户端 PDU 中的 destination 与令牌绑定目标一致(防 SSRF 跳板)。
+	if req.destination != boundTarget {
+		_ = ws.Close(websocket.StatusPolicyViolation, "target mismatch")
+		return
+	}
+	tcp, err := net.DialTimeout("tcp", req.destination, 10*time.Second)
+	if err != nil {
+		_ = ws.Close(websocket.StatusInternalError, "dial failed")
+		return
+	}
+	defer tcp.Close()
+	if _, err := tcp.Write(ensureX224RequestsTLS(req.x224Request)); err != nil {
+		return
+	}
+
+	resp, certs, stream, err := readServerGreeting(tcp)
+	if err != nil {
+		_ = ws.Close(websocket.StatusInternalError, err.Error())
+		return
+	}
+	if len(certs) == 0 {
+		_ = ws.Close(websocket.StatusInternalError, "no server certificate")
+		return
+	}
+	serverAddr, _, err := net.SplitHostPort(req.destination)
+	if err != nil {
+		serverAddr = req.destination
+	}
+	response := encodeRdcleanpathResponse(serverAddr, resp, certs)
+	if err := ws.Write(ctx, websocket.MessageBinary, response); err != nil {
+		return
+	}
+	relay(ws, stream)
 }
 
 // validTarget 校验 target 为合法的 host:port。
@@ -86,13 +147,17 @@ func isValidHostname(h string) bool {
 	return true
 }
 
-// relay 将 WebSocket 二进制帧与 TCP 流双向转发，任一方向结束后关闭双方。
+// relay 将 WebSocket 二进制帧与 TCP 流双向转发,任一方向结束后关闭双方。
+// 任一方向出错即整体取消,避免对端静默挂死导致 goroutine 永久阻塞;
+// TCP→WS 的写入设置 30s 超时,防止慢/挂死的对端耗尽连接。
 func relay(ws *websocket.Conn, tcp net.Conn) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	done := make(chan struct{}, 2)
 	go func() {
 		defer func() { done <- struct{}{} }()
 		for {
-			_, data, err := ws.Read(context.Background())
+			_, data, err := ws.Read(ctx)
 			if err != nil {
 				return
 			}
@@ -107,7 +172,10 @@ func relay(ws *websocket.Conn, tcp net.Conn) {
 		for {
 			n, err := tcp.Read(buf)
 			if n > 0 {
-				if werr := ws.Write(context.Background(), websocket.MessageBinary, buf[:n]); werr != nil {
+				wctx, wcancel := context.WithTimeout(ctx, 30*time.Second)
+				werr := ws.Write(wctx, websocket.MessageBinary, buf[:n])
+				wcancel()
+				if werr != nil {
 					return
 				}
 			}
@@ -117,6 +185,7 @@ func relay(ws *websocket.Conn, tcp net.Conn) {
 		}
 	}()
 	<-done
+	cancel()
 	_ = ws.Close(websocket.StatusNormalClosure, "")
 	_ = tcp.Close()
 }

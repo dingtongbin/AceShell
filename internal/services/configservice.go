@@ -137,7 +137,7 @@ func (c *ConfigService) Init() {
 }
 
 func (c *ConfigService) load() {
-	os.MkdirAll(filepath.Dir(configFile), 0755)
+	os.MkdirAll(filepath.Dir(configFile), 0700)
 	data, err := os.ReadFile(configFile)
 	if err != nil {
 		return
@@ -152,7 +152,7 @@ func (c *ConfigService) save() error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(configFile, data, 0644)
+	return atomicWriteFile(configFile, data, 0600)
 }
 
 // ThemeMode 返回已保存的视图主题模式（dark / light / auto），默认 "dark"。
@@ -399,6 +399,19 @@ func (c *ConfigService) SetSerialConfig(jsonStr string) string {
 	var sc SerialConfig
 	if err := json.Unmarshal([]byte(jsonStr), &sc); err != nil {
 		return `{"error":"invalid json"}`
+	}
+	// 边界校验,避免写入损坏/越界配置
+	if sc.BaudRate < 110 || sc.BaudRate > 921600 {
+		sc.BaudRate = 115200
+	}
+	if sc.DataBits < 5 || sc.DataBits > 8 {
+		sc.DataBits = 8
+	}
+	if sc.StopBits != "1" && sc.StopBits != "1.5" && sc.StopBits != "2" {
+		sc.StopBits = "1"
+	}
+	if sc.Parity != "none" && sc.Parity != "odd" && sc.Parity != "even" && sc.Parity != "mark" && sc.Parity != "space" {
+		sc.Parity = "none"
 	}
 	c.config.Serial = sc
 	c.save()

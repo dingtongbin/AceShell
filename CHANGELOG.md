@@ -2,6 +2,32 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 与 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 规范。
 
+## [0.1.4] - 2026-08-21
+
+### 安全加固
+
+- **RDP / WS 桥本机 SSRF 防护**：桥接令牌绑定目标地址；RDP 路径校验客户端 `destination` 与绑定目标一致，非 RDP 路径强制使用绑定目标（忽略 URL 中的 target 参数）；令牌增加 10 分钟过期与惰性剔除，防止本机其他进程利用有效令牌对内网任意 TCP 服务跳板
+- **路径穿越防护**：导入解压 tar slip、ImportSessions 目标目录、密钥文件落盘、重命名同目录冲突、selectedPaths、DeleteFolder 防误删 `key/`、readLocal 防 TOCTOU 全面加固
+- **主机指纹 TOFU 加固**：修复 `known_hosts.json` 临时保存 nil map panic；指纹不一致拒绝连接
+- **会话文件写入原子化** + 临时文件权限收敛（文件 0644 / 目录 0755）
+- **加密导入导出**：导入端重新加密失败 fail-close，仅解密成功才替换原值；`SshCopyKey` 公钥校验、`x509.EncryptPEMBlock` 废弃替换、`passphrase` 交互保护、`LocalRename` 防目录逃逸
+- **SFTP** 远端写锁与大小限制、`CancelTransfer` 双关 panic 修复
+- 全局 `killChildProcesses` 仅清理本项目子进程，不再误杀全机 node 进程
+
+### 缺陷修复
+
+- **SSH**：keepalive 计时器修复避免连接误判断开、readLoop goroutine 泄漏修复、closed 连接事件幂等 + 30s keepalive、stderr 独立读取防阻塞
+- **Telnet / 串口**：协议状态机与错误连接处理；`SftpPanel` 编辑器脏关闭确认、高亮防抖、拖放目标 id 修正
+- **终端**：`useXterm` / `useSessionAuth` 生命周期与 `onUnmounted` 修正、多行粘贴确认、选择即复制
+- **RDP**：`active` 可见性切换与断开后重连入口、卸载清空 `rdpUI` 悬挂引用、X.224 协商响应 flags 兼容（保留位 0x00）、1MB 读限制解除与 relay 写超时、桥 HTTP server 超时与退出关闭、`bridgeWsURL` IPv6 QueryEscape
+- **界面与交互**：`SettingsDialog` 透明度防抖、`ImportDialog` 校验与空路径提示、`ExportDialog` 重开清空密码、`SessionManager` / `AutoLogManager` 静默错误改为提示、`ScriptManager` 重命名后移动失效、`FileEditor` 自动保存竞态与卸载丢改
+- **日志**：`AutoLogManager` 全量日志改为尾部读取（>50000 行），后端新增 `GetLogTail`
+
+### 构建与测试
+
+- 后端单测覆盖会话安全、RDP 桥、rdcleanpath 解析；前端 `vue-tsc` 类型检查通过
+- 版本升至 0.1.4
+
 ## [0.1.3] - 2026-08-20
 
 ### 国际化

@@ -39,6 +39,12 @@ func (w *WindowService) SetApp(app *application.App) {
 	w.app = app
 }
 
+// windowErrorResult 安全地构造错误 JSON 字符串(对错误消息做 JSON 转义)。
+func windowErrorResult(err error) string {
+	b, _ := json.Marshal(map[string]string{"error": err.Error()})
+	return string(b)
+}
+
 func (w *WindowService) emit(event string, data string) {
 	if w.app != nil {
 		w.app.Event.Emit(event, data)
@@ -98,11 +104,14 @@ func (w *WindowService) ListDirFiles(dir string) string {
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return fmt.Sprintf(`{"error":"%s"}`, err.Error())
+		return windowErrorResult(err)
 	}
 	var files []dirFileEntry
 	for _, entry := range entries {
-		info, _ := entry.Info()
+		info, ierr := entry.Info()
+		if ierr != nil {
+			continue
+		}
 		files = append(files, dirFileEntry{
 			Name:    entry.Name(),
 			Size:    info.Size(),
@@ -121,21 +130,27 @@ func (w *WindowService) ListDirFiles(dir string) string {
 func (w *WindowService) CopyFileToDir(srcPath, destDir string) string {
 	os.MkdirAll(destDir, 0755)
 	destPath := filepath.Join(destDir, filepath.Base(srcPath))
+	if destPath == srcPath {
+		return windowErrorResult(fmt.Errorf("源文件与目标路径相同"))
+	}
+	if _, err := os.Stat(destPath); err == nil {
+		return windowErrorResult(fmt.Errorf("目标文件已存在"))
+	}
 
 	srcFile, err := os.Open(srcPath)
 	if err != nil {
-		return fmt.Sprintf(`{"error":"%s"}`, err.Error())
+		return windowErrorResult(err)
 	}
 	defer srcFile.Close()
 
 	destFile, err := os.Create(destPath)
 	if err != nil {
-		return fmt.Sprintf(`{"error":"%s"}`, err.Error())
+		return windowErrorResult(err)
 	}
 	defer destFile.Close()
 
 	if _, err := io.Copy(destFile, srcFile); err != nil {
-		return fmt.Sprintf(`{"error":"%s"}`, err.Error())
+		return windowErrorResult(err)
 	}
 
 	data, _ := json.Marshal(map[string]interface{}{"path": destPath, "name": filepath.Base(destPath)})

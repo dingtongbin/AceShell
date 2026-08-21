@@ -53,7 +53,7 @@ func TestRdpService_GetRdpConnection(t *testing.T) {
 	if conn.Host != "10.0.0.1" || conn.Port != 3389 || conn.Username != "admin" || conn.Password != "secret123" {
 		t.Fatalf("unexpected conn: %+v", conn)
 	}
-	if !strings.HasPrefix(conn.BridgeWsURL, "ws://127.0.0.1:") || !strings.Contains(conn.BridgeWsURL, "&target=10.0.0.1:3389") {
+	if !strings.HasPrefix(conn.BridgeWsURL, "ws://127.0.0.1:") || !strings.Contains(conn.BridgeWsURL, "&target=10.0.0.1%3A3389") {
 		t.Fatalf("unexpected bridge url: %s", conn.BridgeWsURL)
 	}
 	if !strings.Contains(conn.BridgeWsURL, "rdp=1") {
@@ -106,11 +106,11 @@ func TestRdpService_BridgeTokenRevocation(t *testing.T) {
 	if token == "" {
 		t.Fatal("empty token")
 	}
-	if !svc.validToken(token) {
+	if _, ok := svc.validToken(token); !ok {
 		t.Fatal("expected token valid before release")
 	}
 	svc.ReleaseRdpConnection(token)
-	if svc.validToken(token) {
+	if _, ok := svc.validToken(token); ok {
 		t.Fatal("expected token invalid after release")
 	}
 }

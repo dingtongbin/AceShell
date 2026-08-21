@@ -23,6 +23,7 @@ type SSHService struct {
 	sess           map[string]*SSHSession
 	mu             sync.RWMutex
 	SessionFileSvc *SessionFileService
+	SFTPSvc        *SFTPService
 	tempHostKeys   map[string]string // 临时指纹：addr -> keyB64（不写入文件）
 }
 
@@ -39,6 +40,7 @@ type SSHSession struct {
 	stdout   io.Reader
 	stderr   io.Reader
 	mu       sync.Mutex
+	closed   bool
 }
 
 // SetApp 初始化服务，绑定 Wails 应用实例。
@@ -100,6 +102,7 @@ func (s *SSHService) Connect(id, host string, port int, user, password, folder s
 	}
 
 	go s.readLoop(sess)
+	go s.keepaliveLoop(sess)
 	return nil
 }
 
@@ -148,6 +151,7 @@ func (s *SSHService) ConnectWithKey(id, host string, port int, user, keyPEM, key
 	}
 
 	go s.readLoop(sess)
+	go s.keepaliveLoop(sess)
 	return nil
 }
 
@@ -291,23 +295,34 @@ func (s *SSHService) readLoop(sess *SSHSession) {
 			if err != io.EOF {
 				reason = fmt.Sprintf("连接断开: %s", err.Error())
 			}
-			s.mu.Lock()
-			delete(s.sess, sess.ID)
-			s.mu.Unlock()
 			if MainLogService != nil {
 				MainLogService.EndSession(sess.ID)
 			}
-			sess.session.Close()
-			if sess.client != nil {
-				sess.client.Close()
-			}
 			s.emit("session-output", fmt.Sprintf(`{"id":"%s","data":"%s"}`, sess.ID, escapeJSON(fmt.Sprintf("\r\n\x1b[33m%s\x1b[0m\r\n", reason))))
-			s.emit("session-status-changed", fmt.Sprintf(`{"id":"%s","status":"disconnected","message":"%s"}`, sess.ID, escapeJSON(reason)))
+			s.closeSession(sess)
 			return
 		}
 	}
 }
 
+
+// keepaliveLoop 周期性发送 SSH 保活请求,检测对端存活;会话关闭后自动退出。
+func (s *SSHService) keepaliveLoop(sess *SSHSession) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for range ticker.C {
+		sess.mu.Lock()
+		if sess.closed || sess.client == nil {
+			sess.mu.Unlock()
+			return
+		}
+		client := sess.client
+		sess.mu.Unlock()
+		if _, _, err := client.SendRequest("keepalive@openssh.com", true, nil); err != nil {
+			return
+		}
+	}
+}
 // Send 向指定会话发送数据。
 func (s *SSHService) Send(id, data string) error {
 	s.mu.RLock()
@@ -318,6 +333,9 @@ func (s *SSHService) Send(id, data string) error {
 	}
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
+	if sess.closed {
+		return fmt.Errorf("会话已关闭")
+	}
 	_, err := sess.stdin.Write([]byte(data))
 	return err
 }
@@ -332,28 +350,57 @@ func (s *SSHService) Resize(id string, cols, rows int) error {
 	}
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
+	if sess.closed {
+		return fmt.Errorf("会话已关闭")
+	}
 	return sess.session.WindowChange(rows, cols)
+}
+
+
+// tempHostKey 线程安全地读取临时内存指纹。
+func (s *SSHService) tempHostKey(addr string) (string, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	k, ok := s.tempHostKeys[addr]
+	return k, ok
+}
+
+// closeSession 安全地关闭 SSH 会话资源,幂等(只关闭一次),并联动清理 SFTP 连接。
+func (s *SSHService) closeSession(sess *SSHSession) {
+	sess.mu.Lock()
+	if sess.closed {
+		sess.mu.Unlock()
+		return
+	}
+	sess.closed = true
+	client := sess.client
+	session := sess.session
+	sess.mu.Unlock()
+
+	if session != nil {
+		session.Close()
+	}
+	if client != nil {
+		client.Close()
+	}
+	if s.SFTPSvc != nil {
+		s.SFTPSvc.Disconnect(sess.ID)
+	}
+	s.mu.Lock()
+	delete(s.sess, sess.ID)
+	s.mu.Unlock()
+	s.emit("session-status-changed", fmt.Sprintf(`{"id":"%s","status":"disconnected"}`, sess.ID))
 }
 
 // Disconnect 断开指定 SSH 连接并清理资源。
 func (s *SSHService) Disconnect(id string) error {
 	s.mu.Lock()
 	sess, ok := s.sess[id]
+	s.mu.Unlock()
 	if !ok {
-		s.mu.Unlock()
 		return fmt.Errorf("会话未找到")
 	}
-	delete(s.sess, id)
-	s.mu.Unlock()
-
-	if sess.session != nil {
-		sess.session.Close()
-	}
-	if sess.client != nil {
-		sess.client.Close()
-	}
-
-	s.emit("session-status-changed", fmt.Sprintf(`{"id":"%s","status":"disconnected"}`, id))
+	s.closeSession(sess)
 	return nil
 }
 
@@ -389,7 +436,7 @@ func (s *SSHService) CheckFingerprint(host string, port int, folder string) stri
 	addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
 
 	// 检查临时指纹
-	if key, ok := s.tempHostKeys[addr]; ok {
+	if key, ok := s.tempHostKey(addr); ok {
 		_ = key // 临时指纹存在，需要实际连接时验证
 	}
 
@@ -414,7 +461,7 @@ func (s *SSHService) CheckFingerprint(host string, port int, folder string) stri
 	}
 
 	// 检查临时内存指纹
-	if key, ok := s.tempHostKeys[addr]; ok {
+	if key, ok := s.tempHostKey(addr); ok {
 		if key == serverKey {
 			return `{"status":"match","key":"` + serverKey + `"}`
 		}
