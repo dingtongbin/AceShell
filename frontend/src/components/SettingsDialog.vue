@@ -159,9 +159,14 @@ async function handleCloseNoConfirmChange(value: boolean) {
   try { await SetCloseConfirm(!value); window.dispatchEvent(new Event('config-changed')) } catch {}
 }
 
+let opacityTimer: ReturnType<typeof setTimeout> | null = null
 async function handlePanelOpacityChange(value: number) {
   panelOpacity.value = value
-  try { await SetPanelOpacity(value); window.dispatchEvent(new Event('config-changed')) } catch (e) { console.warn('设置透明度失败:', e) }
+  if (opacityTimer) { clearTimeout(opacityTimer); opacityTimer = null }
+  opacityTimer = setTimeout(async () => {
+    opacityTimer = null
+    try { await SetPanelOpacity(value); window.dispatchEvent(new Event('config-changed')) } catch (e) { console.warn('设置透明度失败:', e) }
+  }, 150)
 }
 
 async function handleShowSerialChange(value: boolean) {

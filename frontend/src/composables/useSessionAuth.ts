@@ -1,7 +1,7 @@
 // useSessionAuth.ts — 会话连接认证流程(SSH 指纹/凭证、SFTP、HTTP、串口)。
 // 从 TabPane.vue 抽离:连接流程与指纹/凭证/浏览器弹窗状态集中管理,
 // 终端相关操作(termWrite/initTerminal)与 SFTP 面板通过参数注入,不直接依赖组件实现。
-import { ref, nextTick } from 'vue'
+import { ref, nextTick, onBeforeUnmount } from 'vue'
 import { useMessage } from 'naive-ui'
 import type { Pane, Tab } from '../components/tabTypes'
 import { ConnectToSession, ConnectToSessionWithCreds, SetSessionBrowser } from '../../bindings/changeme/internal/services/sessionfileservice.js'
@@ -71,6 +71,7 @@ export function useSessionAuth(deps: AuthDeps) {
     meta: any,
     onConnected: (creds: Creds) => Promise<void>,
   ): Promise<void> {
+   try {
     let creds = await sshAuthFlow(tab, sessionPath, meta.authMode === 'key')
     if (!creds) {
       tab.status = 'idle'
@@ -144,6 +145,10 @@ export function useSessionAuth(deps: AuthDeps) {
         return
       }
     }
+   } catch (e: any) {
+    tab.status = 'error'
+    deps.termWrite(tab, `\r\n\x1b[31m${e?.message || e}\x1b[0m\r\n`)
+   }
   }
 
   // SFTP 会话：复用 SSH 认证流程，连接成功后打开 SFTP 面板标签页（无终端，失败仅提示）
@@ -361,6 +366,12 @@ export function useSessionAuth(deps: AuthDeps) {
       }
     })
   }
+
+  onBeforeUnmount(() => {
+    if (pendingFingerprintResolve) { pendingFingerprintResolve(false); pendingFingerprintResolve = null }
+    if (pendingCredentialsResolve) { pendingCredentialsResolve(null); pendingCredentialsResolve = null }
+    if (pendingKeyCredentialsResolve) { pendingKeyCredentialsResolve(null); pendingKeyCredentialsResolve = null }
+  })
 
   return {
     showBrowserFail, browserFailUrl, browserFailPath, browserFailSel, browserFailOptions,

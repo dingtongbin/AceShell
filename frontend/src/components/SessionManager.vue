@@ -91,13 +91,12 @@ async function viewMeta(node: TreeNode) {
     metaInfo.value = {
       name: m.name || '',
       protocol: m.protocol || '',
-      host: m.protocol === 'serial' ? m.stopBits + '' : (m.host || ''),
+      host: m.host || '',
       port: m.port || 0,
       created: m.created || '',
       updated: m.updated || '',
       username: m.username || '',
     }
-    if (metaInfo.value.protocol === 'serial') metaInfo.value.host = m.host || ''
     showMeta.value = true
   } catch {
     message.error(t('sessionManager.cannotReadMeta'))
@@ -173,7 +172,7 @@ async function finishRename() {
   if (!renamePath.value || !renameValue.value.trim()) { renamePath.value = null; return }
   const newName = renameValue.value.trim()
   if (newName === renamePath.value.split('/').pop()?.replace('.toml', '')) { renamePath.value = null; return }
-  try { await RenameItem(renamePath.value, newName); renamePath.value = null; loadTree() } catch {}
+  try { await RenameItem(renamePath.value, newName); renamePath.value = null; loadTree() } catch (err: any) { message.error(t('sessionManager.renameFailed', { err: (err && err.message) || t('sessionManager.unknownError') })) }
 }
 
 async function confirmDelete(n: TreeNode) {
@@ -183,7 +182,7 @@ async function confirmDelete(n: TreeNode) {
 async function executeDelete() {
   if (!deleteTarget.value) return
   const d = deleteTarget.value
-  try { if (d.isDir) await DeleteFolder(d.path); else await DeleteSession(d.path); showDeleteConfirm.value = false; deleteTarget.value = null; loadTree(); emit('refresh') } catch {}
+  try { if (d.isDir) await DeleteFolder(d.path); else await DeleteSession(d.path); showDeleteConfirm.value = false; deleteTarget.value = null; loadTree(); emit('refresh') } catch (err: any) { message.error(t('sessionManager.deleteFailed', { err: (err && err.message) || t('sessionManager.unknownError') })) }
 }
 
 function cancelDelete() { showDeleteConfirm.value = false; deleteTarget.value = null }
@@ -411,15 +410,16 @@ async function handleRenameAndMove() {
   if (stillConflict) return
 
   try {
+    const oldBase = renamePath.split('/').pop() || ''
     if (isDir) {
-      const parts = renamePath.split('/'); parts.pop(); parts.push(newName)
-      const newPath = parts.join('/')
       await MoveFolder(renamePath, dest || '.')
     } else {
       await MoveFile(renamePath, dest || '.')
     }
+    const movedPath = (dest && dest !== '.' && dest !== '') ? dest + '/' + oldBase : oldBase
+    await RenameItem(movedPath, newName)
     await loadTree()
-  } catch (err) { console.error('Move error:', err) }
+  } catch (err: any) { message.error(t('sessionManager.renameFailed', { err: (err && err.message) || t('sessionManager.unknownError') })) }
 
   showConflict.value = false
   pendingDragPath.value = null; pendingDestFolder.value = ''

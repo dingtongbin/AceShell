@@ -96,7 +96,50 @@ func (s *SessionFileService) emit(event string, data string) {
 }
 
 func (s *SessionFileService) ensureSessionsDir() {
-	os.MkdirAll(sessionsDir, 0755)
+	os.MkdirAll(sessionsDir, 0700)
+}
+
+// sanitizeName 净化会话/文件夹/文件名称:拒绝路径遍历,并将非法字符替换为下划线。
+// 返回空字符串表示非法(如 '.'/'..'/全为非法字符)。
+func sanitizeName(name string) string {
+	if name == "" {
+		return ""
+	}
+	if hasBackslashTraversal(name) {
+		return ""
+	}
+	safe := strings.ReplaceAll(name, "/", "_")
+	safe = strings.ReplaceAll(safe, "\\", "_")
+	safe = strings.TrimSpace(safe)
+	if safe == "" || safe == "." || safe == ".." {
+		return ""
+	}
+	return safe
+}
+func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, ".aceshell-tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	if err := os.Chmod(tmpName, perm); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	return os.Rename(tmpName, path)
 }
 
 func deriveMachineKey() []byte {
@@ -186,7 +229,7 @@ func (s *SessionFileService) CreateFolder(folderPath string) error {
 }
 
 func (s *SessionFileService) DeleteFolder(folderPath string) error {
-	if folderPath == keysDirName {
+	if filepath.Clean(folderPath) == keysDirName {
 		return fmt.Errorf("密钥库目录不可删除")
 	}
 	fullPath, err := s.safeSessionPath(folderPath)
@@ -245,14 +288,19 @@ func (s *SessionFileService) UpdateSession(filePath string, data string) error {
 		return err
 	}
 
-	if err := os.WriteFile(fullPath, content, 0644); err != nil {
+	if err := atomicWriteFile(fullPath, content, 0600); err != nil {
 		return err
 	}
 
 	newPath := s.getFilePath(filepath.Dir(filePath), info.Name)
 	if newPath != fullPath {
-		os.MkdirAll(filepath.Dir(newPath), 0755)
-		os.Rename(fullPath, newPath)
+		if _, err := os.Stat(newPath); err == nil {
+			return fmt.Errorf("已存在同名会话: %s", info.Name)
+		}
+		os.MkdirAll(filepath.Dir(newPath), 0700)
+		if err := os.Rename(fullPath, newPath); err != nil {
+			return err
+		}
 	}
 
 	s.emit("session-tree-changed", s.GetTree())
@@ -300,7 +348,7 @@ func (s *SessionFileService) SaveSession(folder string, data string) error {
 		return err
 	}
 
-	err = os.WriteFile(filePath, content, 0644)
+	err = atomicWriteFile(filePath, content, 0600)
 	if err != nil {
 		return err
 	}
@@ -476,6 +524,10 @@ func (s *SessionFileService) DeleteSession(filePath string) error {
 }
 
 func (s *SessionFileService) RenameSession(oldPath, newName string) error {
+	safeName := sanitizeName(newName)
+	if safeName == "" {
+		return fmt.Errorf("非法的会话名称")
+	}
 	oldFullPath, err := s.safeSessionPath(oldPath)
 	if err != nil {
 		return err
@@ -491,7 +543,7 @@ func (s *SessionFileService) RenameSession(oldPath, newName string) error {
 		return err
 	}
 
-	data.Session.Name = newName
+	data.Session.Name = safeName
 
 	newContent, err := toml.Marshal(data)
 	if err != nil {
@@ -499,9 +551,14 @@ func (s *SessionFileService) RenameSession(oldPath, newName string) error {
 	}
 
 	dir := filepath.Dir(oldFullPath)
-	newFullPath := filepath.Join(dir, newName+".toml")
+	newFullPath := filepath.Join(dir, safeName+".toml")
+	if oldFullPath != newFullPath {
+		if _, err := os.Stat(newFullPath); err == nil {
+			return fmt.Errorf("已存在同名会话: %s", safeName)
+		}
+	}
 
-	if err := os.WriteFile(newFullPath, newContent, 0644); err != nil {
+	if err := atomicWriteFile(newFullPath, newContent, 0600); err != nil {
 		return err
 	}
 
@@ -514,6 +571,10 @@ func (s *SessionFileService) RenameSession(oldPath, newName string) error {
 }
 
 func (s *SessionFileService) RenameItem(oldPath, newName string) error {
+	safeName := sanitizeName(newName)
+	if safeName == "" {
+		return fmt.Errorf("非法的名称")
+	}
 	fullPath, err := s.safeSessionPath(oldPath)
 	if err != nil {
 		return err
@@ -526,7 +587,10 @@ func (s *SessionFileService) RenameItem(oldPath, newName string) error {
 	dir := filepath.Dir(fullPath)
 
 	if info.IsDir() {
-		newFullPath := filepath.Join(dir, newName)
+		newFullPath := filepath.Join(dir, safeName)
+		if _, err := os.Stat(newFullPath); err == nil {
+			return fmt.Errorf("已存在同名项目: %s", safeName)
+		}
 		if err := os.Rename(fullPath, newFullPath); err != nil {
 			return err
 		}
@@ -539,16 +603,19 @@ func (s *SessionFileService) RenameItem(oldPath, newName string) error {
 		if err := toml.Unmarshal(content, &data); err != nil {
 			return err
 		}
-		data.Session.Name = newName
+		data.Session.Name = safeName
 		out, err := toml.Marshal(data)
 		if err != nil {
 			return err
 		}
-		if err := os.WriteFile(fullPath, out, 0644); err != nil {
+		if err := atomicWriteFile(fullPath, out, 0600); err != nil {
 			return err
 		}
-		newFullPath := filepath.Join(dir, newName+".toml")
+		newFullPath := filepath.Join(dir, safeName+".toml")
 		if fullPath != newFullPath {
+			if _, err := os.Stat(newFullPath); err == nil {
+				return fmt.Errorf("已存在同名会话: %s", safeName)
+			}
 			os.Rename(fullPath, newFullPath)
 		}
 	}
@@ -693,7 +760,7 @@ func (s *SessionFileService) SetNoConfirmClose(filePath string, value bool) erro
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(fullPath, out, 0644)
+	return atomicWriteFile(fullPath, out, 0600)
 }
 
 // saveCredentials 保存用户名和密码到会话文件。
@@ -731,7 +798,7 @@ func (s *SessionFileService) saveCredentials(sessionPath, username, password str
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(fullPath, out, 0644)
+	return atomicWriteFile(fullPath, out, 0600)
 }
 
 // ExportSessions 将选中的会话导出为标准 as9 包文件。

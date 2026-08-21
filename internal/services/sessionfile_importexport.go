@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -77,6 +78,9 @@ const (
 	as9PBKDFIters = 600000
 )
 
+// maxImportEntrySize 单条导入 tar 条目最大字节数(64MB),防止恶意超大包耗尽内存。
+const maxImportEntrySize int64 = 64 * 1024 * 1024
+
 // ValidateExportPassword 校验 as9 包口令:8~64 个字符,且包含大写字母/小写字母/数字/符号中的至少三类。
 func ValidateExportPassword(password string) error {
 	if password == "" {
@@ -134,7 +138,10 @@ func (s *SessionFileService) writeTarArchive(selectedPaths []string, keyIDs []st
 			}
 			continue
 		}
-		fullPath := filepath.Join(sessionsDir, p)
+		fullPath, err := s.safeSessionPath(p)
+		if err != nil {
+			return err
+		}
 		info, err := os.Stat(fullPath)
 		if err != nil {
 			return err
@@ -227,13 +234,15 @@ func (s *SessionFileService) writeGlobalKeyToTar(tw *tar.Writer, content *Global
 	if err := tw.WriteHeader(hdr); err != nil {
 		return err
 	}
-	_, err = tw.Write(data)
-	return err
+	if _, err := tw.Write(data); err != nil {
+		return err
+	}
+	return nil
 }
 
 // addDirToTar 将目录及其内容添加到 tar 归档(跳过密钥库目录)。
 func (s *SessionFileService) addDirToTar(tw *tar.Writer, dirPath string) error {
-	filepath.Walk(dirPath, func(path string, fi os.FileInfo, err error) error {
+	return filepath.Walk(dirPath, func(path string, fi os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
@@ -243,11 +252,14 @@ func (s *SessionFileService) addDirToTar(tw *tar.Writer, dirPath string) error {
 		rel, _ := filepath.Rel(sessionsDir, path)
 		return s.addFileToTar(tw, path, rel, fi)
 	})
-	return nil
 }
 
 // addFileToTar 将单个文件加入 tar；.toml 会话文件先解密敏感字段再入包。
 func (s *SessionFileService) addFileToTar(tw *tar.Writer, diskPath, tarPath string, fi os.FileInfo) error {
+	// 2.4 导出时跳过主机指纹文件,避免把已知指纹信任注入到导出包
+	if filepath.Base(diskPath) == "known_hosts.json" || strings.HasSuffix(tarPath, "known_hosts.json") {
+		return nil
+	}
 	if strings.HasSuffix(diskPath, ".toml") {
 		return s.addTomlToTar(tw, diskPath, tarPath)
 	}
@@ -259,6 +271,9 @@ func (s *SessionFileService) addTomlToTar(tw *tar.Writer, diskPath, tarPath stri
 	content, err := s.tomlForExport(diskPath)
 	if err != nil {
 		return err
+	}
+	if content == nil {
+		return fmt.Errorf("会话内容为空")
 	}
 	hdr := &tar.Header{
 		Name:     tarPath,
@@ -275,6 +290,7 @@ func (s *SessionFileService) addTomlToTar(tw *tar.Writer, diskPath, tarPath stri
 }
 
 // tomlForExport 读取会话文件并解密敏感字段，返回导出用的明文 TOML 内容。
+// 解密失败返回 error,禁止将本机密文原样入包(否则目标机器永远无法解密)。
 func (s *SessionFileService) tomlForExport(diskPath string) ([]byte, error) {
 	raw, err := os.ReadFile(diskPath)
 	if err != nil {
@@ -283,9 +299,10 @@ func (s *SessionFileService) tomlForExport(diskPath string) ([]byte, error) {
 
 	var data SessionFileData
 	if err := toml.Unmarshal(raw, &data); err != nil {
-		return raw, nil
+		return nil, fmt.Errorf("解析会话文件失败: %w", err)
 	}
 	if data.Session.Password != "" {
+		// 导出端容错:仅当本机可解密时转为明文入包;解密失败(明文或非本机加密)保留原值。
 		if plain, err := s.decrypt(data.Session.Password); err == nil {
 			data.Session.Password = plain
 		}
@@ -326,8 +343,14 @@ func encryptWithPassword(plaintext []byte, password string) ([]byte, error) {
 // 密钥文件自动分离到本机 sessions/keys 密钥库(不落入本地目标文件夹)。
 // 返回导入统计信息字符串(含密钥导入/跳过数量)。
 // 导入期间持有 sessions 目录锁,避免与其他读写并发;导入完成即释放。
+// importMu 进程内互斥锁,串行化并发导入请求(文件锁仅挡重复导入自身)。
+var importMu sync.Mutex
+
 func (s *SessionFileService) ImportSessions(password string, targetFolder string, filePath string, overwrite bool, selectedPaths []string) (string, error) {
 	s.ensureSessionsDir()
+
+	importMu.Lock()
+	defer importMu.Unlock()
 
 	release, err := acquireImportLock()
 	if err != nil {
@@ -344,7 +367,10 @@ func (s *SessionFileService) ImportSessions(password string, targetFolder string
 		return "", err
 	}
 
-	extractDir := filepath.Join(sessionsDir, targetFolder)
+	extractDir, err := s.safeSessionPath(targetFolder)
+	if err != nil {
+		return "", err
+	}
 	importedKeys, skippedKeys, err := s.extractTarArchive(plaintext, extractDir, overwrite, selectedPaths)
 	if err != nil {
 		return "", err
@@ -369,7 +395,8 @@ func importLockPath() string {
 	return filepath.Join(sessionsDir, ".aceshell-import.lock")
 }
 
-// acquireImportLock 原子创建 sessions 目录锁文件(O_EXCL),防止导入与其他读写并发。
+// acquireImportLock 原子创建 sessions 目录锁文件(O_EXCL),防止同一包被重复触发导入。
+// 注意:此锁仅阻止并发导入自身,不挡其他会话读写(导入过程短,且已在进程内 importMu 串行化)。
 // 返回释放函数;锁已存在且未过期时报错。
 func acquireImportLock() (func(), error) {
 	lock := importLockPath()
@@ -606,12 +633,35 @@ func (s *SessionFileService) extractTarArchive(data []byte, destDir string, over
 		if !selectedPathHit(relName, selectedPaths) {
 			continue
 		}
+		// 路径穿越防护:解压目标必须严格位于目标目录内
 		target := filepath.Join(destDir, filepath.FromSlash(relName))
+		absDest, err := filepath.Abs(destDir)
+		if err != nil {
+			return importedKeys, skippedKeys, err
+		}
+		absTarget, err := filepath.Abs(target)
+		if err != nil {
+			return importedKeys, skippedKeys, err
+		}
+		if absTarget != absDest && !strings.HasPrefix(absTarget, absDest+string(filepath.Separator)) {
+			continue
+		}
 		switch hdr.Typeflag {
 		case tar.TypeDir:
-			os.MkdirAll(target, 0755)
+			os.MkdirAll(target, 0700)
 		case tar.TypeReg:
-			content, _ := io.ReadAll(tr)
+			// 2.16 单条目大小限制,防止恶意超大 tar 耗尽内存
+			content, err := io.ReadAll(io.LimitReader(tr, maxImportEntrySize+1))
+			if err != nil {
+				return importedKeys, skippedKeys, err
+			}
+			if int64(len(content)) > maxImportEntrySize {
+				return importedKeys, skippedKeys, fmt.Errorf("导入包条目过大,已拒绝以防止资源耗尽")
+			}
+			// 2.4 包内 known_hosts.json 一律不落地,避免 TOFU 信任被静默注入
+			if strings.HasSuffix(relName, "known_hosts.json") {
+				continue
+			}
 			if strings.HasPrefix(relName, "keys/") {
 				// 密钥文件分离导入到本机密钥库,不落入本地目标文件夹
 				imported, skipped, kerr := s.importKeyFromPackage(content, overwrite)
@@ -626,16 +676,21 @@ func (s *SessionFileService) extractTarArchive(data []byte, destDir string, over
 				}
 				continue
 			}
-			os.MkdirAll(filepath.Dir(target), 0755)
+			os.MkdirAll(filepath.Dir(target), 0700)
 			if !overwrite {
 				if _, err := os.Stat(target); err == nil {
 					continue
 				}
 			}
 			if strings.HasSuffix(relName, ".toml") {
-				content = s.reencryptSession(content)
+				// 2.4 强制清空导入会话中的主机指纹,杜绝 TOFU 信任静默注入
+				// 2.8 加密失败必须返回错误,禁止降级为明文落盘
+				content, err = s.reencryptSession(content)
+				if err != nil {
+					return importedKeys, skippedKeys, err
+				}
 			}
-			if err := os.WriteFile(target, content, 0644); err != nil {
+			if err := atomicWriteFile(target, content, 0600); err != nil {
 				return importedKeys, skippedKeys, err
 			}
 		}
@@ -664,6 +719,10 @@ func (s *SessionFileService) importKeyFromPackage(content []byte, overwrite bool
 	var kf globalKeyFile
 	if json.Unmarshal(content, &kf) != nil || kf.Name == "" {
 		return false, false, nil
+	}
+	// 2.3 拒绝含路径分隔符或遍历段的密钥名称,防止越目录写密钥库
+	if hasBackslashTraversal(kf.Name) || strings.ContainsAny(kf.Name, `/\`) {
+		return false, false, fmt.Errorf("非法的密钥名称")
 	}
 	if s.GlobalKeys == nil {
 		return false, false, fmt.Errorf("全局密钥服务不可用")
@@ -697,24 +756,26 @@ func (s *SessionFileService) importKeyFromPackage(content []byte, overwrite bool
 }
 
 // reencryptSession 将导出包内的明文会话内容用本机密钥重新加密敏感字段。
-func (s *SessionFileService) reencryptSession(content []byte) []byte {
+// 同时强制清空主机指纹(HostKey),避免 TOFU 信任被绕过。加密失败返回 error,禁止降级为明文落盘。
+func (s *SessionFileService) reencryptSession(content []byte) ([]byte, error) {
 	var data SessionFileData
 	if err := toml.Unmarshal(content, &data); err != nil {
-		return content
+		return nil, fmt.Errorf("解析会话内容失败: %w", err)
 	}
+	data.Session.HostKey = ""
 	if data.Session.Password == "" {
-		return content
+		return toml.Marshal(&data)
 	}
 	encrypted, err := s.encrypt(data.Session.Password)
 	if err != nil {
-		return content
+		return nil, fmt.Errorf("加密会话密码失败: %w", err)
 	}
 	data.Session.Password = encrypted
 	out, err := toml.Marshal(&data)
 	if err != nil {
-		return content
+		return nil, fmt.Errorf("序列化会话内容失败: %w", err)
 	}
-	return out
+	return out, nil
 }
 
 func (s *SessionFileService) GetExportTree() string {
@@ -793,9 +854,14 @@ func (s *SessionFileService) buildImportTree(dir, parentPath string) []*TreeNode
 }
 
 func addToTar(tw *tar.Writer, diskPath, tarPath string, fi os.FileInfo) error {
-	hdr, _ := tar.FileInfoHeader(fi, "")
+	hdr, err := tar.FileInfoHeader(fi, "")
+	if err != nil {
+		return err
+	}
 	hdr.Name = tarPath
-	tw.WriteHeader(hdr)
+	if err := tw.WriteHeader(hdr); err != nil {
+		return err
+	}
 	if fi.IsDir() {
 		return nil
 	}
@@ -804,6 +870,8 @@ func addToTar(tw *tar.Writer, diskPath, tarPath string, fi os.FileInfo) error {
 		return err
 	}
 	defer f.Close()
-	io.Copy(tw, f)
+	if _, err := io.Copy(tw, f); err != nil {
+		return err
+	}
 	return nil
 }

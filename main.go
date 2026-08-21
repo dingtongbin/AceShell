@@ -58,9 +58,9 @@ func main() {
 		return
 	}
 
-	setupCleanup()
-
 	svc := initServices()
+	setupCleanup(func() { svc.rdp.Stop() })
+
 	app := createApp(svc)
 	wireServices(svc, app)
 	createMainWindow(app, svc)
@@ -68,14 +68,16 @@ func main() {
 	if err := app.Run(); err != nil {
 		fmt.Println(err)
 	}
+	svc.rdp.Stop()
 }
 
-// setupCleanup 注册退出清理，确保子进程被终止。
-func setupCleanup() {
+// setupCleanup 注册退出清理，确保子进程被终止、RDP 桥被关闭。
+func setupCleanup(onExit func()) {
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-c
+		onExit()
 		killChildProcesses()
 		os.Exit(0)
 	}()

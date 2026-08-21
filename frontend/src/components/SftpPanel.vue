@@ -39,6 +39,10 @@ const localLoading = ref(false)
 const transfers = ref<{ id: string; name: string; direction: string; percent: number; status: string; transferred: number; size: number; speed: string }[]>([])
 const speedMap = new Map<string, { lastBytes: number; lastTime: number }>()
 let trId = 0
+let remoteSeq = 0
+let localSeq = 0
+const tmpFiles = new Set<string>()
+function cleanupTmpFiles() { for (const p of tmpFiles) { MoveToRecycleBin(p).catch(() => {}) } tmpFiles.clear() }
 
 // 弹窗
 const showMkdir = ref(false); const mkdirName = ref('')
@@ -46,6 +50,9 @@ const showDelete = ref(false); const delTarget = ref<FileInfo | null>(null)
 const delSide = ref('')
 const showEditor = ref(false); const editFile = ref(''); const editContent = ref(''); const editHtml = ref(''); const editPath = ref('')
 const editIsLocal = ref(false)
+const editOriginal = ref('')
+const showEditorCloseConfirm = ref(false)
+let hlTimer: ReturnType<typeof setTimeout> | null = null
 
 // 名称输入弹窗(新建文件/新建文件夹/重命名)
 const showNameDlg = ref(false)
@@ -110,7 +117,7 @@ function stopVDrag() {
   vDrag.dragging = false; document.removeEventListener('mousemove', onVDrag); document.removeEventListener('mouseup', stopVDrag)
 }
 
-onUnmounted(() => { stopHDrag(); stopVDrag(); offProgress?.(); offFileDrop?.() })
+onUnmounted(() => { stopHDrag(); stopVDrag(); offProgress?.(); offFileDrop?.(); speedMap.clear(); cleanupTmpFiles() })
 
 function joinPath(base: string, name: string): string {
   if (base.endsWith('/') || base.endsWith('\\')) return base + name
@@ -121,26 +128,34 @@ function getLocalFullPath(f: { name: string }): string { return joinPath(localPa
 
 // 加载远程
 async function loadRemote(path?: string) {
+  const seq = ++remoteSeq
   remoteLoading.value = true
   try {
     const target = path ?? remotePath.value
     const r = JSON.parse(await List(props.sessionID, target))
+    if (seq !== remoteSeq) return
     if (r.error) { remoteFiles.value = []; message.error(t('sftpPanel.loadRemoteFail') + ': ' + r.error) }
     else { remotePath.value = r.path || target; pathInput.value = remotePath.value; remoteFiles.value = r.files || [] }
-  } catch { remoteFiles.value = []; message.error(t('sftpPanel.loadRemoteFail')) }
-  remoteLoading.value = false
+  } catch {
+    if (seq === remoteSeq) { remoteFiles.value = []; message.error(t('sftpPanel.loadRemoteFail')) }
+  }
+  if (seq === remoteSeq) remoteLoading.value = false
 }
 
 // 加载本地
 async function loadLocal(path?: string) {
+  const seq = ++localSeq
   localLoading.value = true
   try {
     const target = path ?? localPath.value
     const r = JSON.parse(await List('__local__', target))
+    if (seq !== localSeq) return
     if (r.error) { localFiles.value = []; message.error(t('sftpPanel.loadLocalFail') + ': ' + r.error) }
     else { localPath.value = r.path || target; localPathInput.value = localPath.value; localFiles.value = r.files || [] }
-  } catch { localFiles.value = []; message.error(t('sftpPanel.loadLocalFail')) }
-  localLoading.value = false
+  } catch {
+    if (seq === localSeq) { localFiles.value = []; message.error(t('sftpPanel.loadLocalFail')) }
+  }
+  if (seq === localSeq) localLoading.value = false
 }
 
 function openLocal(f: FileInfo) { if (f.isDir) loadLocal(joinPath(localPath.value, f.name)) }
@@ -186,7 +201,7 @@ function getRemotePath(f: { name: string }) { return remotePath.value === '/' ? 
 function doUploadFile(f: { name: string; path?: string }) {
   const localFilePath = f.path || getLocalFullPath(f)
   const rp = getRemotePath(f)
-  const id = 'up_' + (++trId)
+  const id = 'up_' + props.tabId + '_' + (++trId)
   transfers.value.push({ id, name: f.name, direction: '↑', percent: 0, status: 'transferring', transferred: 0, size: 0, speed: '0 B/s' })
   speedMap.set(id, { lastBytes: 0, lastTime: Date.now() })
   UploadProgress(props.sessionID, localFilePath, rp, id).then((result: string) => {
@@ -206,15 +221,16 @@ function doUploadFile(f: { name: string; path?: string }) {
 
 function doUploadPicker() {
   const inp = document.createElement('input'); inp.type = 'file'
-  inp.onchange = () => { const f = inp.files?.[0]; if (f) doUploadFile({ name: f.name, path: (f as any).path || f.name }) }
+  inp.onchange = () => { const f = inp.files?.[0]; if (!f) return; const p = (f as any).path; if (!p) { message.error(t('sftpPanel.noFilePath')); return } doUploadFile({ name: f.name, path: p }) }
   inp.click()
 }
 
 // 下载
 async function doDownload(file: FileInfo) {
   const rp = getRemotePath(file)
-  const id = 'dn_' + (++trId)
+  const id = 'dn_' + props.tabId + '_' + (++trId)
   const tmpPath = 'tmp/.sftp_dl_' + Date.now() + '_' + file.name
+  tmpFiles.add(tmpPath)
   transfers.value.push({ id, name: file.name, direction: '↓', percent: 0, status: 'transferring', transferred: 0, size: 0, speed: '0 B/s' })
   speedMap.set(id, { lastBytes: 0, lastTime: Date.now() })
   try {
@@ -235,7 +251,7 @@ async function doDownload(file: FileInfo) {
 async function doDownloadToLocal(file: FileInfo) {
   const rp = getRemotePath(file)
   const localDst = joinPath(localPath.value, file.name)
-  const id = 'dn_' + (++trId)
+  const id = 'dn_' + props.tabId + '_' + (++trId)
   transfers.value.push({ id, name: file.name, direction: '↓', percent: 0, status: 'transferring', transferred: 0, size: 0, speed: '0 B/s' })
   speedMap.set(id, { lastBytes: 0, lastTime: Date.now() })
   try {
@@ -254,6 +270,7 @@ async function doDownloadToLocal(file: FileInfo) {
 
 // 预览
 async function openPreview(f: FileInfo, side: string) {
+  if (f.size > 50 * 1024 * 1024) { message.error(t('sftpPanel.fileTooLarge')); return }
   previewFile.value = f.name
   if (side === 'local') {
     previewUrl.value = await ReadFileBase64(getLocalFullPath(f))
@@ -263,6 +280,7 @@ async function openPreview(f: FileInfo, side: string) {
     const result = await Download(props.sessionID, rp, tmpPath)
     const data = JSON.parse(result)
     if (data.error) { previewUrl.value = ''; return }
+    tmpFiles.add(tmpPath)
     previewUrl.value = await ReadFileBase64(tmpPath)
   }
   previewType.value = isImage(f.name) ? 'image' : isVideo(f.name) ? 'video' : ''
@@ -320,6 +338,7 @@ function openContextMenu(e: MouseEvent, side: string, f: FileInfo) {
 async function remoteExternal(f: FileInfo, editor: boolean) {
   const rp = getRemotePath(f)
   const tmpPath = 'tmp/.sftp_ext_' + Date.now() + '_' + f.name
+  tmpFiles.add(tmpPath)
   try {
     const result = await Download(props.sessionID, rp, tmpPath)
     const data = JSON.parse(result)
@@ -429,6 +448,7 @@ async function openEditor(file: FileInfo) {
     try { const d = JSON.parse(result); if (d.error) { message.error(t('sftpPanel.openEditorFail', { err: d.error })); return } } catch { /* 非错误 JSON,按内容处理 */ }
   }
   editContent.value = result
+  editOriginal.value = result
   lastLineCount = 0
   updateLineNumbers()
   editHtml.value = hljs.highlight(editContent.value, { language: getLang(file.name) }).value
@@ -444,6 +464,7 @@ async function openLocalEditor(file: FileInfo) {
     message.error(t('sftpPanel.openEditorFail', { err: (err && err.message) || t('sftpPanel.readFail') }))
     return
   }
+  editOriginal.value = editContent.value
   lastLineCount = 0
   updateLineNumbers()
   editHtml.value = hljs.highlight(editContent.value, { language: getLang(file.name) }).value
@@ -459,11 +480,15 @@ function onEditorInput() {
   const st = el?.scrollTop || 0
   const sl = el?.scrollLeft || 0
   updateLineNumbers()
-  updateHl()
+  scheduleHl()
   nextTick(() => {
     if (editorHlRef.value) { editorHlRef.value.scrollTop = st; editorHlRef.value.scrollLeft = sl }
     if (lineNumRef.value) lineNumRef.value.scrollTop = st
   })
+}
+function scheduleHl() {
+  if (hlTimer) clearTimeout(hlTimer)
+  hlTimer = setTimeout(() => { updateHl() }, 300)
 }
 function syncEditorScroll(e: Event) {
   const ta = e.target as HTMLTextAreaElement
@@ -488,8 +513,21 @@ async function saveEditor() {
   if (editIsLocal.value) loadLocal(); else loadRemote()
 }
 
+function cancelEditor() {
+  if (editContent.value !== editOriginal.value) { showEditorCloseConfirm.value = true; return }
+  showEditor.value = false
+}
+function discardEditorChanges() {
+  showEditorCloseConfirm.value = false
+  showEditor.value = false
+}
+
 function clearDoneTransfers() {
-  transfers.value = transfers.value.filter(t => t.status === 'transferring')
+  const remaining = transfers.value.filter(t => t.status === 'transferring')
+  for (const t of transfers.value) {
+    if (t.status !== 'transferring') speedMap.delete(t.id)
+  }
+  transfers.value = remaining
 }
 
 async function cancelTransfer(id: string) {
@@ -533,7 +571,7 @@ function fileNameFromPath(p: string): string {
 
 function handleSystemFileDrop(d: any) {
   if (typeof d === 'string') d = JSON.parse(d)
-  if (!d || d.panelId !== 'sftp-remote-drop-' + props.sessionID || !Array.isArray(d.files)) return
+  if (!d || d.panelId !== 'sftp-remote-drop-' + props.tabId || !Array.isArray(d.files)) return
   for (const p of d.files) {
     doUploadFile({ name: fileNameFromPath(p), path: p })
   }
@@ -582,7 +620,7 @@ onMounted(async () => {
       <!-- 分割手柄 -->
       <div class="h-handle" @mousedown="startHDrag"><div class="h-handle-line" /></div>
       <!-- 右面板 -->
-      <div class="sftp-pane" :id="'sftp-remote-drop-' + props.sessionID" data-file-drop-target style="flex:1" @dragover.prevent @drop="(e: DragEvent) => onDrop(e, 'remote')">
+      <div class="sftp-pane" :id="'sftp-remote-drop-' + props.tabId" data-file-drop-target style="flex:1" @dragover.prevent @drop="(e: DragEvent) => onDrop(e, 'remote')">
         <div class="pane-header">{{ t('sftpPanel.remoteServer') }}</div>
         <div class="pane-toolbar">
           <n-button size="tiny" quaternary @click="loadRemote('/')"><n-icon :size="14" :component="HomeOutline" /></n-button>
@@ -667,7 +705,16 @@ onMounted(async () => {
           <pre ref="editorHlRef" class="editor-hl" v-html="editHtml" />
         </div>
       </div>
-      <template #footer><n-button @click="showEditor = false">{{ t('common.cancel') }}</n-button><n-button type="primary" @click="saveEditor" style="margin-left:8px">{{ t('common.save') }}</n-button></template>
+      <template #footer><n-button @click="cancelEditor">{{ t('common.cancel') }}</n-button><n-button type="primary" @click="saveEditor" style="margin-left:8px">{{ t('common.save') }}</n-button></template>
+    </n-modal>
+
+    <!-- 编辑器未保存关闭确认 -->
+    <n-modal v-model:show="showEditorCloseConfirm" :title="t('sftpPanel.editorCloseTitle')" preset="dialog" :show-icon="false" style="width: 400px" :mask-closable="false">
+      <div>{{ t('sftpPanel.editorCloseMsg') }}</div>
+      <template #action>
+        <n-button @click="showEditorCloseConfirm = false">{{ t('common.cancel') }}</n-button>
+        <n-button type="error" @click="discardEditorChanges">{{ t('sftpPanel.editorDiscard') }}</n-button>
+      </template>
     </n-modal>
 
     <!-- 预览弹窗 -->

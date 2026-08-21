@@ -47,7 +47,7 @@ func startEchoServer(t *testing.T) string {
 
 func TestBridge_EchoRoundTrip(t *testing.T) {
 	echoAddr := startEchoServer(t)
-	baseURL, err := Start(func(token string) bool { return token == "test-token" })
+	baseURL, _, err := Start(func(token string) (string, bool) { return echoAddr, token == "test-token" })
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
@@ -83,7 +83,7 @@ func TestBridge_EchoRoundTrip(t *testing.T) {
 
 func TestBridge_RejectsBadToken(t *testing.T) {
 	echoAddr := startEchoServer(t)
-	baseURL, err := Start(func(token string) bool { return token == "ok" })
+	baseURL, _, err := Start(func(token string) (string, bool) { return echoAddr, token == "ok" })
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
@@ -98,10 +98,6 @@ func TestBridge_RejectsBadToken(t *testing.T) {
 }
 
 func TestBridge_RejectsBadTarget(t *testing.T) {
-	baseURL, err := Start(func(token string) bool { return token == "ok" })
-	if err != nil {
-		t.Fatalf("Start failed: %v", err)
-	}
 	cases := []string{
 		"127.0.0.1:notaport",
 		"../../etc/passwd:22",
@@ -109,9 +105,14 @@ func TestBridge_RejectsBadTarget(t *testing.T) {
 		"",
 	}
 	for _, target := range cases {
+		// 令牌绑定一个非法目标,桥必须在校验目标阶段拒绝(防 SSRF)。
+		baseURL, _, err := Start(func(token string) (string, bool) { return target, token == "ok" })
+		if err != nil {
+			t.Fatalf("Start failed: %v", err)
+		}
 		wsURL := strings.Replace(baseURL, "http://", "ws://", 1) + "/bridge?token=ok&target=" + target
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		_, _, err := websocket.Dial(ctx, wsURL, nil)
+		_, _, err = websocket.Dial(ctx, wsURL, nil)
 		cancel()
 		if err == nil {
 			t.Errorf("expected dial to fail for target %q", target)
@@ -165,7 +166,7 @@ func TestBridge_TargetDialFailure(t *testing.T) {
 	closedAddr := ln.Addr().String()
 	_ = ln.Close() // 立即关闭,让地址处于未监听状态
 
-	baseURL, err := Start(func(token string) bool { return token == "ok" })
+	baseURL, _, err := Start(func(token string) (string, bool) { return closedAddr, token == "ok" })
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}

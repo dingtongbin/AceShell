@@ -3,67 +3,13 @@ package wsbridge
 import (
 	"bufio"
 	"bytes"
-	"context"
 	"crypto/tls"
 	"encoding/binary"
 	"fmt"
 	"io"
 	"net"
-	"net/http"
 	"time"
-
-	"github.com/coder/websocket"
 )
-
-// handleRdcleanpathBridge 处理 RDP 模式的桥接:解析 IronRDP 的 RDCleanPath 握手,
-// 校验代理令牌后连接目标,以 TLS 客户端终止服务器加密会话,把服务器 X.224 确认
-// 与证书链装回响应,随后以解密后的明文 RDP 流与客户端双向透传。
-func handleRdcleanpathBridge(ws *websocket.Conn, r *http.Request, tokenCheck func(string) bool) {
-	ctx := context.Background()
-	ws.SetReadLimit(1 << 20)
-	_, data, err := ws.Read(ctx)
-	if err != nil {
-		_ = ws.Close(websocket.StatusProtocolError, "missing rdcleanpath request")
-		return
-	}
-	req, err := decodeRdcleanpathRequest(data)
-	if err != nil {
-		_ = ws.Close(websocket.StatusProtocolError, "invalid rdcleanpath request")
-		return
-	}
-	if !tokenCheck(req.proxyAuth) {
-		_ = ws.Close(websocket.StatusPolicyViolation, "forbidden")
-		return
-	}
-	tcp, err := net.DialTimeout("tcp", req.destination, 10*time.Second)
-	if err != nil {
-		_ = ws.Close(websocket.StatusInternalError, "dial failed")
-		return
-	}
-	defer tcp.Close()
-	if _, err := tcp.Write(ensureX224RequestsTLS(req.x224Request)); err != nil {
-		return
-	}
-
-	resp, certs, stream, err := readServerGreeting(tcp)
-	if err != nil {
-		_ = ws.Close(websocket.StatusInternalError, err.Error())
-		return
-	}
-	if len(certs) == 0 {
-		_ = ws.Close(websocket.StatusInternalError, "no server certificate")
-		return
-	}
-	serverAddr, _, err := net.SplitHostPort(req.destination)
-	if err != nil {
-		serverAddr = req.destination
-	}
-	response := encodeRdcleanpathResponse(serverAddr, resp, certs)
-	if err := ws.Write(ctx, websocket.MessageBinary, response); err != nil {
-		return
-	}
-	relay(ws, stream)
-}
 
 // bufferedConn 保留已读缓冲的 net.Conn 包装,供 TLS 客户端继续使用。
 type bufferedConn struct {
@@ -123,12 +69,19 @@ func readServerGreeting(conn net.Conn) ([]byte, [][]byte, net.Conn, error) {
 }
 
 // x224SelectedProtocol 从 X.224 连接确认中解析服务器选定的 RDP 安全协议。
-// RDP 协商响应(type=0x02)结构: type(1) flags(1) length(2) selected(4, 小端)。
+// RDP 协商响应(RDP_NEG_RSP)结构: type(1) flags(1) length(2,小端) selected(4,小端)。
+// 按 MS-RDPBCGR,flags 为保留位,多数服务器返回 0x00,故只匹配 type==0x02
+// 并校验 length,避免误报"服务器未启用 TLS";length 越界则跳过该候选位置。
 func x224SelectedProtocol(body []byte) uint32 {
 	for i := 0; i+8 <= len(body); i++ {
-		if body[i] == 0x02 && body[i+1] == 0x01 {
-			return binary.LittleEndian.Uint32(body[i+4 : i+8])
+		if body[i] != 0x02 {
+			continue
 		}
+		length := int(body[i+2]) | int(body[i+3])<<8
+		if length < 8 || i+length > len(body) {
+			continue
+		}
+		return binary.LittleEndian.Uint32(body[i+4 : i+8])
 	}
 	return 0
 }

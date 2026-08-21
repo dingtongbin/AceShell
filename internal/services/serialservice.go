@@ -22,6 +22,7 @@ type SerialSession struct {
 	Status   string `json:"status"`
 	port     serial.Port
 	mu       sync.Mutex
+	closed   bool
 }
 
 func (s *SerialService) SetApp(app *application.App) {
@@ -61,7 +62,7 @@ func (s *SerialService) Connect(id, portName string, baudRate, dataBits int, sto
 
 	port, err := serial.Open(portName, mode)
 	if err != nil {
-		s.safeEmit("session-status-changed", fmt.Sprintf(`{"id":"%s","status":"error","message":"%s"}`, id, err.Error()))
+		s.safeEmit("session-status-changed", fmt.Sprintf(`{"id":"%s","status":"error","message":"%s"}`, id, escapeJSON(err.Error())))
 		return err
 	}
 
@@ -88,13 +89,9 @@ func (s *SerialService) readLoop(sess *SerialSession) {
 		}
 		if err != nil {
 			if err != io.EOF {
-				s.safeEmit("session-status-changed", fmt.Sprintf(`{"id":"%s","status":"error","message":"%s"}`, sess.ID, err.Error()))
+				s.safeEmit("session-status-changed", fmt.Sprintf(`{"id":"%s","status":"error","message":"%s"}`, sess.ID, escapeJSON(err.Error())))
 			}
-			s.mu.Lock()
-			delete(s.sess, sess.ID)
-			s.mu.Unlock()
-			sess.port.Close()
-			s.safeEmit("session-status-changed", fmt.Sprintf(`{"id":"%s","status":"disconnected"}`, sess.ID))
+			s.closeSession(sess)
 			return
 		}
 	}
@@ -114,6 +111,9 @@ func (s *SerialService) Send(id, data string) error {
 	}
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
+	if sess.closed {
+		return fmt.Errorf("会话已关闭")
+	}
 	_, err := sess.port.Write([]byte(data))
 	return err
 }
@@ -126,16 +126,31 @@ func (s *SerialService) Disconnect(id string) error {
 		return fmt.Errorf("服务未初始化")
 	}
 	sess, ok := s.sess[id]
+	s.mu.Unlock()
 	if !ok {
-		s.mu.Unlock()
 		return fmt.Errorf("会话未找到")
 	}
-	delete(s.sess, id)
-	s.mu.Unlock()
-
-	sess.port.Close()
-	s.safeEmit("session-status-changed", fmt.Sprintf(`{"id":"%s","status":"disconnected"}`, id))
+	s.closeSession(sess)
 	return nil
+}
+
+// closeSession 幂等地关闭串口会话:只关闭一次端口、删除会话并发送 disconnected 事件。
+func (s *SerialService) closeSession(sess *SerialSession) {
+	sess.mu.Lock()
+	if sess.closed {
+		sess.mu.Unlock()
+		return
+	}
+	sess.closed = true
+	port := sess.port
+	sess.mu.Unlock()
+	if port != nil {
+		port.Close()
+	}
+	s.mu.Lock()
+	delete(s.sess, sess.ID)
+	s.mu.Unlock()
+	s.safeEmit("session-status-changed", fmt.Sprintf(`{"id":"%s","status":"disconnected"}`, sess.ID))
 }
 
 // ListPorts 列出系统可用串口。

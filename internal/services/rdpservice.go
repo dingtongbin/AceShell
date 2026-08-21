@@ -1,15 +1,19 @@
 package services
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"changeme/internal/services/wsbridge"
 
@@ -38,6 +42,13 @@ type RdpTestServer struct {
 	Password string `json:"password"`
 }
 
+// bridgeTok 记录 RDP 桥接令牌绑定的目标地址与过期时间。
+// target 由后端在生成令牌时确定,桥接时绝不信任客户端 URL/PDU 中的目标参数(防 SSRF)。
+type bridgeTok struct {
+	target string
+	expiry time.Time
+}
+
 // RdpService 提供 RDP 图形会话的桥接连接信息。
 // 桥仅绑定 127.0.0.1,每会话使用一次性随机 token 防本机其他进程蹭用。
 type RdpService struct {
@@ -45,7 +56,8 @@ type RdpService struct {
 	sessionFiles *SessionFileService
 	mu           sync.RWMutex
 	bridgeBase   string
-	tokens       map[string]string // token -> host:port
+	tokens       map[string]bridgeTok // token -> 绑定的目标与过期时间
+	httpSrv      *http.Server
 }
 
 func (r *RdpService) SetApp(app *application.App) {
@@ -58,22 +70,48 @@ func (r *RdpService) SetSessionFiles(sf *SessionFileService) {
 
 // Start 启动本机 WebSocket 字节桥,返回基础 URL。
 func (r *RdpService) Start() (string, error) {
-	base, err := wsbridge.Start(r.validToken)
+	base, srv, err := wsbridge.Start(r.validToken)
 	if err != nil {
 		return "", err
 	}
 	r.mu.Lock()
+	if r.httpSrv != nil {
+		_ = r.httpSrv.Shutdown(context.Background())
+	}
 	r.bridgeBase = base
-	r.tokens = map[string]string{}
+	r.httpSrv = srv
+	r.tokens = map[string]bridgeTok{}
 	r.mu.Unlock()
 	return base, nil
 }
 
-func (r *RdpService) validToken(token string) bool {
+// Stop 关闭本机 RDP 桥 HTTP 服务,释放监听端口。
+func (r *RdpService) Stop() {
+	r.mu.Lock()
+	srv := r.httpSrv
+	r.httpSrv = nil
+	r.mu.Unlock()
+	if srv != nil {
+		_ = srv.Shutdown(context.Background())
+	}
+}
+
+// validToken 校验令牌并返回其绑定的目标地址。
+// 返回 ("", false) 表示令牌无效或已过期;过期项在此惰性删除,避免 map 无限增长。
+func (r *RdpService) validToken(token string) (string, bool) {
 	r.mu.RLock()
-	defer r.mu.RUnlock()
-	_, ok := r.tokens[token]
-	return ok
+	bt, ok := r.tokens[token]
+	r.mu.RUnlock()
+	if !ok {
+		return "", false
+	}
+	if time.Now().After(bt.expiry) {
+		r.mu.Lock()
+		delete(r.tokens, token)
+		r.mu.Unlock()
+		return "", false
+	}
+	return bt.target, true
 }
 
 // GetRdpConnection 根据会话路径返回 RDP 连接信息(含解密后的密码与桥接 WS 地址)。
@@ -134,7 +172,7 @@ func (r *RdpService) buildRdpConnection(sessionPath string) (*RdpConnection, err
 	}
 	target := net.JoinHostPort(info.Host, fmt.Sprintf("%d", info.Port))
 	r.mu.Lock()
-	r.tokens[token] = target
+	r.tokens[token] = bridgeTok{target: target, expiry: time.Now().Add(10 * time.Minute)}
 	r.mu.Unlock()
 
 	return &RdpConnection{
@@ -155,8 +193,9 @@ func (r *RdpService) ReleaseRdpConnection(token string) {
 }
 
 // bridgeWsURL 组装桥接 WebSocket 地址(rdp=1 表示走 RDCleanPath 代理握手)。
+// target 经过 url.QueryEscape,避免 IPv6 等含特殊字符的地址解析出错。
 func bridgeWsURL(base, token, target string) string {
-	return strings.Replace(base, "http://", "ws://", 1) + "/bridge?rdp=1&token=" + token + "&target=" + target
+	return strings.Replace(base, "http://", "ws://", 1) + "/bridge?rdp=1&token=" + token + "&target=" + url.QueryEscape(target)
 }
 
 // newBridgeToken 生成 32 字节随机十六进制令牌。

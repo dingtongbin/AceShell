@@ -38,11 +38,17 @@ func (s *SessionFileService) loadKnownHosts(filePath string) (map[string]string,
 
 func (s *SessionFileService) saveProjectKnownHosts(folder, addr, keyB64 string) error {
 	f := s.knownHostsPath(folder)
-	os.MkdirAll(filepath.Dir(f), 0755)
-	m, _ := s.loadKnownHosts(f)
+	os.MkdirAll(filepath.Dir(f), 0700)
+	m, err := s.loadKnownHosts(f)
+	if err != nil || m == nil {
+		m = make(map[string]string)
+	}
 	m[addr] = keyB64
-	data, _ := json.Marshal(m)
-	return os.WriteFile(f, data, 0644)
+	data, err := json.Marshal(m)
+	if err != nil {
+		return err
+	}
+	return atomicWriteFile(f, data, 0600)
 }
 
 // listSessionFiles 列出指定文件夹下的全部会话文件路径。
@@ -117,7 +123,7 @@ func (s *SessionFileService) setSessionField(path string, mutate func(*SessionIn
 	if err != nil {
 		return
 	}
-	os.WriteFile(path, out, 0644)
+	atomicWriteFile(path, out, 0600)
 }
 
 // findSessionHostKey 在会话文件中查找匹配 host:port 的 SSH 会话指纹。
@@ -170,7 +176,7 @@ func (s *SessionFileService) removeProjectKnownHosts(folder, addr string) error 
 	}
 	delete(m, addr)
 	data, _ := json.Marshal(m)
-	return os.WriteFile(f, data, 0644)
+	return atomicWriteFile(f, data, 0600)
 }
 
 // RemoveHostKey 删除主机指纹:清理文件夹级 known_hosts.json 与会话文件中的指纹。

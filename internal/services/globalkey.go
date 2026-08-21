@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -62,6 +63,7 @@ type globalKeyFile struct {
 
 // GlobalKeyService 全局密钥库服务。
 type GlobalKeyService struct {
+	mu sync.Mutex
 }
 
 // keysDir 返回密钥库目录路径。
@@ -71,7 +73,7 @@ func (g *GlobalKeyService) keysDir() string {
 
 // ensureKeysDir 确保密钥库目录存在。
 func (g *GlobalKeyService) ensureKeysDir() error {
-	return os.MkdirAll(g.keysDir(), 0755)
+	return os.MkdirAll(g.keysDir(), 0700)
 }
 
 // keyFilePath 返回密钥文件路径。
@@ -187,12 +189,17 @@ func (g *GlobalKeyService) loadByName(name string) (*GlobalKeyContent, error) {
 // CreateKey 生成新密钥并保存。keyType: ed25519 / rsa2048 / rsa4096。
 // passphrase 可空;非空时私钥 PEM 以该口令加密(口令本身再经主密钥加密存储)。
 func (g *GlobalKeyService) CreateKey(name, keyType, passphrase string) (string, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
 	if err := g.ensureKeysDir(); err != nil {
 		return "", err
 	}
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return "", fmt.Errorf("密钥名称不能为空")
+	}
+	if sanitizeName(name) != name {
+		return "", fmt.Errorf("密钥名称包含非法字符(不能包含 / \\ 或 ..)")
 	}
 	if passphrase != "" && len(passphrase) < 4 {
 		return "", fmt.Errorf("口令至少 4 个字符")
@@ -292,6 +299,8 @@ func (g *GlobalKeyService) uniqueKeyFileName(name string) string {
 
 // DeleteKey 删除指定密钥。
 func (g *GlobalKeyService) DeleteKey(id string) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
 	files, err := filepath.Glob(filepath.Join(g.keysDir(), "*.json"))
 	if err != nil {
 		return err

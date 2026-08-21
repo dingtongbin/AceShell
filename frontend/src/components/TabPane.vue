@@ -78,7 +78,7 @@ async function sendToTab(id: string, p: string, d: string) {
     else if (p === 'serial') await SerialSend(id, d)
     else await TelnetSend(id, d)
   } catch {
-const tab = findTabById(id)
+    const tab = findTabById(id)
     if (tab?.terminal) {
       tab.terminal.write('\r\n\x1b[31m' + t('tabPane.sendFailed') + '\x1b[0m\r\n')
     }
@@ -184,7 +184,7 @@ async function openSession(sessionPath: string) {
     actions.openRdp({ sessionPath, name: meta.name || meta.host, host: meta.host, port: meta.port })
     return
   }
-  const tabId = sessionPath + '@' + Date.now()
+  const tabId = sessionPath + '@' + Date.now() + '-' + Math.random().toString(36).slice(2, 8)
   const tabData: Tab = { id: tabId, sessionPath, title: meta.name || sessionPath, protocol: meta.protocol || 'telnet', host: meta.host, port: meta.port, username: meta.username || '', status: 'connecting', terminal: null, fitAddon: null, logBuffer: '', kind: 'terminal' }
   pane.tabs.push(tabData); pane.activeTabId = tabId
   nextTick(async () => {
@@ -356,7 +356,7 @@ function handleResize() {
 // 多行粘贴确认
 function confirmPaste() {
   const targetId = pasteTargetId.value
-  const outer = pane.tabs.find(t => t.id === targetId)
+  const outer = findTabById(targetId)
   if (outer && outer.status === 'connected') {
     sendToTab(outer.id, outer.protocol, pasteContent.value)
   }
@@ -455,19 +455,23 @@ async function doCloseTab(tab: Tab) {
     if (ok === false) return
     const cur = pane.tabs.findIndex(t => t.id === tab.id); if (cur === -1) return
     pane.tabs.splice(cur, 1)
-    pane.activeTabId = pane.tabs.length > 0 ? pane.tabs[Math.min(cur, pane.tabs.length - 1)].id : null
+    if (pane.activeTabId === tab.id) {
+      pane.activeTabId = pane.tabs.length > 0 ? pane.tabs[Math.min(cur, pane.tabs.length - 1)].id : null
+    }
     return
   }
   // 关闭挂在该 SSH 连接上的 SFTP 面板标签页
   if (tab.protocol === 'ssh') closeSftpPanelsOf(tab.id)
-  tab.terminal?.dispose()
+  disposeTerminal(tab)
   if (tab.status === 'connected' || tab.status === 'connecting') {
     if (tab.protocol === 'ssh') SSHDisconnect(tab.id).catch(() => {})
     else if (tab.protocol === 'serial') SerialDisconnect(tab.id).catch(() => {})
     else TelnetDisconnect(tab.id).catch(() => {})
   }
   pane.tabs.splice(idx, 1)
-  pane.activeTabId = pane.tabs.length > 0 ? pane.tabs[Math.min(idx, pane.tabs.length - 1)].id : null
+  if (pane.activeTabId === tab.id) {
+    pane.activeTabId = pane.tabs.length > 0 ? pane.tabs[Math.min(idx, pane.tabs.length - 1)].id : null
+  }
   nextTick(() => { const a = pane.tabs.find(t => t.id === pane.activeTabId); if (a) scheduleFit(a) })
 }
 
@@ -508,12 +512,10 @@ function switchTab(id: string) {
 }
 
 function reconnectAll() { pane.tabs.filter(t => t.kind === 'terminal' && (t.status === 'idle' || t.status === 'error')).forEach(t => reconnectTab(t)) }
-function closeAll() {
-  pane.tabs.forEach(t => {
-    if (t.kind === 'component') { t.onClose?.(); return }
-    t.terminal?.dispose(); if (t.status === 'connected') disconnectTab(t)
-  })
-  pane.tabs = []; pane.activeTabId = null
+async function closeAll() {
+  for (const t of [...pane.tabs]) {
+    await doCloseTab(t)
+  }
 }
 function closeDisconnected() { [...pane.tabs].filter(t => t.kind === 'terminal' && (t.status === 'idle' || t.status === 'error')).forEach(t => doCloseTab(t)) }
 function disconnectTab(tab: Tab) {
@@ -540,7 +542,7 @@ async function reconnectTab(tab: Tab) {
   if (tab.status === 'connected' || tab.status === 'connecting') {
     disconnectTab(tab)
   }
-  tab.terminal?.dispose()
+  disposeTerminal(tab)
   tab.terminal = null
   tab.fitAddon = null
   tab.status = 'connecting'
@@ -604,7 +606,7 @@ function handleTabMenu(key: string) {
   switch (key) { case 'reconnectDisconnected': reconnectAll(); break; case 'reconnectAll': pane.tabs.forEach(t => reconnectTab(t)); break; case 'closeDisconnected': closeDisconnected(); break; case 'closeAll': closeAll(); break }
 }
 
-let cursorRow = ref(0)
+const cursorRow = ref(0)
 const cursorCol = ref(0)
 let cursorTimer: ReturnType<typeof setInterval> | null = null
 
@@ -840,7 +842,6 @@ onMounted(() => {
   nextTick(() => {
     const el = tabsContainerRef.value
     if (el) {
-      el.addEventListener('scroll', onTabsScroll)
       updateScrollState()
     }
   })
@@ -1127,7 +1128,7 @@ const dropZoneLabel = computed(() => {
           <n-icon :size="14" :component="ChevronDownOutline" class="v-tabs-menu-icon" />
         </n-dropdown>
       </div>
-      <div ref="tabsContainerRef" class="v-tabs-list" @wheel="onTabsWheel" @dragover="onTabsContainerDragOver" @dragleave="onTabsDragLeave" @drop="onTabsContainerDrop">
+      <div ref="tabsContainerRef" class="v-tabs-list" @wheel="onTabsWheel" @scroll="onTabsScroll" @dragover="onTabsContainerDragOver" @dragleave="onTabsDragLeave" @drop="onTabsContainerDrop">
         <template v-for="(tab, idx) in pane.tabs" :key="tab.id">
           <div class="tab-insert-mark v" :class="{ active: insertIdx === idx }">
             <span class="tab-insert-label">{{ t('tabPane.moveHere') }}</span>

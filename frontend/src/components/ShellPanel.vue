@@ -658,34 +658,35 @@ function handleOpenFile(path: string) {
       if (!editorApi || !editorApi.isDirty()) return true
       const api = editorApi
       return new Promise<boolean>(resolve => {
-        editorClosePending.value = { fileName: name, api, resolve }
+        editorClosePending.value.push({ fileName: name, api, resolve })
       })
     },
   }) || ''
 }
 
-// 文件编辑器未保存关闭确认:保存并关闭 / 不保存关闭 / 取消
-const editorClosePending = ref<{ fileName: string; api: FileEditorApi; resolve: (v: boolean) => void } | null>(null)
+// 文件编辑器未保存关闭确认:保存并关闭 / 不保存关闭 / 取消(连续关闭多个脏文件时排队)
+interface EditorCloseReq { fileName: string; api: FileEditorApi; resolve: (v: boolean) => void }
+const editorClosePending = ref<EditorCloseReq[]>([])
 
 async function confirmEditorCloseSave() {
-  const pending = editorClosePending.value
+  const pending = editorClosePending.value[0]
   if (!pending) return
-  editorClosePending.value = null
+  editorClosePending.value = editorClosePending.value.slice(1)
   const ok = await pending.api.save()
   pending.resolve(ok)
 }
 
 function confirmEditorCloseDiscard() {
-  const pending = editorClosePending.value
+  const pending = editorClosePending.value[0]
   if (!pending) return
-  editorClosePending.value = null
+  editorClosePending.value = editorClosePending.value.slice(1)
   pending.resolve(true)
 }
 
 function cancelEditorClose() {
-  const pending = editorClosePending.value
+  const pending = editorClosePending.value[0]
   if (!pending) return
-  editorClosePending.value = null
+  editorClosePending.value = editorClosePending.value.slice(1)
   pending.resolve(false)
 }
 
@@ -947,9 +948,9 @@ onBeforeUnmount(() => {
     </n-modal>
 
     <!-- 文件编辑器未保存关闭确认 -->
-    <n-modal :show="!!editorClosePending" :title="t('shellPanel.unsavedTitle')" preset="dialog" :show-icon="false" style="width: 400px" :mask-closable="false">
+    <n-modal :show="editorClosePending.length > 0" :title="t('shellPanel.unsavedTitle')" preset="dialog" :show-icon="false" style="width: 400px" :mask-closable="false">
       <div style="font-size: 14px">
-        <p>{{ t('shellPanel.unsavedMsg', { file: editorClosePending?.fileName }) }}</p>
+        <p>{{ t('shellPanel.unsavedMsg', { file: editorClosePending[0]?.fileName }) }}</p>
         <p style="margin-top: 8px; color: #e45858; font-size: 12px">{{ t('shellPanel.unsavedAsk') }}</p>
       </div>
       <template #action>

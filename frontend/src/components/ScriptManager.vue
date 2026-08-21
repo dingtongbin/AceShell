@@ -434,7 +434,10 @@ async function handleRenameAndMove() {
   if (stillConflict) { message.warning(t('scriptManager.stillConflict')); return }
 
   try {
+    const oldBase = renamePath.split('/').pop() || ''
     await MoveScriptItem(renamePath, dest || '.')
+    const movedPath = (dest && dest !== '.' && dest !== '') ? dest + '/' + oldBase : oldBase
+    await RenameFile(movedPath, newName)
     await loadTree()
   } catch (err: any) { message.error(t('scriptManager.moveFailed', { err: (err && err.message) || t('scriptManager.unknownError') })) }
 

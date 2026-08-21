@@ -60,9 +60,6 @@ const pwStrength = computed(() => {
 
 function validatePassword(pw: string): string | null {
   if (!pw) return t('importDialog.pwEmptyError')
-  const n = [...pw].length
-  if (n < 8 || n > 64) return t('importDialog.pwLengthError')
-  if (passwordCategories(pw) < 3) return t('importDialog.pwFullCategoryError')
   return null
 }
 
@@ -212,7 +209,9 @@ function onDrop(e: DragEvent) {
   e.preventDefault()
   const file = e.dataTransfer?.files?.[0]
   if (!file) return
-  filePath.value = (file as any).path || file.name
+  const p = (file as any).path
+  if (!p) { message.error(t('importDialog.noFilePath')); return }
+  filePath.value = p
   fileName.value = file.name
   resetPackageState()
 }
@@ -439,7 +438,7 @@ function confirmClose() {
             </div>
           </div>
           <div v-if="!localLoaded" class="tree-tip">{{ t('importDialog.loading') }}</div>
-          <div v-else-if="localFlat.length === 0" class="tree-tip">{{ t('importDialog.tipNoLocal') }}</div>
+          <div v-else-if="localFlat.length <= 1" class="tree-tip">{{ t('importDialog.tipNoLocal') }}</div>
         </n-scrollbar>
       </div>
     </div>
