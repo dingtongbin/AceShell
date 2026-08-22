@@ -250,6 +250,7 @@ func (d *DirectTelnetService) readLoop(sess *TelnetSession) {
 				output := string(cleaned)
 				d.emit("session-output", fmt.Sprintf(`{"id":"%s","data":"%s"}`, sess.ID, escapeJSON(output)))
 				if MainLogService != nil { MainLogService.LogOutput(sess.ID, output) }
+				if MainMcpService != nil { MainMcpService.TapOutput(sess.ID, cleaned) }
 				d.tryAutoLogin(sess, output)
 			}
 		}

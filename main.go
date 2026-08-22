@@ -48,12 +48,14 @@ type services struct {
 	clipboard    *appservices.ClipboardService
 	version      *appservices.VersionService
 	rdp          *appservices.RdpService
+	mcp          *appservices.McpService
+	agent        *appservices.AgentService
 }
 
 // main 应用入口。
 func main() {
 	if !appservices.CheckSingleInstance() {
-		fmt.Println("AceShell 已在运行")
+		appservices.ShowFatalBox("AceShell", "AceShell 已在运行,请勿双开(双实例会导致配置不同步)。请使用已打开的窗口,或在任务管理器结束后再启动。")
 		return
 	}
 
@@ -67,6 +69,7 @@ func main() {
 	if err := app.Run(); err != nil {
 		fmt.Println(err)
 	}
+	svc.mcp.Stop()
 	svc.rdp.Stop()
 }
 
@@ -107,6 +110,8 @@ func initServices() *services {
 
 	svc.config.Init()
 	svc.log.Init()
+	svc.mcp = appservices.NewMcpService(svc.config, svc.sessionFile)
+	svc.agent = appservices.NewAgentService(svc.config, svc.mcp)
 
 	return svc
 }
@@ -131,8 +136,10 @@ func createApp(svc *services) *application.App {
 			application.NewService(svc.browser),
 			application.NewService(svc.clipboard),
 			application.NewService(svc.version),
-			application.NewService(svc.rdp),
-		},
+		application.NewService(svc.rdp),
+		application.NewService(svc.mcp),
+		application.NewService(svc.agent),
+	},
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(assets),
 		},
@@ -168,6 +175,18 @@ func wireServices(svc *services, app *application.App) {
 		fmt.Printf("RDP bridge start failed: %v\n", err)
 	}
 	svc.rdp.SetSessionFiles(svc.sessionFile)
+
+	// MCP 服务:注入应用实例供事件推送;配置了随应用启动则自动拉起
+	svc.mcp.SetApp(app)
+	appservices.MainMcpService = svc.mcp
+	if svc.config.McpEnabled() {
+		if err := svc.mcp.Start(); err != nil {
+			fmt.Printf("MCP service start failed: %v\n", err)
+		}
+	}
+
+	// 内嵌智能体:注入应用实例供事件推送
+	svc.agent.SetApp(app)
 }
 
 // createMainWindow 创建主窗口。
@@ -181,7 +200,10 @@ func createMainWindow(app *application.App, svc *services) {
 		MinWidth:         800,
 		MinHeight:        500,
 		EnableFileDrop:   true,
-		Windows:          buildWindowsOptions(svc),
+		// 自绘标题栏:Frameless 窗口,菜单栏融入窗口控制(─□✕)与拖拽区;
+		// 关闭时回退系统原生标题栏(设置弹窗可即时切换,运行时走 Window.SetFrameless)
+		Frameless: svc.config.CustomTitlebarEnabled(),
+		Windows:   buildWindowsOptions(svc),
 	})
 
 	// 供 WindowService 在运行时调整原生标题栏主题色
@@ -194,6 +216,12 @@ func createMainWindow(app *application.App, svc *services) {
 			return
 		}
 		app.Event.Emit("sftp-files-dropped", payload)
+	})
+
+	// 窗口关闭时强制落盘面板布局(AI 面板显隐/宽度、资源管理器宽度):
+	// 面板布局走"内存更新 + 周期写盘",关闭必写保证持久化不丢。
+	win.OnWindowEvent(events.Common.WindowClosing, func(event *application.WindowEvent) {
+		svc.config.FlushPanelLayout()
 	})
 }
 
