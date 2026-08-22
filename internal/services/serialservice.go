@@ -86,6 +86,7 @@ func (s *SerialService) readLoop(sess *SerialSession) {
 		n, err := sess.port.Read(buf)
 		if n > 0 {
 			s.safeEmit("session-output", fmt.Sprintf(`{"id":"%s","data":"%s"}`, sess.ID, escapeJSON(string(buf[:n]))))
+			if MainMcpService != nil { MainMcpService.TapOutput(sess.ID, buf[:n]) }
 		}
 		if err != nil {
 			if err != io.EOF {

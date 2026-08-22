@@ -14,13 +14,17 @@ import (
 )
 
 // 本机主密钥体系:所有平台统一安全加密(不依赖平台 API)。
-// 主密钥为 32 字节随机数,落盘前用机器派生密钥(hostname+用户标识+固定 salt)做 AES-GCM 包裹加密,
-// 任何平台均不出现明文密钥材料。密钥文件丢失/损坏时自动重建新密钥,
-// 历史密文无法解密,读取侧按"无密码"处理,不崩溃。
+// 主密钥为 32 字节随机数,落盘前做"包裹"加密,任何平台均不出现明文密钥材料。
+// 包裹方式(v2 优先,v1 兼容):
+//   - mk:v2: Windows DPAPI(当前用户作用域)包裹,密文仅本机该用户可解;
+//   - mk:v1: 机器派生密钥(hostname+用户标识+固定 salt)AES-GCM 包裹(历史格式)。
+// 密钥文件丢失/损坏时自动重建新密钥,历史密文无法解密,
+// 读取侧按"无密码"处理,不崩溃。
 
 const (
 	masterKeyFileName = "credential.key"
-	masterKeyPrefix   = "mk:v1:"
+	masterKeyV1Prefix = "mk:v1:"
+	masterKeyV2Prefix = "mk:v2:"
 	secretPrefix      = "enc:v1:"
 	masterKeySize     = 32
 )
@@ -44,6 +48,13 @@ func loadMasterKey() ([]byte, error) {
 	if data, err := os.ReadFile(path); err == nil {
 		key, err := unwrapMasterKey(data)
 		if err == nil && len(key) == masterKeySize {
+			// v1 → v2 自动迁移:当前平台可产出 DPAPI(v2)格式时静默升级,
+			// 写回失败不阻塞(下次加载再试),密钥内容不变。
+			if strings.HasPrefix(string(data), masterKeyV1Prefix) {
+				if blob, werr := wrapMasterKey(key); werr == nil && strings.HasPrefix(string(blob), masterKeyV2Prefix) {
+					_ = os.WriteFile(path, blob, 0600)
+				}
+			}
 			masterKeyCacheDir = path
 			masterKeyCache = key
 			return key, nil
@@ -58,7 +69,7 @@ func loadMasterKey() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	os.MkdirAll(DataDir(), 0755)
+	os.MkdirAll(DataDir(), 0700)
 	if err := os.WriteFile(path, blob, 0600); err != nil {
 		return nil, fmt.Errorf("写入主密钥文件失败: %w", err)
 	}
@@ -67,26 +78,38 @@ func loadMasterKey() ([]byte, error) {
 	return newKey, nil
 }
 
-// wrapMasterKey 用机器派生密钥包裹加密主密钥。
+// wrapMasterKey 包裹加密主密钥。
+// 优先 DPAPI(v2):密文绑定本机当前用户,拷贝到其他机器/账户无法解密;
+// DPAPI 不可用(非 Windows/调用失败)时回退机器派生密钥(v1)。
 func wrapMasterKey(key []byte) ([]byte, error) {
+	if blob, err := dpapiProtect(key); err == nil {
+		return []byte(masterKeyV2Prefix + base64.StdEncoding.EncodeToString(blob)), nil
+	}
 	blob, err := sealWithKey(key, deriveMachineKey())
 	if err != nil {
 		return nil, err
 	}
-	return []byte(masterKeyPrefix + base64.StdEncoding.EncodeToString(blob)), nil
+	return []byte(masterKeyV1Prefix + base64.StdEncoding.EncodeToString(blob)), nil
 }
 
-// unwrapMasterKey 用机器派生密钥解开主密钥。
+// unwrapMasterKey 解开主密钥包裹,兼容 v1/v2 两种格式。
 func unwrapMasterKey(data []byte) ([]byte, error) {
 	s := string(data)
-	if !strings.HasPrefix(s, masterKeyPrefix) {
-		return nil, fmt.Errorf("无效的主密钥文件格式")
+	switch {
+	case strings.HasPrefix(s, masterKeyV2Prefix):
+		raw, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(s, masterKeyV2Prefix))
+		if err != nil {
+			return nil, fmt.Errorf("无效的主密钥文件格式")
+		}
+		return dpapiUnprotect(raw)
+	case strings.HasPrefix(s, masterKeyV1Prefix):
+		raw, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(s, masterKeyV1Prefix))
+		if err != nil {
+			return nil, fmt.Errorf("无效的主密钥文件格式")
+		}
+		return openWithKey(raw, deriveMachineKey())
 	}
-	raw, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(s, masterKeyPrefix))
-	if err != nil {
-		return nil, err
-	}
-	return openWithKey(raw, deriveMachineKey())
+	return nil, fmt.Errorf("无效的主密钥文件格式")
 }
 
 // sealWithKey 用指定密钥做 AES-256-GCM 加密,返回 nonce|ciphertext|tag。

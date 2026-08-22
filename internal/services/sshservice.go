@@ -289,6 +289,9 @@ func (s *SSHService) readLoop(sess *SSHSession) {
 			if MainLogService != nil {
 				MainLogService.LogOutput(sess.ID, output)
 			}
+			if MainMcpService != nil {
+				MainMcpService.TapOutput(sess.ID, buf[:n])
+			}
 		}
 		if err != nil {
 			reason := "连接已断开"

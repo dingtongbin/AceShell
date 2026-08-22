@@ -3,7 +3,7 @@ import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { NModal, NSwitch, NTag, NRadioGroup, NRadioButton, NButton, NInput, NCheckbox, NIcon, NSlider, NColorPicker, NInputNumber, NAutoComplete, NSelect, useMessage } from 'naive-ui'
 import { CloseOutline, LogoGithub, GlobeOutline } from '@vicons/ionicons5'
 import { useTheme } from '../stores/theme'
-import { GetConfig, SetTabOrientation, SetTheme, SetCloseConfirm, SetPanelOpacity, SetWallpaper, SetTerminalConfig, SetShowSerial, SetShowHelp, SetFileEditingAutoSave, SetLanguage } from '../../bindings/changeme/internal/services/configservice.js'
+import { GetConfig, SetTabOrientation, SetTheme, SetCloseConfirm, SetPanelOpacity, SetWallpaper, SetTerminalConfig, SetShowSerial, SetShowHelp, SetFileEditingAutoSave, SetLanguage, SetCustomTitlebar } from '../../bindings/changeme/internal/services/configservice.js'
 import { OpenFileDialog } from '../../bindings/changeme/internal/services/windowservice.js'
 import { OpenUrl as BrowserOpenUrl } from '../../bindings/changeme/internal/services/browserservice.js'
 import { GetVersion } from '../../bindings/changeme/internal/services/versionservice.js'
@@ -32,6 +32,8 @@ const panelOpacity = ref(100)
 const wallpaperPath = ref('')
 const showSerial = ref(true)
 const showHelp = ref(true)
+// 自绘标题栏(Frameless 窗口):即时切换,config-changed → ShellPanel watcher 调 Window.SetFrameless
+const customTitlebar = ref(true)
 const autoSave = ref(true)
 const language = ref('zh-CN')
 const appVersion = ref('0.1.0')
@@ -179,6 +181,11 @@ async function handleShowHelpChange(value: boolean) {
   try { await SetShowHelp(value); window.dispatchEvent(new Event('config-changed')) } catch (e) { console.warn('切换帮助失败:', e) }
 }
 
+async function handleCustomTitlebarChange(value: boolean) {
+  customTitlebar.value = value
+  try { await SetCustomTitlebar(value); window.dispatchEvent(new Event('config-changed')) } catch (e) { console.warn('切换自绘标题栏失败:', e) }
+}
+
 async function handleAutoSaveChange(value: boolean) {
   autoSave.value = value
   try { await SetFileEditingAutoSave(value); window.dispatchEvent(new Event('config-changed')) } catch (e) { console.warn('设置自动保存失败:', e) }
@@ -211,6 +218,7 @@ async function loadConfig() {
     wallpaperPath.value = cfg.view?.wallpaper || ''
     showSerial.value = cfg.view?.showSerial ?? true
     showHelp.value = cfg.view?.showHelp ?? true
+    customTitlebar.value = cfg.view?.customTitlebar ?? true
     language.value = cfg.language ?? 'zh-CN'
     autoSave.value = cfg.fileEditing?.autoSave ?? true
     loadTermForm(cfg)
@@ -278,6 +286,10 @@ watch(() => props.show, (val) => { if (val) loadConfig() })
             <div class="setting-item" style="margin-top: 12px;">
               <div class="setting-label">{{ t('settings.help') }}</div>
               <n-switch :value="showHelp" size="small" @update:value="handleShowHelpChange" />
+            </div>
+            <div class="setting-item" style="margin-top: 12px;">
+              <div class="setting-label">{{ t('settings.customTitlebar') }}<span class="setting-desc">{{ t('settings.customTitlebarDesc') }}</span></div>
+              <n-switch :value="customTitlebar" size="small" @update:value="handleCustomTitlebarChange" />
             </div>
           </div>
           <div v-if="activeNav === 'terminal'" class="term-settings">

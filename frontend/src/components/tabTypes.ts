@@ -55,7 +55,7 @@ export interface ComponentTabPatch {
 }
 
 export interface TabPaneApi {
-  openSession: (sessionPath: string) => void
+  openSession: (sessionPath: string) => Promise<string>
   openSerial: (portName: string, baudRate: number, dataBits: number, stopBits: string, parity: string) => void
   openSftp: (tab?: Tab) => void
   openScriptDialog: (tab?: Tab) => void
@@ -70,6 +70,10 @@ export interface TabPaneApi {
   reportCursor: (row: number, col: number) => void
   copySelection: () => Promise<void>
   pasteClipboard: () => Promise<void>
+  // MCP 桥接扩展: 与用户操作完全相同的路径执行 MCP 命令
+  // activateTab=false 时(批量执行等后台化操作)不切换标签页
+  mcpTerminalSend: (tabId: string, text: string, needPasteConfirm: boolean, activateTab?: boolean) => Promise<{ ok: boolean; note?: string }>
+  mcpCloseTab: (tabId: string, activateTab?: boolean) => Promise<{ ok: boolean; note?: string }>
 }
 
 export type SplitDir = 'h' | 'v'

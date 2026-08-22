@@ -57,17 +57,17 @@ function findTabPane(tabId: string): Pane | null {
 }
 
 // 查找已打开的文件编辑标签页(按 componentProps.filePath 匹配),
-// 命中则激活其所在 pane 与该标签页,返回 true;未命中返回 false
-function activateFileTab(filePath: string): boolean {
+// 命中则激活其所在 pane 与该标签页,返回标签页 ID;未命中返回 null
+function activateFileTab(filePath: string): string | null {
   for (const p of panes.value) {
     const t = p.tabs.find(tab => tab.kind === 'component' && (tab.componentProps as any)?.filePath === filePath)
     if (t) {
       setFocus(p.id)
       paneApis.get(p.id)?.activateTab(t.id)
-      return true
+      return t.id
     }
   }
-  return false
+  return null
 }
 
 function setFocus(paneId: string) {
@@ -207,7 +207,7 @@ function focusApi(): TabPaneApi | null {
 }
 
 // 对外 API：转发到当前焦点 pane
-function openSession(sessionPath: string) { focusApi()?.openSession(sessionPath) }
+async function openSession(sessionPath: string): Promise<string | null> { return (await focusApi()?.openSession(sessionPath)) || null }
 function openSerial(portName: string, baudRate: number, dataBits: number, stopBits: string, parity: string) { focusApi()?.openSerial(portName, baudRate, dataBits, stopBits, parity) }
 function openSftp() { focusApi()?.openSftp() }
 function openScriptDialog() { focusApi()?.openScriptDialog() }
@@ -220,6 +220,47 @@ function updateComponentTab(tabId: string, patch: Parameters<TabPaneApi['updateC
 function closeTabById(tabId: string) { focusApi()?.closeTabById(tabId) }
 function copySelection() { return focusApi()?.copySelection() }
 function pasteClipboard() { return focusApi()?.pasteClipboard() }
+
+// ==================== MCP 桥接 API ====================
+
+// listTabs 列出全部 pane 的全部标签页(MCP list_tabs 工具)
+function listTabs() {
+  const out: any[] = []
+  for (const p of panes.value) {
+    for (const tab of p.tabs) {
+      out.push({
+        id: tab.id,
+        title: tab.title,
+        kind: tab.kind,
+        protocol: tab.protocol,
+        status: tab.status,
+        sessionPath: tab.sessionPath || (tab.componentProps as any)?.filePath || '',
+      })
+    }
+  }
+  return out
+}
+
+// 按 tabId 定位所属 pane 的 API
+function apiForTab(tabId: string): TabPaneApi | null {
+  const p = findTabPane(tabId)
+  if (!p) return null
+  return paneApis.get(p.id) ?? null
+}
+
+// mcpTerminalSend 转发到目标标签页所在 pane(activateTab=false 时不跳转)
+function mcpTerminalSend(tabId: string, text: string, needPasteConfirm: boolean, activateTab = true): Promise<{ ok: boolean; note?: string }> {
+  const api = apiForTab(tabId)
+  if (!api) return Promise.resolve({ ok: false, note: 'tab not found: ' + tabId })
+  return api.mcpTerminalSend(tabId, text, needPasteConfirm, activateTab)
+}
+
+// mcpCloseTab 转发到目标标签页所在 pane(activateTab=false 时不跳转)
+function mcpCloseTab(tabId: string, activateTab = true): Promise<{ ok: boolean; note?: string }> {
+  const api = apiForTab(tabId)
+  if (!api) return Promise.resolve({ ok: false, note: 'tab not found: ' + tabId })
+  return api.mcpCloseTab(tabId, activateTab)
+}
 
 // 状态栏信息：仅转发焦点 pane
 function onStatus(paneId: string, text: string, row: number, col: number, encoding: string, hasTab: boolean) {
@@ -377,7 +418,7 @@ onBeforeUnmount(() => {
   }
 })
 
-defineExpose({ openSession, openSerial, openSftp, openScriptDialog, exportLog, clearScrollback, clearScreen, getActiveSessionPath, openComponentTab, updateComponentTab, closeTabById, activateFileTab, reportCursor, copySelection, pasteClipboard, openRdp })
+defineExpose({ openSession, openSerial, openSftp, openScriptDialog, exportLog, clearScrollback, clearScreen, getActiveSessionPath, openComponentTab, updateComponentTab, closeTabById, activateFileTab, reportCursor, copySelection, pasteClipboard, openRdp, listTabs, mcpTerminalSend, mcpCloseTab })
 </script>
 
 <template>
