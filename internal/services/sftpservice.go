@@ -322,7 +322,7 @@ func (s *SFTPService) Getwd(sessionID string) string {
 		return sftpErrorResult(err)
 	}
 
-	return fmt.Sprintf(`{"path":"%s"}`, dir)
+	return marshalJSON(map[string]string{"path": dir})
 }
 
 // ReadFile 读取远程文件内容并返回字符串;非 UTF-8 文本或过大文件返回错误 JSON。

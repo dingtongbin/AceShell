@@ -165,11 +165,14 @@ func TestGlobalKeyService_SshCopyKey_Unreachable(t *testing.T) {
 		t.Fatalf("CreateKey failed: %v", err)
 	}
 
-	// 不可达地址应返回错误而非 panic/卡死
-	if _, err := g.SshCopyKey(id, "127.0.0.1", 1, "root", "x"); err == nil {
+	// 不可达地址应返回错误而非 panic/卡死;空指纹 fail-close
+	if _, err := g.SshCopyKey(id, "127.0.0.1", 1, "root", "x", ""); err == nil {
 		t.Fatal("Expected error for unreachable host")
 	}
-	if _, err := g.SshCopyKey("nonexistent-id", "127.0.0.1", 22, "root", "x"); err == nil {
+	if _, err := g.SshCopyKey(id, "127.0.0.1", 22, "root", "x", ""); err == nil {
+		t.Fatal("Expected error for empty host key (fail-close)")
+	}
+	if _, err := g.SshCopyKey("nonexistent-id", "127.0.0.1", 22, "root", "x", "AAAAC3NzaC1lZDI1NTE5AAAAItest"); err == nil {
 		t.Fatal("Expected error for unknown key id")
 	}
 }

@@ -350,6 +350,12 @@ func tomlHasSection(raw, name string) bool {
 }
 
 func (c *ConfigService) save() error {
+	fail := func(step string, err error) error {
+		// 写盘失败必须留痕:配置丢失无感知比失败更危险
+		logConfigLoadError("config-save", fmt.Errorf("%s: %v", step, err))
+		fmt.Printf("[config] save failed (%s): %v\n", step, err)
+		return err
+	}
 	// 主配置: 剔除 mcp/agent(拆分至独立文件,禁止写入 config.toml)
 	main := mainConfigFile{
 		View:        c.config.View,
@@ -361,20 +367,20 @@ func (c *ConfigService) save() error {
 	}
 	mainData, err := toml.Marshal(main)
 	if err != nil {
-		return err
+		return fail("marshal-main", err)
 	}
 	if err := atomicWriteFile(configFile, mainData, 0600); err != nil {
-		return err
+		return fail("write-main", err)
 	}
 	// mcp.toml
 	mcpData, err := toml.Marshal(struct {
 		Mcp McpConfig `toml:"mcp"`
 	}{c.config.Mcp})
 	if err != nil {
-		return err
+		return fail("marshal-mcp", err)
 	}
 	if err := atomicWriteFile(McpConfigFile(), mcpData, 0600); err != nil {
-		return err
+		return fail("write-mcp", err)
 	}
 	// agent.toml(写盘前密文保护: 内存密文为空但磁盘已有密文 → 合并保留,
 	// 防止任何调用路径因内存状态丢失而清空已存密钥)
@@ -383,9 +389,12 @@ func (c *ConfigService) save() error {
 		Agent AgentConfig `toml:"agent"`
 	}{c.config.Agent})
 	if err != nil {
-		return err
+		return fail("marshal-agent", err)
 	}
-	return atomicWriteFile(AgentConfigFile(), agentData, 0600)
+	if err := atomicWriteFile(AgentConfigFile(), agentData, 0600); err != nil {
+		return fail("write-agent", err)
+	}
+	return nil
 }
 
 // mergeDiskKeysLocked 将磁盘 agent.toml 中的密文合并进 keys(调用方持锁)。
@@ -454,12 +463,25 @@ func (c *ConfigService) ThemeMode() string {
 	return t
 }
 
+// configJSONLocked 序列化配置为 JSON(调用方持锁);加密密文(Mcp.TokenEnc /
+// Agent.Profiles[].ApiKeyEnc)不外发,前端仅凭 hasKey 判断是否已存密钥。
+func (c *ConfigService) configJSONLocked() string {
+	out := c.config
+	out.Mcp.TokenEnc = ""
+	for i := range out.Agent.Profiles {
+		out.Agent.Profiles[i].ApiKeyEnc = ""
+	}
+	data, _ := json.Marshal(out)
+	return string(data)
+}
+
 // GetConfig 返回当前完整配置的 JSON 字符串。
+// 加密密文(Mcp.TokenEnc/Agent.Profiles[].ApiKeyEnc)不外发: 密钥不出后端,
+// 前端仅凭 hasKey 标记判断是否已存密钥(与 AgentProfilesGet 口径一致)。
 func (c *ConfigService) GetConfig() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	data, _ := json.Marshal(c.config)
-	return string(data)
+	return c.configJSONLocked()
 }
 
 // SetPanelOpacity 设置面板不透明度（百分比 30-100）并持久化，返回最新配置 JSON。
@@ -471,8 +493,7 @@ func (c *ConfigService) SetPanelOpacity(opacity int) string {
 	}
 	c.config.View.PanelOpacity = opacity
 	c.save()
-	data, _ := json.Marshal(c.config)
-	return string(data)
+	return c.configJSONLocked()
 }
 
 // SetWallpaper 设置壁纸图片路径并持久化；空路径表示恢复默认背景，返回最新配置 JSON。
@@ -481,8 +502,7 @@ func (c *ConfigService) SetWallpaper(path string) string {
 	defer c.mu.Unlock()
 	c.config.View.Wallpaper = path
 	c.save()
-	data, _ := json.Marshal(c.config)
-	return string(data)
+	return c.configJSONLocked()
 }
 
 // GetWallpaperData 读取壁纸文件并返回 data URL 供前端直接使用；无壁纸或读取失败返回空串。
@@ -518,8 +538,7 @@ func (c *ConfigService) SetShowSession(show bool) string {
 	defer c.mu.Unlock()
 	c.config.View.ShowSession = show
 	c.save()
-	data, _ := json.Marshal(c.config)
-	return string(data)
+	return c.configJSONLocked()
 }
 
 // SetShowToolbar 设置工具栏可见性并持久化。
@@ -528,8 +547,7 @@ func (c *ConfigService) SetShowToolbar(show bool) string {
 	defer c.mu.Unlock()
 	c.config.View.ShowToolbar = show
 	c.save()
-	data, _ := json.Marshal(c.config)
-	return string(data)
+	return c.configJSONLocked()
 }
 
 // SetShowAutoLog 设置自动日志面板可见性并持久化。
@@ -538,8 +556,7 @@ func (c *ConfigService) SetShowAutoLog(show bool) string {
 	defer c.mu.Unlock()
 	c.config.View.ShowAutoLog = show
 	c.save()
-	data, _ := json.Marshal(c.config)
-	return string(data)
+	return c.configJSONLocked()
 }
 
 // SetShowSerial 设置串口管理器可见性并持久化。
@@ -548,8 +565,7 @@ func (c *ConfigService) SetShowSerial(show bool) string {
 	defer c.mu.Unlock()
 	c.config.View.ShowSerial = show
 	c.save()
-	data, _ := json.Marshal(c.config)
-	return string(data)
+	return c.configJSONLocked()
 }
 
 // SetShowHelp 设置帮助按钮与帮助弹窗可见性并持久化。
@@ -558,8 +574,7 @@ func (c *ConfigService) SetShowHelp(show bool) string {
 	defer c.mu.Unlock()
 	c.config.View.ShowHelp = show
 	c.save()
-	data, _ := json.Marshal(c.config)
-	return string(data)
+	return c.configJSONLocked()
 }
 
 // SetCustomTitlebar 设置自绘标题栏开关并持久化;即时生效由前端调用 Window.SetFrameless。
@@ -568,8 +583,7 @@ func (c *ConfigService) SetCustomTitlebar(enabled bool) string {
 	defer c.mu.Unlock()
 	c.config.View.CustomTitlebar = enabled
 	c.save()
-	data, _ := json.Marshal(c.config)
-	return string(data)
+	return c.configJSONLocked()
 }
 
 // CustomTitlebarEnabled 返回自绘标题栏开关(main.go 创建窗口时读取初始值)。
@@ -585,8 +599,7 @@ func (c *ConfigService) SetShowSftp(show bool) string {
 	defer c.mu.Unlock()
 	c.config.View.ShowSftp = show
 	c.save()
-	data, _ := json.Marshal(c.config)
-	return string(data)
+	return c.configJSONLocked()
 }
 
 // SetShowFilemanager 设置文件管理器侧边栏可见性并持久化。
@@ -595,8 +608,7 @@ func (c *ConfigService) SetShowFilemanager(show bool) string {
 	defer c.mu.Unlock()
 	c.config.View.ShowFilemanager = show
 	c.save()
-	data, _ := json.Marshal(c.config)
-	return string(data)
+	return c.configJSONLocked()
 }
 
 // SetSidebarOrder 设置侧边栏菜单项排序（逗号分隔的 key 列表）并持久化。
@@ -605,8 +617,7 @@ func (c *ConfigService) SetSidebarOrder(order string) string {
 	defer c.mu.Unlock()
 	c.config.View.SidebarOrder = order
 	c.save()
-	data, _ := json.Marshal(c.config)
-	return string(data)
+	return c.configJSONLocked()
 }
 
 // SetSectionsState 更新资源管理器各分组的展开/折叠状态并持久化。
@@ -619,8 +630,7 @@ func (c *ConfigService) SetSectionsState(jsonStr string) string {
 	}
 	c.config.Sections = sections
 	c.save()
-	data, _ := json.Marshal(c.config)
-	return string(data)
+	return c.configJSONLocked()
 }
 
 // SetCloseConfirm 设置关闭标签页时是否弹出确认对话框。
@@ -629,8 +639,7 @@ func (c *ConfigService) SetCloseConfirm(show bool) string {
 	defer c.mu.Unlock()
 	c.config.View.CloseConfirm = show
 	c.save()
-	data, _ := json.Marshal(c.config)
-	return string(data)
+	return c.configJSONLocked()
 }
 
 // SetFileEditingAutoSave 设置文件编辑器的自动保存开关(即时生效)。
@@ -639,8 +648,7 @@ func (c *ConfigService) SetFileEditingAutoSave(autoSave bool) string {
 	defer c.mu.Unlock()
 	c.config.FileEditing.AutoSave = autoSave
 	c.save()
-	data, _ := json.Marshal(c.config)
-	return string(data)
+	return c.configJSONLocked()
 }
 
 // SetTabOrientation 设置标签页方向（horizontal/vertical）并持久化。
@@ -649,8 +657,7 @@ func (c *ConfigService) SetTabOrientation(orientation string) string {
 	defer c.mu.Unlock()
 	c.config.View.TabOrientation = orientation
 	c.save()
-	data, _ := json.Marshal(c.config)
-	return string(data)
+	return c.configJSONLocked()
 }
 
 // SetVerticalTabWidth 设置纵向标签页宽度并持久化。
@@ -659,8 +666,7 @@ func (c *ConfigService) SetVerticalTabWidth(width int) string {
 	defer c.mu.Unlock()
 	c.config.View.VerticalTabWidth = width
 	c.save()
-	data, _ := json.Marshal(c.config)
-	return string(data)
+	return c.configJSONLocked()
 }
 
 // GetTheme 返回当前主题模式（dark / light / auto）。
@@ -676,8 +682,7 @@ func (c *ConfigService) SetTheme(theme string) string {
 	defer c.mu.Unlock()
 	c.config.View.Theme = theme
 	c.save()
-	data, _ := json.Marshal(c.config)
-	return string(data)
+	return c.configJSONLocked()
 }
 
 // GetLanguage 返回当前语言（如 zh-CN / en-US）。
@@ -693,8 +698,7 @@ func (c *ConfigService) SetLanguage(lang string) string {
 	defer c.mu.Unlock()
 	c.config.Language = lang
 	c.save()
-	data, _ := json.Marshal(c.config)
-	return string(data)
+	return c.configJSONLocked()
 }
 
 // SetSerialConfig 更新串口配置并持久化。
@@ -808,8 +812,7 @@ func (c *ConfigService) SetTerminalConfig(jsonStr string) string {
 		Scrollback:   p.Scrollback,
 	}
 	c.save()
-	data, _ := json.Marshal(c.config)
-	return string(data)
+	return c.configJSONLocked()
 }
 
 // ==================== MCP 配置 ====================
@@ -1008,7 +1011,9 @@ func (c *ConfigService) SetMcpExecTuning(opDelayMs, batchIntervalMs int, grantsE
 	c.config.Mcp.AuditRetentionDays = auditRetentionDays
 	c.config.Mcp.TerminalReadMaxBytes = terminalReadMax
 	c.save()
-	data, _ := json.Marshal(c.config.Mcp)
+	mcp := c.config.Mcp
+	mcp.TokenEnc = "" // 密文不出后端
+	data, _ := json.Marshal(mcp)
 	return string(data)
 }
 
@@ -1025,12 +1030,12 @@ func (c *ConfigService) SetMcpCustomRules(jsonStr string) string {
 	}
 	for i := range rules {
 		if _, err := regexp.Compile(rules[i].Pattern); err != nil {
-			return fmt.Sprintf(`{"error":"invalid regex: %s"}`, rules[i].Pattern)
+			return marshalJSON(map[string]string{"error": "invalid regex: " + rules[i].Pattern})
 		}
 		switch rules[i].Risk {
 		case RiskBlocked, RiskConfirm, RiskAuto:
 		default:
-			return fmt.Sprintf(`{"error":"invalid risk: %s"}`, rules[i].Risk)
+			return marshalJSON(map[string]string{"error": "invalid risk: " + rules[i].Risk})
 		}
 		rules[i].Note = truncateUtf8(rules[i].Note, 100)
 	}

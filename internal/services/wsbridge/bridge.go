@@ -75,7 +75,11 @@ func handleBridge(w http.ResponseWriter, r *http.Request, tokenCheck func(string
 func handleRdcleanpathBridge(ws *websocket.Conn, r *http.Request, boundTarget string) {
 	ctx := context.Background()
 	ws.SetReadLimit(-1)
-	_, data, err := ws.Read(ctx)
+	// 首包(握手请求)限时 15s: 恶意/半开客户端不发数据时及时释放,
+	// 避免 goroutine 在无界 Read 上永久悬挂。
+	readCtx, readCancel := context.WithTimeout(ctx, 15*time.Second)
+	_, data, err := ws.Read(readCtx)
+	readCancel()
 	if err != nil {
 		_ = ws.Close(websocket.StatusProtocolError, "missing rdcleanpath request")
 		return

@@ -1303,7 +1303,7 @@ func (s *McpService) SetMcpEnabled(enabled bool) string {
 	if enabled {
 		if err := s.Start(); err != nil {
 			s.audit.Append("system", "error", "start", "", err.Error(), "-", "-", false)
-			return fmt.Sprintf(`{"error":%q}`, err.Error())
+			return marshalJSON(map[string]string{"error": err.Error()})
 		}
 	} else {
 		s.Stop()

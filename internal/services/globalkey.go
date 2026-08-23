@@ -5,9 +5,11 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"sort"
@@ -341,10 +343,15 @@ func (g *GlobalKeyService) signerFromContent(c *GlobalKeyContent) (ssh.Signer, e
 }
 
 // SshCopyKey 用密码认证登录目标主机,将该密钥的公钥追加到 ~/.ssh/authorized_keys。
+// hostKeyB64 为目标主机公钥 base64(前端经指纹核对后传入),连接时强制 pin 校验,
+// 防止中间人截获密码与公钥;为空时拒绝连接(fail-close)。
 // keyRef 支持 key://名称 引用或密钥 id。返回部署结果消息。
-func (g *GlobalKeyService) SshCopyKey(keyRef, host string, port int, user, password string) (string, error) {
+func (g *GlobalKeyService) SshCopyKey(keyRef, host string, port int, user, password, hostKeyB64 string) (string, error) {
 	if port <= 0 || port > 65535 {
 		port = 22
+	}
+	if strings.TrimSpace(hostKeyB64) == "" {
+		return "", fmt.Errorf("未提供主机指纹,已取消部署(防止中间人截获密码)")
 	}
 	content, err := g.resolveName(keyRef)
 	if err != nil {
@@ -353,10 +360,15 @@ func (g *GlobalKeyService) SshCopyKey(keyRef, host string, port int, user, passw
 
 	addr := fmt.Sprintf("%s:%d", host, port)
 	config := &ssh.ClientConfig{
-		User:            user,
-		Auth:            []ssh.AuthMethod{ssh.Password(password)},
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
-		Timeout:         10 * time.Second,
+		User: user,
+		Auth: []ssh.AuthMethod{ssh.Password(password)},
+		HostKeyCallback: func(hostname string, remote net.Addr, key ssh.PublicKey) error {
+			if base64.StdEncoding.EncodeToString(key.Marshal()) != strings.TrimSpace(hostKeyB64) {
+				return fmt.Errorf("主机指纹与确认时不一致,连接已中止")
+			}
+			return nil
+		},
+		Timeout: 10 * time.Second,
 	}
 	client, err := ssh.Dial("tcp", addr, config)
 	if err != nil {

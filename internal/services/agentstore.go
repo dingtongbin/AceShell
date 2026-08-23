@@ -142,7 +142,10 @@ func (s *AgentStore) Create(title string) (AgentSessionMeta, error) {
 	}
 	title = truncateUtf8(title, 60)
 	buf := make([]byte, 4)
-	rand.Read(buf)
+	if _, err := rand.Read(buf); err != nil {
+		// crypto/rand 失败极罕见;ID 唯一性依赖随机源,失败即拒绝创建(fail-close)
+		return AgentSessionMeta{}, fmt.Errorf("生成会话 ID 失败: %w", err)
+	}
 	id := fmt.Sprintf("s-%d-%s", time.Now().UnixMilli(), hex.EncodeToString(buf))
 	now := time.Now().Format(time.RFC3339)
 	m := AgentSessionMeta{

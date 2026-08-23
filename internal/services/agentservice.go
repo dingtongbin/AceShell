@@ -1,4 +1,4 @@
-﻿package services
+package services
 
 import (
 	"context"
@@ -786,7 +786,7 @@ func (s *AgentService) AgentListModels(baseURL string, apiKey string, profileID 
 	client := newAgentClient(baseURL, apiKey)
 	ids, err := client.ListModels(context.Background())
 	if err != nil {
-		return fmt.Sprintf(`{"error":%q}`, err.Error())
+		return marshalJSON(map[string]string{"error": err.Error()})
 	}
 	data, _ := json.Marshal(ids)
 	return string(data)
@@ -802,7 +802,7 @@ func (s *AgentService) AgentSessionList() string {
 func (s *AgentService) AgentNewSession(title string) string {
 	m, reused, err := s.store.CreateDebounced(title)
 	if err != nil {
-		return fmt.Sprintf(`{"error":%q}`, err.Error())
+		return marshalJSON(map[string]string{"error": err.Error()})
 	}
 	out := struct {
 		AgentSessionMeta
@@ -815,7 +815,7 @@ func (s *AgentService) AgentNewSession(title string) string {
 // AgentRenameSession 重命名会话。
 func (s *AgentService) AgentRenameSession(id string, title string) string {
 	if err := s.store.Rename(id, title); err != nil {
-		return fmt.Sprintf(`{"error":%q}`, err.Error())
+		return marshalJSON(map[string]string{"error": err.Error()})
 	}
 	return `{"ok":true}`
 }
@@ -829,7 +829,7 @@ func (s *AgentService) AgentArchiveSession(id string, archived bool) string {
 		return agentErrJSON("agent.busy", "会话执行中,请先中断再归档")
 	}
 	if err := s.store.Archive(id, archived); err != nil {
-		return fmt.Sprintf(`{"error":%q}`, err.Error())
+		return marshalJSON(map[string]string{"error": err.Error()})
 	}
 	return `{"ok":true}`
 }
@@ -843,7 +843,7 @@ func (s *AgentService) AgentDeleteSession(id string) string {
 		return agentErrJSON("agent.busy", "会话执行中,请先中断再删除")
 	}
 	if err := s.store.Delete(id); err != nil {
-		return fmt.Sprintf(`{"error":%q}`, err.Error())
+		return marshalJSON(map[string]string{"error": err.Error()})
 	}
 	return `{"ok":true}`
 }

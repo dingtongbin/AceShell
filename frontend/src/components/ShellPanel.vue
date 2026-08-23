@@ -339,6 +339,16 @@ function onBodyPointerUp() {
   stopAgentResize()
 }
 
+// ==================== 窄窗自适应 ====================
+
+// 窗口宽度低于阈值时,资源管理器/AI 面板改为浮层弹出(覆盖标签页,不挤压终端区)。
+// 层级: 标签页 < 资源管理器(600) < AI 面板(700) < AI 最大化(800)。
+const NARROW_THRESHOLD = 1000
+const isNarrow = ref(window.innerWidth < NARROW_THRESHOLD)
+function updateNarrow() {
+  isNarrow.value = window.innerWidth < NARROW_THRESHOLD
+}
+
 // ==================== Validation ====================
 
 function validateName(name: string): string | null {
@@ -804,6 +814,7 @@ async function openExternal(url: string) {
 onMounted(() => {
   loadConfig()
   window.addEventListener('config-changed', onConfigChanged)
+  window.addEventListener('resize', updateNarrow)
   GetVersion().then(v => { appVersion.value = v }).catch(() => {})
 
   // MCP 桥接初始化:订阅事件 + 注入命令路由(MCP 操作与用户操作走同一 UI 路径)
@@ -828,6 +839,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   window.removeEventListener('config-changed', onConfigChanged)
+  window.removeEventListener('resize', updateNarrow)
 })
 </script>
 
@@ -865,7 +877,7 @@ onBeforeUnmount(() => {
       />
       <div class="right-area">
         <div class="right-content">
-          <div v-show="leftPanel !== 'none'" class="shell-sidebar" :style="{ width: leftPanel !== 'none' ? sessionWidth + 'px' : '0px', minWidth: leftPanel !== 'none' ? '60px' : '0px' }">
+          <div v-show="leftPanel !== 'none'" class="shell-sidebar" :class="{ 'sidebar-overlay': isNarrow }" :style="{ width: leftPanel !== 'none' ? sessionWidth + 'px' : '0px', minWidth: leftPanel !== 'none' ? '60px' : '0px' }">
         <ResourceManager
           v-show="leftPanel === 'resource'"
           ref="sessionManagerRef"
@@ -885,17 +897,17 @@ onBeforeUnmount(() => {
           @close="toggleSessionManager"
         />
       </div>
-      <div v-if="leftPanel !== 'none'" class="resize-handle" :style="{ left: sessionWidth + 'px' }" @pointerdown="startResize" />
+      <div v-if="leftPanel !== 'none'" class="resize-handle" :class="{ 'handle-overlay': isNarrow }" :style="{ left: sessionWidth + 'px' }" @pointerdown="startResize" />
       <div class="tab-area">
         <TabManager ref="tabManagerRef" :show-toolbar="showToolbar" :tab-orientation="tabOrientation" :vertical-tab-width="verticalTabWidth"
           @new-ssh="openNewSession('', 'ssh')" @new-telnet="openNewSession('', 'telnet')" @new-serial="openNewSession('', 'serial')" @status="onTabStatus" />
       </div>
-      <!-- 智能体聊天面板:右侧停靠,可最大化铺满内容区(悬浮覆盖) -->
+      <!-- 智能体聊天面板:右侧停靠,可最大化铺满内容区(悬浮覆盖);窄窗时浮层弹出 -->
       <AgentChatPanel
         v-show="showAgentPanel"
         :width="agentPanelWidth"
         :maximized="agentMaximized"
-        :class="{ 'agent-maximized': agentMaximized }"
+        :class="{ 'agent-maximized': agentMaximized, 'agent-overlay': isNarrow && !agentMaximized }"
         :style="agentMaximized ? undefined : { width: agentPanelWidth + 'px' }"
         @close="closeAgentPanel"
         @toggle-maximize="agentMaximized = !agentMaximized"
@@ -906,6 +918,7 @@ onBeforeUnmount(() => {
       <div
         v-if="showAgentPanel && !agentMaximized"
         class="agent-resize-handle"
+        :class="{ 'agent-handle-overlay': isNarrow }"
         :style="{ right: agentPanelWidth - 2 + 'px' }"
         @pointerdown="startAgentResize"
       />
@@ -1211,8 +1224,29 @@ onBeforeUnmount(() => {
 .agent-maximized {
   position: absolute;
   inset: 0;
-  z-index: 500;
+  z-index: 800;
 }
+
+/* 窄窗浮层模式(宽度 < NARROW_THRESHOLD): 资源管理器/AI 面板悬浮于标签页之上,
+   不再挤压终端区;层级 标签页 < 资源管理器(600) < AI 面板(700) < AI 最大化(800) */
+.shell-sidebar.sidebar-overlay {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  z-index: 600;
+  box-shadow: 2px 0 12px rgba(0, 0, 0, 0.35);
+}
+.agent-overlay {
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  z-index: 700;
+  box-shadow: -2px 0 12px rgba(0, 0, 0, 0.35);
+}
+.resize-handle.handle-overlay { z-index: 610; }
+.agent-resize-handle.agent-handle-overlay { z-index: 710; }
 
 .session-dialog {
   display: flex;

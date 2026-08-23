@@ -1787,15 +1787,15 @@ refreshProfiles()
 .agent-panel { height: 100%; flex-shrink: 0; display: flex; flex-direction: column; background: var(--sidebar-bg, #181818); overflow: hidden; border-left: 1px solid var(--sidebar-shadow, #3c3c3c); }
 .agent-header { height: 35px; display: flex; align-items: center; gap: 8px; padding: 0 8px 0 12px; border-bottom: 1px solid var(--sidebar-shadow, #3c3c3c); flex-shrink: 0; }
 .agent-title { font-size: 11px; font-weight: 600; color: var(--text-color, #d4d4d4); text-transform: uppercase; letter-spacing: 0.8px; }
-.agent-header-actions { margin-left: auto; display: flex; align-items: center; gap: 1px; }
-.ah-btn { width: auto; min-width: 21px; height: 26px; padding: 2px; display: flex; align-items: center; justify-content: center; border: none; background: transparent; border-radius: 5px; color: var(--text-color, #d4d4d4); opacity: 0.75; cursor: pointer; transition: background 0.15s, opacity 0.15s; }
+.agent-header-actions { margin-left: auto; display: flex; flex-direction: row-reverse; align-items: center; }
+.ah-btn { width: 26px; height: 26px; margin-left: 0; margin-right: 0; padding: 0; display: flex; align-items: center; justify-content: center; border: none; background: transparent; border-radius: 5px; color: var(--text-color, #d4d4d4); opacity: 0.75; cursor: pointer; transition: background 0.15s, opacity 0.15s; flex-shrink: 0; }
 .ah-btn:hover { background: rgba(255, 255, 255, 0.08); opacity: 1; }
 .ah-btn:disabled { opacity: 0.35; cursor: default; }
 .ah-btn:disabled:hover { background: transparent; }
 
 .agent-session-bar { display: flex; align-items: center; justify-content: space-between; gap: 4px; padding: 3px 8px 4px; border-bottom: 1px solid var(--sidebar-shadow, #2a2a2a); flex-shrink: 0; }
 .agent-session-title { flex: 1; min-width: 0; text-align: left; font-size: 12px; font-weight: 600; color: var(--text-color, #d4d4d4); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.agent-session-actions { display: flex; align-items: center; gap: 1px; flex-shrink: 0; }
+.agent-session-actions { display: flex; flex-direction: row-reverse; align-items: center; flex-shrink: 0; }
 
 /* 历史会话弹窗 */
 .history-empty { padding: 24px; text-align: center; font-size: 12px; color: var(--text-secondary, #6e6e6e); }

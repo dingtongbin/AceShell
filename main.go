@@ -19,16 +19,27 @@ import (
 var assets embed.FS
 
 // init 注册所有 Wails 事件类型，必须在 main 之前执行。
+// 规则:Emit 过的事件必须在此注册;已废弃的事件应同步移除注册与 Emit 点。
 func init() {
 	application.RegisterEvent[string]("theme-changed")
 	application.RegisterEvent[string]("session-output")
 	application.RegisterEvent[string]("session-status-changed")
-	application.RegisterEvent[string]("session-list-changed")
 	application.RegisterEvent[string]("session-tree-changed")
 	application.RegisterEvent[string]("sftp-transfer-progress")
-	application.RegisterEvent[string]("sftp-status-changed")
-	application.RegisterEvent[string]("sftp-add-tab")
 	application.RegisterEvent[string]("sftp-files-dropped")
+	// MCP 服务
+	application.RegisterEvent[string]("mcp-command")
+	application.RegisterEvent[string]("mcp-approval-requested")
+	application.RegisterEvent[string]("mcp-approval-removed")
+	application.RegisterEvent[string]("mcp-audit-appended")
+	application.RegisterEvent[string]("mcp-status-changed")
+	application.RegisterEvent[string]("mcp-critical-blocked")
+	// 内嵌智能体
+	application.RegisterEvent[string]("agent-event")
+	application.RegisterEvent[string]("agent-stream")
+	application.RegisterEvent[string]("agent-status-changed")
+	application.RegisterEvent[string]("agent-pending-changed")
+	application.RegisterEvent[string]("agent-error")
 }
 
 // services 聚合所有后端服务实例，便于统一初始化和注入。
