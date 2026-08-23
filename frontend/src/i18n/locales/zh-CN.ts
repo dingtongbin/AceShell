@@ -185,6 +185,7 @@ export default {
   leftToolBar: {},
   mainMenu: {
     file: '文件',
+    view: '视图',
     newSession: '新建会话',
     newFolder: '新建文件夹',
     importSessions: '导入会话文件',
@@ -195,7 +196,7 @@ export default {
     renameSelected: '重命名当前选中节点',
     deleteSelected: '删除当前选中节点',
     tool: '工具',
-    execScript: '执行当前脚本',
+    execScript: '执行脚本',
     toggleTheme: '切换主题',
     toolbar: '工具栏',
     help: '帮助',

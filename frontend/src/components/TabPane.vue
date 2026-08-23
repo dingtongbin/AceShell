@@ -21,7 +21,7 @@ import KeyCredentialsDialog from './KeyCredentialsDialog.vue'
 import SftpPanel from './SftpPanel.vue'
 import { Disconnect as SftpDisconnect } from '../../bindings/changeme/internal/services/sftpservice.js'
 import { Copy as ClipboardCopy, Paste as ClipboardPaste } from '../../bindings/changeme/internal/services/clipboardservice.js'
-import type { Pane, Tab, TabPaneApi, ComponentTabOptions, ComponentTabPatch, PaneActions, PaneCtx } from './tabTypes'
+import type { Pane, Tab, TabPaneApi, ComponentTabOptions, ComponentTabPatch, PaneActions, PaneCtx, ActiveTabState } from './tabTypes'
 import { dragState } from './tabTypes'
 import { useI18n } from 'vue-i18n'
 import { useMcpBridge } from '../composables/useMcpBridge'
@@ -53,7 +53,7 @@ const pane = props.pane
 const paneInstanceId = ++paneInstanceSeq
 const ctx = inject<PaneCtx>('pane-ctx')
 const actions: PaneActions = ctx?.actions ?? {
-  onSplit: () => {}, onMoveTab: () => {}, onSplitAt: () => {}, onFocus: () => {}, onStatus: () => {}, registerPane: () => () => {}, paneExists: () => true, openRdp: () => {},
+  onSplit: () => {}, onMoveTab: () => {}, onSplitAt: () => {}, onFocus: () => {}, onStatus: () => {}, onActiveTabState: () => {}, registerPane: () => () => {}, paneExists: () => true, openRdp: () => {},
 }
 
 const message = useMessage()
@@ -1009,6 +1009,14 @@ function reportCursor(row: number, col: number) {
 watch([() => pane.activeTabId, cursorRow, cursorCol], () => {
   actions.onStatus(pane.id, getStatusLeft(), cursorRow.value, cursorCol.value, getStatusEncoding(), !!pane.activeTabId)
 })
+
+// 活动标签页状态快照上报:供顶级菜单按活动标签页启用/禁用工具栏工具
+const activeTabState = computed<ActiveTabState>(() => {
+  const t = activeTab.value
+  if (!t) return { hasTab: false, isTerminal: false, protocol: '', connected: false }
+  return { hasTab: true, isTerminal: t.kind === 'terminal', protocol: t.protocol, connected: t.status === 'connected' }
+})
+watch(activeTabState, (s) => { actions.onActiveTabState(pane.id, s) }, { immediate: true })
 
 // 打开 SFTP 面板标签页：复用既有 SSH 连接。disconnectSshOnClose 为 true 时关闭标签页同时断开其 SSH 连接
 function openSftpPanel(connID: string, title: string, disconnectSshOnClose = false) {

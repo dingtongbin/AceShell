@@ -36,6 +36,14 @@ export interface Pane {
   activeTabId: string | null
 }
 
+// 活动标签页状态快照(供顶级菜单按活动标签页启用/禁用工具)
+export interface ActiveTabState {
+  hasTab: boolean
+  isTerminal: boolean
+  protocol: string
+  connected: boolean
+}
+
 export interface ComponentTabOptions {
   title: string
   component: Component
@@ -107,6 +115,7 @@ export interface PaneActions {
   onFocus: (paneId: string) => void
   openRdp: (meta: { sessionPath: string; name: string; host: string; port: number }) => void
   onStatus: (paneId: string, text: string, row: number, col: number, encoding: string, hasTab: boolean) => void
+  onActiveTabState: (paneId: string, state: ActiveTabState) => void
   registerPane: (paneId: string, api: TabPaneApi) => () => void
   paneExists: (paneId: string) => boolean
 }

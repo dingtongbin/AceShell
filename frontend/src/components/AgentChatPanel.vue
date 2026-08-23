@@ -1316,6 +1316,7 @@ refreshProfiles()
       <span class="agent-title">{{ t('agent.panelTitle') }}</span>
       <n-tag v-if="status.running" size="tiny" type="info" round>{{ t('agent.stepIndicator', { step: status.step, max: status.maxSteps }) }}</n-tag>
       <div class="agent-header-actions">
+        <button class="ah-btn" @click="emit('close')"><n-icon :size="17" :component="CloseOutline" /></button>
         <n-tooltip trigger="hover" :delay="300">
           <template #trigger>
             <button class="ah-btn" @click="emit('toggle-maximize')">
@@ -1326,17 +1327,16 @@ refreshProfiles()
         </n-tooltip>
         <n-tooltip trigger="hover" :delay="300">
           <template #trigger>
-            <button class="ah-btn" @click="emit('open-mcp-settings')"><n-icon :size="17" :component="RocketOutline" /></button>
-          </template>
-          {{ t('agent.openMcpSettings') }}
-        </n-tooltip>
-        <n-tooltip trigger="hover" :delay="300">
-          <template #trigger>
             <button class="ah-btn" @click="emit('open-settings')"><n-icon :size="17" :component="SettingsOutline" /></button>
           </template>
           {{ t('agent.openSettings') }}
         </n-tooltip>
-        <button class="ah-btn" @click="emit('close')"><n-icon :size="17" :component="CloseOutline" /></button>
+        <n-tooltip trigger="hover" :delay="300">
+          <template #trigger>
+            <button class="ah-btn" @click="emit('open-mcp-settings')"><n-icon :size="17" :component="RocketOutline" /></button>
+          </template>
+          {{ t('agent.openMcpSettings') }}
+        </n-tooltip>
       </div>
     </div>
 
@@ -1350,11 +1350,11 @@ refreshProfiles()
       <div class="agent-session-actions">
         <n-tooltip trigger="hover" :delay="300">
           <template #trigger>
-            <button class="ah-btn" :disabled="!activeId" @click="handleRegenerate">
-              <n-icon :size="17" :component="RefreshOutline" />
+            <button class="ah-btn" @click="showHistory = true">
+              <n-icon :size="17" :component="TimeOutline" />
             </button>
           </template>
-          {{ t('agent.regenerate') }}
+          {{ t('agent.historyTitle') }}
         </n-tooltip>
         <n-tooltip trigger="hover" :delay="300">
           <template #trigger>
@@ -1366,11 +1366,11 @@ refreshProfiles()
         </n-tooltip>
         <n-tooltip trigger="hover" :delay="300">
           <template #trigger>
-            <button class="ah-btn" @click="showHistory = true">
-              <n-icon :size="17" :component="TimeOutline" />
+            <button class="ah-btn" :disabled="!activeId" @click="handleRegenerate">
+              <n-icon :size="17" :component="RefreshOutline" />
             </button>
           </template>
-          {{ t('agent.historyTitle') }}
+          {{ t('agent.regenerate') }}
         </n-tooltip>
       </div>
     </div>

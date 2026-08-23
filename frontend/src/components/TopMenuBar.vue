@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue'
 import { NIcon, NTooltip, useMessage } from 'naive-ui'
 import {
   AddOutline,
@@ -16,11 +16,15 @@ import {
   InformationCircleOutline,
   BookOutline,
   CheckmarkOutline,
+  CopyOutline,
+  ClipboardOutline,
+  CloseOutline,
 } from '@vicons/ionicons5'
 import { Window, Events } from '@wailsio/runtime'
 import { useTheme } from '../stores/theme'
-import { SetTheme } from '../../bindings/changeme/internal/services/configservice.js'
+import { GetConfig, SetTheme, SetShowSerial, SetShowHelp, SetCustomTitlebar, SetCloseConfirm, SetFileEditingAutoSave, SetShowToolbar, SetTerminalConfig } from '../../bindings/changeme/internal/services/configservice.js'
 import { useI18n } from 'vue-i18n'
+import type { ActiveTabState } from './tabTypes'
 
 const { t } = useI18n()
 const message = useMessage()
@@ -29,7 +33,8 @@ const { toggleTheme, isDark } = useTheme()
 const props = defineProps<{
   showSession: boolean
   showAgent: boolean
-  showToolbar: boolean
+  /** 活动标签页状态快照:用于按活动标签页启用/禁用工具菜单项 */
+  activeTabState: ActiveTabState
   /** 自绘标题栏开关(Frameless 模式):关闭时不渲染 ─□✕ 与拖拽区 */
   framelessEnabled: boolean
 }>()
@@ -37,7 +42,6 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'toggle-session'): void
   (e: 'toggle-agent'): void
-  (e: 'toggle-toolbar'): void
   (e: 'new-session'): void
   (e: 'new-folder'): void
   (e: 'import-sessions'): void
@@ -46,8 +50,7 @@ const emit = defineEmits<{
   (e: 'edit-active-session'): void
   (e: 'rename-selected'): void
   (e: 'delete-selected'): void
-  (e: 'exec-script'): void
-  (e: 'sftp'): void
+  (e: 'tool-action', key: string): void
   (e: 'about'): void
   (e: 'view-docs'): void
 }>()
@@ -56,6 +59,102 @@ const emit = defineEmits<{
 const isWails = typeof window !== 'undefined' && !!(window as any)._wails
 const showWinControls = computed(() => isWails && props.framelessEnabled)
 
+// ==================== 视图菜单:设置弹窗内的勾选项快捷开关 ====================
+
+const viewCfg = reactive({
+  showSerial: true,
+  showHelp: true,
+  customTitlebar: true,
+  showToolbar: true,
+  personalize: false,
+  copyOnSelect: true,
+  cursorBlink: true,
+  autoSave: true,
+  closeNoConfirm: false,
+})
+
+async function loadViewCfg() {
+  try {
+    const cfg = JSON.parse(await GetConfig())
+    viewCfg.showSerial = cfg.view?.showSerial ?? true
+    viewCfg.showHelp = cfg.view?.showHelp ?? true
+    viewCfg.customTitlebar = cfg.view?.customTitlebar ?? true
+    viewCfg.showToolbar = cfg.view?.showToolbar ?? true
+    viewCfg.personalize = cfg.terminal?.personalize ?? false
+    viewCfg.copyOnSelect = cfg.terminal?.copyOnSelect ?? true
+    viewCfg.cursorBlink = cfg.terminal?.cursorBlink ?? true
+    viewCfg.autoSave = cfg.fileEditing?.autoSave ?? true
+    viewCfg.closeNoConfirm = cfg.view?.closeConfirm === false
+  } catch {}
+}
+
+// 终端表单类勾选项通过 SetTerminalConfig 整包保存(与设置弹窗同一口径)
+async function setTermField(field: 'personalize' | 'copyOnSelect' | 'cursorBlink', value: boolean) {
+  try {
+    const cfg = JSON.parse(await GetConfig())
+    const t = cfg.terminal ?? {}
+    await SetTerminalConfig(JSON.stringify({
+      showToolbar: cfg.view?.showToolbar ?? true,
+      personalize: field === 'personalize' ? value : (t.personalize ?? false),
+      fontColor: t.fontColor || '#FFFFFF',
+      bgColor: t.bgColor || '#0C0C0C',
+      bgOpacity: t.bgOpacity ?? 100,
+      bgImage: t.bgImage || '',
+      fontFamily: t.fontFamily || '"Cascadia Code", Consolas, "Courier New", monospace',
+      fontSize: t.fontSize ?? 16,
+      lineHeight: t.lineHeight ?? 1,
+      copyOnSelect: field === 'copyOnSelect' ? value : (t.copyOnSelect ?? true),
+      cursorBlink: field === 'cursorBlink' ? value : (t.cursorBlink ?? true),
+      cursorStyle: t.cursorStyle || 'bar',
+      scrollback: t.scrollback ?? 1000,
+    }))
+  } catch {}
+}
+
+async function toggleViewItem(key: string) {
+  switch (key) {
+    case 'v-serial':
+      viewCfg.showSerial = !viewCfg.showSerial
+      await SetShowSerial(viewCfg.showSerial).catch(() => {})
+      break
+    case 'v-help':
+      viewCfg.showHelp = !viewCfg.showHelp
+      await SetShowHelp(viewCfg.showHelp).catch(() => {})
+      break
+    case 'v-titlebar':
+      viewCfg.customTitlebar = !viewCfg.customTitlebar
+      await SetCustomTitlebar(viewCfg.customTitlebar).catch(() => {})
+      break
+    case 'v-toolbar':
+      viewCfg.showToolbar = !viewCfg.showToolbar
+      await SetShowToolbar(viewCfg.showToolbar).catch(() => {})
+      break
+    case 'v-personalize':
+      viewCfg.personalize = !viewCfg.personalize
+      await setTermField('personalize', viewCfg.personalize)
+      break
+    case 'v-copy-select':
+      viewCfg.copyOnSelect = !viewCfg.copyOnSelect
+      await setTermField('copyOnSelect', viewCfg.copyOnSelect)
+      break
+    case 'v-cursor-blink':
+      viewCfg.cursorBlink = !viewCfg.cursorBlink
+      await setTermField('cursorBlink', viewCfg.cursorBlink)
+      break
+    case 'v-autosave':
+      viewCfg.autoSave = !viewCfg.autoSave
+      await SetFileEditingAutoSave(viewCfg.autoSave).catch(() => {})
+      break
+    case 'v-close-confirm':
+      viewCfg.closeNoConfirm = !viewCfg.closeNoConfirm
+      await SetCloseConfirm(!viewCfg.closeNoConfirm).catch(() => {})
+      break
+    default:
+      return
+  }
+  window.dispatchEvent(new Event('config-changed'))
+}
+
 // ==================== 菜单(迁移自 MainMenu,编辑项并入「文件」) ====================
 
 interface MenuItem {
@@ -63,6 +162,7 @@ interface MenuItem {
   label?: string
   icon?: any
   checked?: boolean
+  disabled?: boolean
   divider?: boolean
 }
 
@@ -71,6 +171,13 @@ interface MenuEntry {
   label: string
   items: MenuItem[]
 }
+
+// ==================== 工具菜单:镜像终端工具栏,按活动标签页启用/禁用 ====================
+
+// 活动标签页为终端标签页(复制/粘贴/脚本/日志/清屏等工具的前提)
+const hasActiveTerminal = computed(() => !!props.activeTabState?.hasTab && !!props.activeTabState?.isTerminal)
+// SFTP 仅对已连接的 SSH 会话可用
+const canSftp = computed(() => !!props.activeTabState?.hasTab && props.activeTabState?.protocol === 'ssh' && !!props.activeTabState?.connected)
 
 const menus = computed<MenuEntry[]>(() => [
   {
@@ -83,22 +190,40 @@ const menus = computed<MenuEntry[]>(() => [
       { key: 'import-sessions', label: t('mainMenu.importSessions'), icon: ArrowUpOutline },
       { key: 'export-sessions', label: t('mainMenu.exportSessions'), icon: DownloadOutline },
       { key: 'd2', divider: true },
-      { key: 'edit-active-session', label: t('mainMenu.editActiveSession'), icon: CreateOutline },
-      { key: 'rename-selected', label: t('mainMenu.renameSelected'), icon: CreateOutline },
-      { key: 'delete-selected', label: t('mainMenu.deleteSelected'), icon: TrashOutline },
-      { key: 'd3', divider: true },
       { key: 'exit', label: t('mainMenu.exit'), icon: LogOutOutline },
+    ],
+  },
+  {
+    key: 'view',
+    label: t('mainMenu.view'),
+    items: [
+      { key: 'v-serial', label: t('settings.serialManager'), checked: viewCfg.showSerial },
+      { key: 'v-help', label: t('settings.help'), checked: viewCfg.showHelp },
+      { key: 'v-titlebar', label: t('settings.customTitlebar'), checked: viewCfg.customTitlebar },
+      { key: 'dv1', divider: true },
+      { key: 'v-toolbar', label: t('settings.toolbarSwitch'), checked: viewCfg.showToolbar },
+      { key: 'v-personalize', label: t('settings.personalize'), checked: viewCfg.personalize },
+      { key: 'v-copy-select', label: t('settings.copyOnSelect'), checked: viewCfg.copyOnSelect },
+      { key: 'v-cursor-blink', label: t('settings.cursorBlink'), checked: viewCfg.cursorBlink },
+      { key: 'dv2', divider: true },
+      { key: 'v-autosave', label: t('settings.autoSave'), checked: viewCfg.autoSave },
+      { key: 'v-close-confirm', label: t('settings.noCloseConfirm'), checked: viewCfg.closeNoConfirm },
     ],
   },
   {
     key: 'tool',
     label: t('mainMenu.tool'),
     items: [
-      { key: 'exec-script', label: t('mainMenu.execScript'), icon: CodeOutline },
-      { key: 'sftp', label: 'SFTP', icon: FolderOpenOutline },
-      { key: 'toggle-theme', label: t('mainMenu.toggleTheme'), icon: isDark.value ? SunnyOutline : MoonOutline },
+      { key: 'copy-selection', label: t('tabPane.copySelection'), icon: CopyOutline, disabled: !hasActiveTerminal.value },
+      { key: 'paste-terminal', label: t('tabPane.pasteToTerminal'), icon: ClipboardOutline, disabled: !hasActiveTerminal.value },
+      { key: 'sftp', label: 'SFTP', icon: FolderOpenOutline, disabled: !canSftp.value },
       { key: 'd1', divider: true },
-      { key: 'toggle-toolbar', label: t('mainMenu.toolbar'), checked: props.showToolbar },
+      { key: 'exec-script', label: t('mainMenu.execScript'), icon: CodeOutline, disabled: !hasActiveTerminal.value },
+      { key: 'export-log', label: t('tabPane.exportLog'), icon: DownloadOutline, disabled: !hasActiveTerminal.value },
+      { key: 'clear-scrollback', label: t('tabPane.clearScrollback'), icon: TrashOutline, disabled: !hasActiveTerminal.value },
+      { key: 'clear-screen', label: t('tabPane.clearScreen'), icon: CloseOutline, disabled: !hasActiveTerminal.value },
+      { key: 'd2', divider: true },
+      { key: 'toggle-theme', label: t('mainMenu.toggleTheme'), icon: isDark.value ? SunnyOutline : MoonOutline },
     ],
   },
   {
@@ -138,13 +263,28 @@ function handleSelect(key: string) {
     case 'edit-active-session': emit('edit-active-session'); break
     case 'rename-selected': emit('rename-selected'); break
     case 'delete-selected': emit('delete-selected'); break
-    case 'exec-script': emit('exec-script'); break
-    case 'sftp': emit('sftp'); break
+    case 'exec-script': emit('tool-action', 'exec-script'); break
+    case 'sftp': emit('tool-action', 'sftp'); break
+    case 'copy-selection': emit('tool-action', 'copy-selection'); break
+    case 'paste-terminal': emit('tool-action', 'paste-terminal'); break
+    case 'export-log': emit('tool-action', 'export-log'); break
+    case 'clear-scrollback': emit('tool-action', 'clear-scrollback'); break
+    case 'clear-screen': emit('tool-action', 'clear-screen'); break
     case 'toggle-theme':
       toggleTheme()
       SetTheme(isDark.value ? 'dark' : 'light').catch(() => message.error(t('mainMenu.saveThemeFailed')))
       break
-    case 'toggle-toolbar': emit('toggle-toolbar'); break
+    case 'v-serial':
+    case 'v-help':
+    case 'v-titlebar':
+    case 'v-toolbar':
+    case 'v-personalize':
+    case 'v-copy-select':
+    case 'v-cursor-blink':
+    case 'v-autosave':
+    case 'v-close-confirm':
+      toggleViewItem(key)
+      break
     case 'about': emit('about'); break
     case 'view-docs': emit('view-docs'); break
     default: return
@@ -164,6 +304,8 @@ function onEsc(e: KeyboardEvent) {
 }
 
 onMounted(() => {
+  loadViewCfg()
+  window.addEventListener('config-changed', loadViewCfg)
   document.addEventListener('click', onDocClick)
   document.addEventListener('keydown', onEsc)
   if (showWinControls.value) {
@@ -172,6 +314,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  window.removeEventListener('config-changed', loadViewCfg)
   document.removeEventListener('click', onDocClick)
   document.removeEventListener('keydown', onEsc)
 })
@@ -250,8 +393,8 @@ onBeforeUnmount(() => {
             v-for="it in m.items"
             :key="it.key"
             class="tmb-menu-item"
-            :class="{ divider: it.divider }"
-            @click="it.divider ? null : handleSelect(it.key)"
+            :class="{ divider: it.divider, disabled: it.disabled }"
+            @click="it.divider || it.disabled ? null : handleSelect(it.key)"
           >
             <template v-if="!it.divider">
               <span class="tmi-icon"><n-icon v-if="it.icon" :size="15" :component="it.icon" /></span>
@@ -387,6 +530,7 @@ onBeforeUnmount(() => {
   padding: 4px;
   z-index: 1000;
   animation: tmb-drop 0.12s ease;
+  text-align: left;
 }
 
 @keyframes tmb-drop {
@@ -397,6 +541,7 @@ onBeforeUnmount(() => {
 .tmb-menu-item {
   display: flex;
   align-items: center;
+  justify-content: flex-start;
   gap: 8px;
   padding: 6px 10px;
   font-size: 13px;
@@ -405,10 +550,20 @@ onBeforeUnmount(() => {
   cursor: pointer;
   transition: background 0.12s;
   white-space: nowrap;
+  text-align: left;
 }
 
 .tmb-menu-item:hover {
   background: rgba(255, 255, 255, 0.08);
+}
+
+.tmb-menu-item.disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.tmb-menu-item.disabled:hover {
+  background: transparent;
 }
 
 .tmb-menu-item.divider {
@@ -428,6 +583,7 @@ onBeforeUnmount(() => {
 
 .tmi-label {
   flex: 1;
+  text-align: left;
 }
 
 .tmi-check {

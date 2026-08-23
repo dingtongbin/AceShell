@@ -187,6 +187,7 @@ export default {
   leftToolBar: {},
   mainMenu: {
     file: 'File',
+    view: 'View',
     newSession: 'New Session',
     newFolder: 'New Folder',
     importSessions: 'Import Session File',
@@ -197,7 +198,7 @@ export default {
     renameSelected: 'Rename Selected Node',
     deleteSelected: 'Delete Selected Node',
     tool: 'Tools',
-    execScript: 'Run Current Script',
+    execScript: 'Run Script',
     toggleTheme: 'Toggle Theme',
     toolbar: 'Toolbar',
     help: 'Help',

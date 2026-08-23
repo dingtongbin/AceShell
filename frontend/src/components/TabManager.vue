@@ -11,7 +11,7 @@ import TabPane from './TabPane.vue'
 import SplitPane from './SplitPane.vue'
 import RemoteDesktopTab from './RemoteDesktopTab.vue'
 import type { LayoutNode, SplitNode } from './tabTypes'
-import type { Pane, PaneCtx, TabPaneApi, SplitDir, Tab } from './tabTypes'
+import type { Pane, PaneCtx, TabPaneApi, SplitDir, Tab, ActiveTabState } from './tabTypes'
 import { useI18n } from 'vue-i18n'
 
 const { t } = useI18n()
@@ -23,6 +23,7 @@ const emit = defineEmits<{
   (e: 'new-telnet'): void
   (e: 'new-serial'): void
   (e: 'status', info: { text: string; row: number; col: number; encoding: string; hasTab: boolean }): void
+  (e: 'active-tab-state', state: ActiveTabState): void
 }>()
 
 const isVertical = computed(() => props.tabOrientation === 'vertical')
@@ -268,6 +269,12 @@ function onStatus(paneId: string, text: string, row: number, col: number, encodi
   if (p?.focused) emit('status', { text, row, col, encoding, hasTab })
 }
 
+// 活动标签页状态：仅转发焦点 pane（供顶级菜单按活动标签页启用/禁用工具）
+function onActiveTabState(paneId: string, state: ActiveTabState) {
+  const p = findPane(paneId)
+  if (p?.focused) emit('active-tab-state', state)
+}
+
 // 文件编辑器光标位置上报:转发到焦点 pane
 function reportCursor(row: number, col: number) { focusApi()?.reportCursor(row, col) }
 
@@ -349,6 +356,7 @@ provide<PaneCtx>('pane-ctx', {
     onFocus: (paneId) => setFocus(paneId),
     openRdp,
     onStatus,
+    onActiveTabState,
     registerPane: (paneId, api) => {
       paneApis.set(paneId, api)
       return () => { paneApis.delete(paneId) }

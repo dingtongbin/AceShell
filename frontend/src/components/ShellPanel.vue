@@ -5,6 +5,7 @@ import { DocumentTextOutline } from '@vicons/ionicons5'
 import { Window } from '@wailsio/runtime'
 import LeftToolBar from './LeftToolBar.vue'
 import TopMenuBar from './TopMenuBar.vue'
+import type { ActiveTabState } from './tabTypes'
 import ResourceManager from './ResourceManager.vue'
 import TabManager from './TabManager.vue'
 import ExportDialog from './ExportDialog.vue'
@@ -12,7 +13,7 @@ import ImportDialog from './ImportDialog.vue'
 
 import { SaveSession, CreateFolder, LoadSession, GetTree, UpdateSession } from '../../bindings/changeme/internal/services/sessionfileservice.js'
 import { GetVersion } from '../../bindings/changeme/internal/services/versionservice.js'
-import { GetConfig, SetShowSession, SetShowSerial, SetShowToolbar, SetCustomTitlebar, SetPanelLayout } from '../../bindings/changeme/internal/services/configservice.js'
+import { GetConfig, SetShowSession, SetShowSerial, SetCustomTitlebar, SetPanelLayout } from '../../bindings/changeme/internal/services/configservice.js'
 import { ListPorts } from '../../bindings/changeme/internal/services/serialservice.js'
 import { OpenUrl as BrowserOpenUrl } from '../../bindings/changeme/internal/services/browserservice.js'
 import { useI18n } from 'vue-i18n'
@@ -61,6 +62,8 @@ function onTabStatus(info: { text: string; row: number; col: number; encoding: s
 const showSerial = ref(true)
 const showToolbar = ref(true)
 const showHelp = ref(true)
+// 活动标签页状态快照:顶级菜单按活动标签页启用/禁用工具
+const activeTabState = ref<ActiveTabState>({ hasTab: false, isTerminal: false, protocol: '', connected: false })
 const appVersion = ref('0.1.2')
 const showExport = ref(false)
 const showImport = ref(false)
@@ -263,11 +266,6 @@ function closeAgentPanel() {
 watch(customTitlebar, v => {
   Window.SetFrameless(v).catch(() => {})
 })
-
-function toggleToolbar() {
-  showToolbar.value = !showToolbar.value
-  SetShowToolbar(showToolbar.value).catch(() => message.error(t('shellPanel.saveConfigFailed')))
-}
 
 function toggleSerial() {
   showSerial.value = !showSerial.value
@@ -797,6 +795,8 @@ function handleToolAction(key: string) {
   switch (key) {
     case 'sftp': tm.openSftp(); break
     case 'exec-script': tm.openScriptDialog(); break
+    case 'copy-selection': tm.copySelection(); break
+    case 'paste-terminal': tm.pasteClipboard(); break
     case 'export-log': tm.exportLog(); break
     case 'clear-scrollback': tm.clearScrollback(); break
     case 'clear-screen': tm.clearScreen(); break
@@ -849,11 +849,10 @@ onBeforeUnmount(() => {
     <TopMenuBar
       :show-session="showSessionManager"
       :show-agent="showAgentPanel"
-      :show-toolbar="showToolbar"
+      :active-tab-state="activeTabState"
       :frameless-enabled="customTitlebar"
       @toggle-session="toggleSessionManager"
       @toggle-agent="toggleAgentPanel"
-      @toggle-toolbar="toggleToolbar"
       @new-session="openNewSession('')"
       @new-folder="handleNewFolder('')"
       @import-sessions="showImport = true"
@@ -862,8 +861,7 @@ onBeforeUnmount(() => {
       @edit-active-session="handleEditActiveSession"
       @rename-selected="handleRenameSelected"
       @delete-selected="handleDeleteSelected"
-      @exec-script="handleToolAction('exec-script')"
-      @sftp="handleToolAction('sftp')"
+      @tool-action="handleToolAction"
       @about="showAbout = true"
       @view-docs="openExternal('https://github.com/dingtongbin/AceShell')"
     />
@@ -900,7 +898,7 @@ onBeforeUnmount(() => {
       <div v-if="leftPanel !== 'none'" class="resize-handle" :class="{ 'handle-overlay': isNarrow }" :style="{ left: sessionWidth + 'px' }" @pointerdown="startResize" />
       <div class="tab-area">
         <TabManager ref="tabManagerRef" :show-toolbar="showToolbar" :tab-orientation="tabOrientation" :vertical-tab-width="verticalTabWidth"
-          @new-ssh="openNewSession('', 'ssh')" @new-telnet="openNewSession('', 'telnet')" @new-serial="openNewSession('', 'serial')" @status="onTabStatus" />
+          @new-ssh="openNewSession('', 'ssh')" @new-telnet="openNewSession('', 'telnet')" @new-serial="openNewSession('', 'serial')" @status="onTabStatus" @active-tab-state="(s) => { activeTabState = s }" />
       </div>
       <!-- 智能体聊天面板:右侧停靠,可最大化铺满内容区(悬浮覆盖);窄窗时浮层弹出 -->
       <AgentChatPanel
