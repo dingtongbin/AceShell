@@ -21,9 +21,12 @@ import KeyCredentialsDialog from './KeyCredentialsDialog.vue'
 import SftpPanel from './SftpPanel.vue'
 import { Disconnect as SftpDisconnect } from '../../bindings/changeme/internal/services/sftpservice.js'
 import { Copy as ClipboardCopy, Paste as ClipboardPaste } from '../../bindings/changeme/internal/services/clipboardservice.js'
-import type { Pane, Tab, TabPaneApi, ComponentTabOptions, ComponentTabPatch, PaneActions, PaneCtx } from './tabTypes'
+import type { Pane, Tab, TabPaneApi, ComponentTabOptions, ComponentTabPatch, PaneActions, PaneCtx, ActiveTabState } from './tabTypes'
 import { dragState } from './tabTypes'
 import { useI18n } from 'vue-i18n'
+import { useMcpBridge } from '../composables/useMcpBridge'
+
+const { notifyUserInput: mcpNotifyUserInput } = useMcpBridge()
 
 const props = defineProps<{
   pane: Pane
@@ -50,7 +53,7 @@ const pane = props.pane
 const paneInstanceId = ++paneInstanceSeq
 const ctx = inject<PaneCtx>('pane-ctx')
 const actions: PaneActions = ctx?.actions ?? {
-  onSplit: () => {}, onMoveTab: () => {}, onSplitAt: () => {}, onFocus: () => {}, onStatus: () => {}, registerPane: () => () => {}, paneExists: () => true, openRdp: () => {},
+  onSplit: () => {}, onMoveTab: () => {}, onSplitAt: () => {}, onFocus: () => {}, onStatus: () => {}, onActiveTabState: () => {}, registerPane: () => () => {}, paneExists: () => true, openRdp: () => {},
 }
 
 const message = useMessage()
@@ -166,23 +169,23 @@ function gIcon(p: string) { switch (p) { case 'serial': return RadioOutline; def
 function gColor(p: string) { switch (p) { case 'ssh': return '#4ec9b0'; case 'telnet': return '#569cd6'; case 'serial': return '#c586c0'; default: return '#6e9fc7' } }
 function gStatus(s: string) { switch (s) { case 'connected': return '#4ec9b0'; case 'connecting': return '#f2c97d'; case 'error': return '#e45858'; default: return '#555' } }
 
-async function openSession(sessionPath: string) {
+async function openSession(sessionPath: string): Promise<string> {
   let meta: any
-  try { meta = JSON.parse(await LoadSession(sessionPath)) } catch (e: any) { console.error('Load error:', e); return }
+  try { meta = JSON.parse(await LoadSession(sessionPath)) } catch (e: any) { console.error('Load error:', e); return '' }
   // SFTP 会话：复用 SSH 认证流程，连接成功后打开 SFTP 面板标签页（不创建终端标签页）
   if ((meta.protocol || 'telnet') === 'sftp') {
     openSftpSession(sessionPath, meta)
-    return
+    return ''
   }
   // HTTP 会话：直接打开所选浏览器的新标签页（不创建应用内标签页）
   if ((meta.protocol || 'telnet') === 'http') {
     openHttpSession(sessionPath, meta)
-    return
+    return ''
   }
   // RDP 会话：图形标签页,按 (host:port) 去重,已存在则定位激活
   if ((meta.protocol || 'telnet') === 'rdp') {
     actions.openRdp({ sessionPath, name: meta.name || meta.host, host: meta.host, port: meta.port })
-    return
+    return ''
   }
   const tabId = sessionPath + '@' + Date.now() + '-' + Math.random().toString(36).slice(2, 8)
   const tabData: Tab = { id: tabId, sessionPath, title: meta.name || sessionPath, protocol: meta.protocol || 'telnet', host: meta.host, port: meta.port, username: meta.username || '', status: 'connecting', terminal: null, fitAddon: null, logBuffer: '', kind: 'terminal' }
@@ -209,6 +212,7 @@ async function openSession(sessionPath: string) {
       tab.terminal?.write(`\r\n\x1b[31m${t('tabPane.connectFailed', { err: e.message || e })}\x1b[0m\r\n`)
     }
   })
+  return tabId
 }
 
 
@@ -317,14 +321,17 @@ function createTerminal(container: HTMLElement, targetId: string, protocol: stri
   return createXterm(container, {
     isConnected: () => isConnectedFor(targetId),
     onData: (d: string) => {
+      mcpNotifyUserInput()
       if (isConnectedFor(targetId)) {
         sendToTab(targetId, protocol, d)
       }
     },
     onPaste: (text: string) => {
+      mcpNotifyUserInput()
       if (isConnectedFor(targetId)) sendToTab(targetId, protocol, text)
     },
     onMultiLinePaste: (text: string) => {
+      mcpNotifyUserInput()
       pasteTargetId.value = targetId
       openPasteEditor(text)
     },
@@ -359,6 +366,9 @@ function confirmPaste() {
   const outer = findTabById(targetId)
   if (outer && outer.status === 'connected') {
     sendToTab(outer.id, outer.protocol, pasteContent.value)
+    if (mcpSendResolve) { mcpSendResolve({ ok: true }); mcpSendResolve = null }
+  } else if (mcpSendResolve) {
+    mcpSendResolve({ ok: false, note: 'tab not connected' }); mcpSendResolve = null
   }
   showPasteConfirm.value = false
   disposePasteEditor()
@@ -371,6 +381,52 @@ function cancelPaste() {
   disposePasteEditor()
   pasteContent.value = ''
   pasteTargetId.value = ''
+  if (mcpSendResolve) { mcpSendResolve({ ok: false, note: 'user canceled multiline input' }); mcpSendResolve = null }
+}
+
+// ==================== MCP 桥接(与用户操作完全相同的路径) ====================
+
+// MCP 多行输入的粘贴弹窗决议回调(用户确认/取消后回执后端)
+let mcpSendResolve: ((v: { ok: boolean; note?: string }) => void) | null = null
+
+// mcpTerminalSend MCP 向终端输入文本:
+//   - activateTab=true(默认) → 先激活目标标签页(MCP 操作对用户可见,界面同步跳转)
+//   - needPasteConfirm=true(手动模式多行) → 走与用户粘贴完全相同的多行确认弹窗
+//   - 否则直接送入终端;单行命令缺换行时补 \n(与用户敲回车一致)
+function mcpTerminalSend(tabId: string, text: string, needPasteConfirm: boolean, activateTab = true): Promise<{ ok: boolean; note?: string }> {
+  return new Promise(resolve => {
+    const tab = pane.tabs.find(t => t.id === tabId)
+    if (!tab || tab.kind !== 'terminal') {
+      resolve({ ok: false, note: 'terminal tab not found: ' + tabId })
+      return
+    }
+    if (activateTab) switchTab(tabId)
+    if (needPasteConfirm) {
+      mcpSendResolve = resolve
+      pasteTargetId.value = tabId
+      openPasteEditor(text)
+      return
+    }
+    if (tab.status !== 'connected') {
+      resolve({ ok: false, note: 'tab not connected' })
+      return
+    }
+    let payload = text
+    if (!text.includes('\n') && !text.includes('\r')) payload = text + '\n'
+    sendToTab(tabId, tab.protocol, payload)
+    resolve({ ok: true })
+  })
+}
+
+// mcpCloseTab MCP 关闭标签页: 与用户手动关闭完全一致(未保存脚本弹确认;用户取消则回执失败)
+// activateTab=false 时不跳转(后台化操作)
+async function mcpCloseTab(tabId: string, activateTab = true): Promise<{ ok: boolean; note?: string }> {
+  const tab = pane.tabs.find(t => t.id === tabId)
+  if (!tab) return { ok: false, note: 'tab not found: ' + tabId }
+  if (activateTab) switchTab(tabId)
+  await doCloseTab(tab)
+  const still = pane.tabs.some(t => t.id === tabId)
+  return still ? { ok: false, note: 'user canceled close' } : { ok: true }
 }
 
 // 标签页右键菜单
@@ -862,6 +918,8 @@ onMounted(() => {
     reportCursor,
     copySelection,
     pasteClipboard,
+    mcpTerminalSend,
+    mcpCloseTab,
   })
 
   // 挂载后强制聚焦活动终端:拆分/合并导致组件重建时,键盘焦点可能落在 body 等非终端元素,
@@ -951,6 +1009,14 @@ function reportCursor(row: number, col: number) {
 watch([() => pane.activeTabId, cursorRow, cursorCol], () => {
   actions.onStatus(pane.id, getStatusLeft(), cursorRow.value, cursorCol.value, getStatusEncoding(), !!pane.activeTabId)
 })
+
+// 活动标签页状态快照上报:供顶级菜单按活动标签页启用/禁用工具栏工具
+const activeTabState = computed<ActiveTabState>(() => {
+  const t = activeTab.value
+  if (!t) return { hasTab: false, isTerminal: false, protocol: '', connected: false }
+  return { hasTab: true, isTerminal: t.kind === 'terminal', protocol: t.protocol, connected: t.status === 'connected' }
+})
+watch(activeTabState, (s) => { actions.onActiveTabState(pane.id, s) }, { immediate: true })
 
 // 打开 SFTP 面板标签页：复用既有 SSH 连接。disconnectSshOnClose 为 true 时关闭标签页同时断开其 SSH 连接
 function openSftpPanel(connID: string, title: string, disconnectSshOnClose = false) {
@@ -1099,6 +1165,8 @@ defineExpose({
   reportCursor,
   copySelection,
   pasteClipboard,
+  mcpTerminalSend,
+  mcpCloseTab,
 })
 
 function emitWelcome(e: 'new-ssh' | 'new-telnet' | 'new-serial') {

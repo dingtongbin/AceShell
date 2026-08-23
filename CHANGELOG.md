@@ -2,6 +2,29 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 与 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 规范。
 
+## [Unreleased]
+
+### 安全加固
+
+- **SSH 公钥部署两阶段指纹确认**：前端先探测目标主机指纹并要求用户勾选核对，后端 `SshCopyKey` 强制 pin 校验（未提供指纹时拒绝连接），防止中间人截获部署密码
+- **事件载荷 JSON 注入防护**：全部会话事件（`session-status-changed` / `session-output` 等）统一改用 `json.Marshal` 构造，替代手工 `Sprintf` 拼接，消息含引号/反斜杠不再产生非法 JSON；新增 `eventpayload.go` 统一载荷定义
+- **配置密文不外发**：`GetConfig` 及全部 `Set*` 接口返回值剥离 `Mcp.TokenEnc` / `Agent.ApiKeyEnc`，前端仅凭 `hasKey` 判断是否已存密钥
+- **会话文件校验**：`UpdateSession` 对会话名 sanitize（空名拒绝）；`SaveSession` 校验 folder 不逃逸 sessions 目录
+- **日志与随机源防护**：`LogOutput` 增加日志 ID 合法性校验；会话 ID 随机源失败即拒绝创建（fail-close）
+- config 写盘失败留痕日志（marshal/write 分步标记）
+
+### 缺陷修复
+
+- **SSH 连接并发重构**：`connectCommon` 占位模式消除连接窗口期竞态（连接中可安全 Disconnect/GetSessions）；`Send`/`Resize` 未就绪防护；keepalive 改 `wantReply=false` 防服务端无响应阻塞 goroutine
+- **RDP 桥泄漏修复**：rdcleanpath 桥首条消息读取增加 15s 超时，防恶意客户端挂起导致 goroutine 泄漏
+- **事件注册补全**：MCP 5 个、Agent 5 个事件补 `RegisterEvent` 注册；清理废弃事件注册（`session-list-changed` / `sftp-status-changed` / `sftp-add-tab`）与死代码
+- agentservice.go 移除 UTF-8 BOM
+
+### 界面
+
+- 窄窗自适应：窗宽 <1000px 时资源管理器/AI 面板浮层弹出，不再挤压终端区
+- AI 面板头部按钮布局优化，更名「智能助手」
+
 ## [0.1.4] - 2026-08-21
 
 ### 安全加固

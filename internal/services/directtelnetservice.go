@@ -143,31 +143,6 @@ func (w *connWriter) Write(p []byte) (int, error) {
 }
 
 // escapeJSON 将字符串转义为可安全嵌入 JSON 字符串的字节序列。
-func escapeJSON(s string) string {
-	result := make([]byte, 0, len(s)+10)
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		switch c {
-		case '"':
-			result = append(result, '\\', '"')
-		case '\\':
-			result = append(result, '\\', '\\')
-		case '\n':
-			result = append(result, '\\', 'n')
-		case '\r':
-			result = append(result, '\\', 'r')
-		case '\t':
-			result = append(result, '\\', 't')
-		default:
-			if c < 0x20 {
-				result = append(result, fmt.Sprintf("\\u%04x", c)...)
-			} else {
-				result = append(result, c)
-			}
-		}
-	}
-	return string(result)
-}
 
 // TelnetSession 表示一条 Telnet 连接会话。
 type TelnetSession struct {
@@ -222,14 +197,14 @@ func (d *DirectTelnetService) connect(id, host string, port int, username, passw
 
 	conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, fmt.Sprintf("%d", port)), 10*time.Second)
 	if err != nil {
-		d.emit("session-status-changed", fmt.Sprintf(`{"id":"%s","status":"error","message":"%s"}`, id, escapeJSON(err.Error())))
+		d.emit("session-status-changed", sessionStatusJSON(id, "error", err.Error()))
 		return err
 	}
 
 	sess := &TelnetSession{ID: id, Host: host, Port: port, conn: conn, username: username, password: password}
 	d.sess[id] = sess
 
-	d.emit("session-status-changed", fmt.Sprintf(`{"id":"%s","status":"connected"}`, id))
+	d.emit("session-status-changed", sessionStatusJSON(id, "connected", ""))
 
 	conn.Write([]byte{iac, will, optSuppressGA})
 	conn.Write([]byte{iac, will, optEcho})
@@ -248,15 +223,16 @@ func (d *DirectTelnetService) readLoop(sess *TelnetSession) {
 			cleaned := d.negotiate(sess, buf[:n])
 			if len(cleaned) > 0 {
 				output := string(cleaned)
-				d.emit("session-output", fmt.Sprintf(`{"id":"%s","data":"%s"}`, sess.ID, escapeJSON(output)))
+				d.emit("session-output", sessionOutputJSON(sess.ID, output))
 				if MainLogService != nil { MainLogService.LogOutput(sess.ID, output) }
+				if MainMcpService != nil { MainMcpService.TapOutput(sess.ID, cleaned) }
 				d.tryAutoLogin(sess, output)
 			}
 		}
 		if err != nil {
 			if MainLogService != nil { MainLogService.EndSession(sess.ID) }
 			if err != io.EOF {
-				d.emit("session-status-changed", fmt.Sprintf(`{"id":"%s","status":"error","message":"%s"}`, sess.ID, escapeJSON(err.Error())))
+				d.emit("session-status-changed", sessionStatusJSON(sess.ID, "error", err.Error()))
 			}
 			d.closeSession(sess)
 			return
@@ -363,7 +339,7 @@ func (d *DirectTelnetService) closeSession(sess *TelnetSession) {
 	d.mu.Lock()
 	delete(d.sess, sess.ID)
 	d.mu.Unlock()
-	d.emit("session-status-changed", fmt.Sprintf(`{"id":"%s","status":"disconnected"}`, sess.ID))
+	d.emit("session-status-changed", sessionStatusJSON(sess.ID, "disconnected", ""))
 }
 
 // keepaliveLoop 周期性发送 Telnet NOP 保活探测,检测对端存活;会话关闭后退出。

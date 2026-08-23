@@ -62,7 +62,7 @@ func (s *SerialService) Connect(id, portName string, baudRate, dataBits int, sto
 
 	port, err := serial.Open(portName, mode)
 	if err != nil {
-		s.safeEmit("session-status-changed", fmt.Sprintf(`{"id":"%s","status":"error","message":"%s"}`, id, escapeJSON(err.Error())))
+		s.safeEmit("session-status-changed", sessionStatusJSON(id, "error", err.Error()))
 		return err
 	}
 
@@ -74,7 +74,7 @@ func (s *SerialService) Connect(id, portName string, baudRate, dataBits int, sto
 	}
 	s.sess[id] = sess
 
-	s.safeEmit("session-status-changed", fmt.Sprintf(`{"id":"%s","status":"connected"}`, id))
+	s.safeEmit("session-status-changed", sessionStatusJSON(id, "connected", ""))
 
 	go s.readLoop(sess)
 	return nil
@@ -85,11 +85,12 @@ func (s *SerialService) readLoop(sess *SerialSession) {
 	for {
 		n, err := sess.port.Read(buf)
 		if n > 0 {
-			s.safeEmit("session-output", fmt.Sprintf(`{"id":"%s","data":"%s"}`, sess.ID, escapeJSON(string(buf[:n]))))
+			s.safeEmit("session-output", sessionOutputJSON(sess.ID, string(buf[:n])))
+			if MainMcpService != nil { MainMcpService.TapOutput(sess.ID, buf[:n]) }
 		}
 		if err != nil {
 			if err != io.EOF {
-				s.safeEmit("session-status-changed", fmt.Sprintf(`{"id":"%s","status":"error","message":"%s"}`, sess.ID, escapeJSON(err.Error())))
+				s.safeEmit("session-status-changed", sessionStatusJSON(sess.ID, "error", err.Error()))
 			}
 			s.closeSession(sess)
 			return
@@ -150,7 +151,7 @@ func (s *SerialService) closeSession(sess *SerialSession) {
 	s.mu.Lock()
 	delete(s.sess, sess.ID)
 	s.mu.Unlock()
-	s.safeEmit("session-status-changed", fmt.Sprintf(`{"id":"%s","status":"disconnected"}`, sess.ID))
+	s.safeEmit("session-status-changed", sessionStatusJSON(sess.ID, "disconnected", ""))
 }
 
 // ListPorts 列出系统可用串口。

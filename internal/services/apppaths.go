@@ -62,6 +62,16 @@ func ConfigFilePath() string {
 	return configFile
 }
 
+// McpConfigFile 返回 MCP 独立配置文件路径(与主配置同目录)。
+func McpConfigFile() string {
+	return filepath.Join(filepath.Dir(configFile), "mcp.toml")
+}
+
+// AgentConfigFile 返回智能体独立配置文件路径(与主配置同目录)。
+func AgentConfigFile() string {
+	return filepath.Join(filepath.Dir(configFile), "agent.toml")
+}
+
 // DBFilePath 返回本地数据库文件路径。
 func DBFilePath() string {
 	return filepath.Join(dataDir, dbFileName)

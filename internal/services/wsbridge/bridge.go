@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -33,6 +34,10 @@ func Start(tokenCheck func(string) (string, bool)) (string, *http.Server, error)
 }
 
 func handleBridge(w http.ResponseWriter, r *http.Request, tokenCheck func(string) (string, bool)) {
+	if !originAllowed(r.Header.Get("Origin")) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
 	boundTarget, ok := tokenCheck(r.URL.Query().Get("token"))
 	if !ok {
 		http.Error(w, "forbidden", http.StatusForbidden)
@@ -70,7 +75,11 @@ func handleBridge(w http.ResponseWriter, r *http.Request, tokenCheck func(string
 func handleRdcleanpathBridge(ws *websocket.Conn, r *http.Request, boundTarget string) {
 	ctx := context.Background()
 	ws.SetReadLimit(-1)
-	_, data, err := ws.Read(ctx)
+	// 首包(握手请求)限时 15s: 恶意/半开客户端不发数据时及时释放,
+	// 避免 goroutine 在无界 Read 上永久悬挂。
+	readCtx, readCancel := context.WithTimeout(ctx, 15*time.Second)
+	_, data, err := ws.Read(readCtx)
+	readCancel()
 	if err != nil {
 		_ = ws.Close(websocket.StatusProtocolError, "missing rdcleanpath request")
 		return
@@ -113,6 +122,28 @@ func handleRdcleanpathBridge(ws *websocket.Conn, r *http.Request, boundTarget st
 		return
 	}
 	relay(ws, stream)
+}
+
+// originAllowed 校验 WebSocket 握手 Origin 头,防止用户浏览器中的恶意网页
+// 连接本机桥接端口(浏览器强制同源策略,网页 JS 无法伪造 Origin 头)。
+// 允许:
+//   - 空:非浏览器本机客户端(如后端自身、curl)不发 Origin
+//   - null:自定义 scheme webview(macOS/Linux/iOS 加载 wails:// 页面时 origin 序列化为 null)
+//   - wails.localhost:Wails 各平台 webview 固定 origin(http/https)
+//   - localhost/127.0.0.1 任意端口:开发模式前端 dev server
+func originAllowed(origin string) bool {
+	if origin == "" || origin == "null" {
+		return true
+	}
+	u, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	switch u.Hostname() {
+	case "wails.localhost", "localhost", "127.0.0.1", "::1":
+		return true
+	}
+	return false
 }
 
 // validTarget 校验 target 为合法的 host:port。

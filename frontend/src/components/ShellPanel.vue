@@ -4,7 +4,8 @@ import { NModal, NInput, NInputNumber, NSelect, NButton, NDescriptions, NDescrip
 import { DocumentTextOutline } from '@vicons/ionicons5'
 import { Window } from '@wailsio/runtime'
 import LeftToolBar from './LeftToolBar.vue'
-import MainMenu from './MainMenu.vue'
+import TopMenuBar from './TopMenuBar.vue'
+import type { ActiveTabState } from './tabTypes'
 import ResourceManager from './ResourceManager.vue'
 import TabManager from './TabManager.vue'
 import ExportDialog from './ExportDialog.vue'
@@ -12,7 +13,7 @@ import ImportDialog from './ImportDialog.vue'
 
 import { SaveSession, CreateFolder, LoadSession, GetTree, UpdateSession } from '../../bindings/changeme/internal/services/sessionfileservice.js'
 import { GetVersion } from '../../bindings/changeme/internal/services/versionservice.js'
-import { GetConfig, SetShowSession, SetShowSerial, SetShowToolbar } from '../../bindings/changeme/internal/services/configservice.js'
+import { GetConfig, SetShowSession, SetShowSerial, SetCustomTitlebar, SetPanelLayout } from '../../bindings/changeme/internal/services/configservice.js'
 import { ListPorts } from '../../bindings/changeme/internal/services/serialservice.js'
 import { OpenUrl as BrowserOpenUrl } from '../../bindings/changeme/internal/services/browserservice.js'
 import { useI18n } from 'vue-i18n'
@@ -23,16 +24,35 @@ import KeyCreateDialog from './KeyCreateDialog.vue'
 import SshCopyDialog from './SshCopyDialog.vue'
 import FileEditor from './FileEditor.vue'
 import type { FileEditorApi } from './FileEditor.vue'
+import McpSettingsPanel from './McpSettingsPanel.vue'
+import AgentChatPanel from './AgentChatPanel.vue'
+import AgentSettingsDialog from './AgentSettingsDialog.vue'
+import { useMcpBridge } from '../composables/useMcpBridge'
+import { useAgentBridge } from '../composables/useAgentBridge'
 
 const message = useMessage()
 const { t } = useI18n()
+const { initMcpBridge, bindTabManager, bindOpenScriptHandler, criticalBlock } = useMcpBridge()
+const { initAgentBridge } = useAgentBridge()
 
 const emit = defineEmits<{
   (e: 'open-settings'): void
 }>()
 
-const showSessionManager = ref(true)
-const mainMenuShow = ref(false)
+// 左侧面板两态:资源管理器 / 关闭(MCP 设置已弹窗化,不再占用侧栏)
+const leftPanel = ref<'resource' | 'none'>('resource')
+// 右侧智能体聊天面板(独立于左侧面板,独立开关,可最大化铺满)
+const showAgentPanel = ref(false)
+const agentPanelWidth = ref(300)
+const agentMaximized = ref(false)
+// MCP 设置弹窗(独立于智能体设置弹窗)
+const showMcpSettings = ref(false)
+// 智能体设置弹窗(独立于主设置弹窗)
+const showAgentSettings = ref(false)
+// 兼容原 showSessionManager 语义:资源面板是否开启(配置持久化)
+const showSessionManager = computed(() => leftPanel.value === 'resource')
+// 自绘标题栏开关(Frameless):决定 TopMenuBar 是否渲染窗口控制与拖拽区
+const customTitlebar = ref(true)
 const showAbout = ref(false)
 const globalStatus = ref<{ text: string; row: number; col: number; encoding: string; hasTab: boolean }>({ text: t('shellPanel.notConnected'), row: 0, col: 0, encoding: '', hasTab: false })
 
@@ -42,6 +62,8 @@ function onTabStatus(info: { text: string; row: number; col: number; encoding: s
 const showSerial = ref(true)
 const showToolbar = ref(true)
 const showHelp = ref(true)
+// 活动标签页状态快照:顶级菜单按活动标签页启用/禁用工具
+const activeTabState = ref<ActiveTabState>({ hasTab: false, isTerminal: false, protocol: '', connected: false })
 const appVersion = ref('0.1.2')
 const showExport = ref(false)
 const showImport = ref(false)
@@ -205,24 +227,45 @@ const parityOptions = computed(() => [
 async function loadConfig() {
   try {
     const cfg = JSON.parse(await GetConfig())
-    showSessionManager.value = cfg.view?.showSession ?? true
+    leftPanel.value = (cfg.view?.showSession ?? true) ? 'resource' : 'none'
     showSerial.value = cfg.view?.showSerial ?? true
     showToolbar.value = cfg.view?.showToolbar ?? true
     showHelp.value = cfg.view?.showHelp ?? true
     tabOrientation.value = cfg.view?.tabOrientation ?? 'horizontal'
     verticalTabWidth.value = cfg.view?.verticalTabWidth ?? 180
+    customTitlebar.value = cfg.view?.customTitlebar ?? true
+    showAgentPanel.value = cfg.view?.showAgentPanel ?? false
+    agentPanelWidth.value = cfg.view?.agentPanelWidth ?? 300
+    sessionWidth.value = cfg.view?.sessionWidth ?? 220
   } catch {}
 }
 
-function toggleSessionManager() {
-  showSessionManager.value = !showSessionManager.value
-  SetShowSession(showSessionManager.value).catch(() => message.error(t('shellPanel.saveConfigFailed')))
+// 面板布局持久化: 前端只上报最新值,Go 侧周期写盘(1s)+窗口关闭必写,保护磁盘
+function pushPanelLayout() {
+  SetPanelLayout(showAgentPanel.value, agentPanelWidth.value, sessionWidth.value).catch(() => {})
 }
 
-function toggleToolbar() {
-  showToolbar.value = !showToolbar.value
-  SetShowToolbar(showToolbar.value).catch(() => message.error(t('shellPanel.saveConfigFailed')))
+function toggleSessionManager() {
+  leftPanel.value = leftPanel.value === 'resource' ? 'none' : 'resource'
+  SetShowSession(leftPanel.value === 'resource').catch(() => message.error(t('shellPanel.saveConfigFailed')))
 }
+
+function toggleAgentPanel() {
+  showAgentPanel.value = !showAgentPanel.value
+  if (!showAgentPanel.value) agentMaximized.value = false
+  pushPanelLayout()
+}
+
+function closeAgentPanel() {
+  showAgentPanel.value = false
+  agentMaximized.value = false
+  pushPanelLayout()
+}
+
+// 自绘标题栏即时切换:设置弹窗开关 → config-changed → loadConfig 刷新本值 → Frameless 往返
+watch(customTitlebar, v => {
+  Window.SetFrameless(v).catch(() => {})
+})
 
 function toggleSerial() {
   showSerial.value = !showSerial.value
@@ -231,6 +274,7 @@ function toggleSerial() {
 
 // ==================== Resize ====================
 
+// 资源管理器面板(右侧边框拖宽)
 function startResize(e: PointerEvent) {
   isResizing.value = true
   ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
@@ -239,10 +283,10 @@ function onResize(e: PointerEvent) {
   if (!isResizing.value) return
   const w = e.clientX
   if (w < 60) {
-    showSessionManager.value = false
+    leftPanel.value = 'none'
     sessionWidth.value = 0
   } else {
-    showSessionManager.value = true
+    leftPanel.value = 'resource'
     sessionWidth.value = Math.max(0, Math.min(w, 600))
   }
 }
@@ -250,7 +294,57 @@ function stopResize() {
   if (isResizing.value) {
     isResizing.value = false
     sessionWidth.value = showSessionManager.value ? Math.max(60, sessionWidth.value) : 220
+    pushPanelLayout()
   }
+}
+
+// AI 聊天面板(左侧边框拖宽,反向: 鼠标左移变宽)
+const AGENT_W_MIN = 240
+const AGENT_W_MAX = 720
+const isAgentResizing = ref(false)
+let agentResizeX = 0
+let agentResizeW = 0
+let agentPushAt = 0
+function startAgentResize(e: PointerEvent) {
+  isAgentResizing.value = true
+  agentResizeX = e.clientX
+  agentResizeW = agentPanelWidth.value
+  ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
+}
+function onAgentResize(e: PointerEvent) {
+  if (!isAgentResizing.value) return
+  agentPanelWidth.value = Math.max(AGENT_W_MIN, Math.min(AGENT_W_MAX, agentResizeW + (agentResizeX - e.clientX)))
+  // 拖拽中节流上报(200ms): Go 内存即时最新,落盘由 Go 周期写+关闭必写兜底
+  const now = Date.now()
+  if (now - agentPushAt > 200) {
+    agentPushAt = now
+    pushPanelLayout()
+  }
+}
+function stopAgentResize() {
+  if (!isAgentResizing.value) return
+  isAgentResizing.value = false
+  pushPanelLayout()
+}
+
+// 合并分发: shell-body 上的 pointermove/up 同时服务两个拖拽源
+function onBodyPointerMove(e: PointerEvent) {
+  onResize(e)
+  onAgentResize(e)
+}
+function onBodyPointerUp() {
+  stopResize()
+  stopAgentResize()
+}
+
+// ==================== 窄窗自适应 ====================
+
+// 窗口宽度低于阈值时,资源管理器/AI 面板改为浮层弹出(覆盖标签页,不挤压终端区)。
+// 层级: 标签页 < 资源管理器(600) < AI 面板(700) < AI 最大化(800)。
+const NARROW_THRESHOLD = 1000
+const isNarrow = ref(window.innerWidth < NARROW_THRESHOLD)
+function updateNarrow() {
+  isNarrow.value = window.innerWidth < NARROW_THRESHOLD
 }
 
 // ==================== Validation ====================
@@ -633,10 +727,12 @@ function handleSerialConnect(portName: string, baudRate: number, dataBits: numbe
 }
 
 // 脚本管理器双击文件:在标签页中打开文件编辑器(同文件只保留一个标签页,重复打开则激活已有标签页)
-function handleOpenFile(path: string) {
+// 返回标签页 ID(供 MCP open_script/script_write 复用同一打开路径)
+function handleOpenFile(path: string): string | null {
   const tm = tabManagerRef.value
-  if (!tm) return
-  if (tm.activateFileTab(path)) return
+  if (!tm) return null
+  const existing = tm.activateFileTab(path)
+  if (existing) return existing
   const name = path.split('/').pop() || path
   let tabId = ''
   let editorApi: FileEditorApi | null = null
@@ -662,6 +758,7 @@ function handleOpenFile(path: string) {
       })
     },
   }) || ''
+  return tabId || null
 }
 
 // 文件编辑器未保存关闭确认:保存并关闭 / 不保存关闭 / 取消(连续关闭多个脏文件时排队)
@@ -698,6 +795,8 @@ function handleToolAction(key: string) {
   switch (key) {
     case 'sftp': tm.openSftp(); break
     case 'exec-script': tm.openScriptDialog(); break
+    case 'copy-selection': tm.copySelection(); break
+    case 'paste-terminal': tm.pasteClipboard(); break
     case 'export-log': tm.exportLog(); break
     case 'clear-scrollback': tm.clearScrollback(); break
     case 'clear-screen': tm.clearScreen(); break
@@ -715,48 +814,72 @@ async function openExternal(url: string) {
 onMounted(() => {
   loadConfig()
   window.addEventListener('config-changed', onConfigChanged)
+  window.addEventListener('resize', updateNarrow)
   GetVersion().then(v => { appVersion.value = v }).catch(() => {})
+
+  // MCP 桥接初始化:订阅事件 + 注入命令路由(MCP 操作与用户操作走同一 UI 路径)
+  initMcpBridge()
+  bindTabManager({
+    listTabs: () => tabManagerRef.value?.listTabs() ?? [],
+    openSession: async (sessionPath: string) => {
+      if (!tabManagerRef.value) return null
+      const tabId = await tabManagerRef.value.openSession(sessionPath)
+      return tabId || null
+    },
+    mcpTerminalSend: (tabId: string, text: string, needPasteConfirm: boolean, activateTab: boolean) =>
+      tabManagerRef.value?.mcpTerminalSend(tabId, text, needPasteConfirm, activateTab) ?? Promise.resolve({ ok: false, note: 'tab manager not ready' }),
+    mcpCloseTab: (tabId: string, activateTab: boolean) =>
+      tabManagerRef.value?.mcpCloseTab(tabId, activateTab) ?? Promise.resolve({ ok: false, note: 'tab manager not ready' }),
+  })
+  bindOpenScriptHandler(async (filePath: string) => handleOpenFile(filePath))
+
+  // 智能体桥接初始化(事件订阅 + 会话列表加载)
+  initAgentBridge()
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('config-changed', onConfigChanged)
+  window.removeEventListener('resize', updateNarrow)
 })
 </script>
 
 <template>
   <div class="shell-panel">
-    <div class="shell-body" @pointermove="onResize" @pointerup="stopResize" @pointerleave="stopResize">
+    <!-- 顶部菜单栏:左菜单 + 拖拽区 + 收纳按钮 + 窗口控制(Frameless 模式) -->
+    <TopMenuBar
+      :show-session="showSessionManager"
+      :show-agent="showAgentPanel"
+      :active-tab-state="activeTabState"
+      :frameless-enabled="customTitlebar"
+      @toggle-session="toggleSessionManager"
+      @toggle-agent="toggleAgentPanel"
+      @new-session="openNewSession('')"
+      @new-folder="handleNewFolder('')"
+      @import-sessions="showImport = true"
+      @export-sessions="showExport = true"
+      @exit="handleExit"
+      @edit-active-session="handleEditActiveSession"
+      @rename-selected="handleRenameSelected"
+      @delete-selected="handleDeleteSelected"
+      @tool-action="handleToolAction"
+      @about="showAbout = true"
+      @view-docs="openExternal('https://github.com/dingtongbin/AceShell')"
+    />
+    <div class="shell-body" @pointermove="onBodyPointerMove" @pointerup="onBodyPointerUp" @pointerleave="onBodyPointerUp">
       <LeftToolBar
-        :show-session="showSessionManager"
+        :show-session="leftPanel === 'resource'"
         :show-help="showHelp"
         @toggle-session="toggleSessionManager"
         @open-help="showAbout = true"
         @open-settings="emit('open-settings')"
       />
-      <MainMenu
-        v-if="mainMenuShow"
-        class="main-menu-popup"
-        :show-toolbar="showToolbar"
-        @close="mainMenuShow = false"
-        @new-session="openNewSession('')"
-        @new-folder="handleNewFolder('')"
-        @import-sessions="showImport = true"
-        @export-sessions="showExport = true"
-        @exit="handleExit"
-        @edit-active-session="handleEditActiveSession"
-        @rename-selected="handleRenameSelected"
-        @delete-selected="handleDeleteSelected"
-        @exec-script="handleToolAction('exec-script')"
-        @sftp="handleToolAction('sftp')"
-        @toggle-toolbar="toggleToolbar"
-        @about="message.info(t('shellPanel.aboutMsg'))"
-      />
       <div class="right-area">
         <div class="right-content">
-          <div v-show="showSessionManager" class="shell-sidebar" :style="{ width: showSessionManager ? sessionWidth + 'px' : '0px', minWidth: showSessionManager ? '60px' : '0px' }">
+          <div v-show="leftPanel !== 'none'" class="shell-sidebar" :class="{ 'sidebar-overlay': isNarrow }" :style="{ width: leftPanel !== 'none' ? sessionWidth + 'px' : '0px', minWidth: leftPanel !== 'none' ? '60px' : '0px' }">
         <ResourceManager
+          v-show="leftPanel === 'resource'"
           ref="sessionManagerRef"
-          :style="{ width: showSessionManager ? sessionWidth + 'px' : '0px', minWidth: showSessionManager ? '60px' : '0px' }"
+          :style="{ width: leftPanel === 'resource' ? sessionWidth + 'px' : '0px', minWidth: leftPanel === 'resource' ? '60px' : '0px' }"
           :width="sessionWidth"
           :show-serial="showSerial"
           :active-session-path="activeSessionPath"
@@ -772,11 +895,33 @@ onBeforeUnmount(() => {
           @close="toggleSessionManager"
         />
       </div>
-      <div v-if="showSessionManager" class="resize-handle" :style="{ left: sessionWidth + 'px' }" @pointerdown="startResize" />
+      <div v-if="leftPanel !== 'none'" class="resize-handle" :class="{ 'handle-overlay': isNarrow }" :style="{ left: sessionWidth + 'px' }" @pointerdown="startResize" />
       <div class="tab-area">
         <TabManager ref="tabManagerRef" :show-toolbar="showToolbar" :tab-orientation="tabOrientation" :vertical-tab-width="verticalTabWidth"
-          @new-ssh="openNewSession('', 'ssh')" @new-telnet="openNewSession('', 'telnet')" @new-serial="openNewSession('', 'serial')" @status="onTabStatus" />
+          @new-ssh="openNewSession('', 'ssh')" @new-telnet="openNewSession('', 'telnet')" @new-serial="openNewSession('', 'serial')" @status="onTabStatus" @active-tab-state="(s) => { activeTabState = s }" />
       </div>
+      <!-- 智能体聊天面板:右侧停靠,可最大化铺满内容区(悬浮覆盖);窄窗时浮层弹出 -->
+      <AgentChatPanel
+        v-show="showAgentPanel"
+        :width="agentPanelWidth"
+        :maximized="agentMaximized"
+        :class="{ 'agent-maximized': agentMaximized, 'agent-overlay': isNarrow && !agentMaximized }"
+        :style="agentMaximized ? undefined : { width: agentPanelWidth + 'px' }"
+        @close="closeAgentPanel"
+        @toggle-maximize="agentMaximized = !agentMaximized"
+        @open-settings="showAgentSettings = true"
+        @open-mcp-settings="showMcpSettings = true"
+      />
+      <!-- AI 面板左侧拖宽手柄(最大化时隐藏) -->
+      <div
+        v-if="showAgentPanel && !agentMaximized"
+        class="agent-resize-handle"
+        :class="{ 'agent-handle-overlay': isNarrow }"
+        :style="{ right: agentPanelWidth - 2 + 'px' }"
+        @pointerdown="startAgentResize"
+      />
+      <!-- 智能体设置弹窗(独立于主设置) -->
+      <AgentSettingsDialog v-model:show="showAgentSettings" />
         </div>
       <div class="global-status-bar">
         <span v-if="globalStatus.text" class="gs-left">{{ globalStatus.text }}</span>
@@ -959,6 +1104,22 @@ onBeforeUnmount(() => {
         <n-button type="primary" @click="confirmEditorCloseSave">{{ t('shellPanel.saveAndClose') }}</n-button>
       </template>
     </n-modal>
+
+    <!-- MCP 设置弹窗(入口: AI 聊天面板标题栏) -->
+    <McpSettingsPanel v-model:show="showMcpSettings" />
+
+    <!-- MCP 绝对危险指令拦截弹窗:命令已被拒绝执行,MCP 已自动挂起 -->
+    <n-modal :show="!!criticalBlock" :title="t('mcp.criticalTitle')" preset="dialog" :show-icon="false" style="width: 480px" :mask-closable="false">
+      <div style="font-size: 14px; line-height: 1.7">
+        <p style="color: #e45858; font-weight: 600">{{ t('mcp.criticalMsg') }}</p>
+        <pre style="margin: 10px 0; padding: 8px 10px; background: rgba(0,0,0,0.35); border-radius: 4px; font-size: 12px; font-family: Consolas, 'Courier New', monospace; white-space: pre-wrap; word-break: break-all; max-height: 160px; overflow: auto">{{ criticalBlock?.command }}</pre>
+        <p style="font-size: 12px; color: var(--text-secondary, #888)">{{ t('mcp.criticalReason') }}: {{ criticalBlock?.reason }}</p>
+        <p style="font-size: 12px; color: var(--text-secondary, #888)">{{ t('mcp.criticalHint') }}</p>
+      </div>
+      <template #action>
+        <n-button type="primary" @click="criticalBlock = null">{{ t('common.confirm') }}</n-button>
+      </template>
+    </n-modal>
   </div>
 </template>
 
@@ -977,13 +1138,6 @@ onBeforeUnmount(() => {
   display: flex;
   overflow: hidden;
   position: relative;
-}
-
-.main-menu-popup {
-  position: absolute;
-  left: 44px;
-  top: 0;
-  z-index: 1000;
 }
 
 .shell-sidebar {
@@ -1017,6 +1171,22 @@ onBeforeUnmount(() => {
   background: #0078d4;
 }
 
+/* AI 面板左侧拖宽手柄(悬停/拖拽时高亮) */
+.agent-resize-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 5px;
+  cursor: col-resize;
+  background: transparent;
+  z-index: 10;
+  transition: background 0.15s;
+}
+.agent-resize-handle:hover,
+.agent-resize-handle:active {
+  background: #0078d4;
+}
+
 .global-status-bar {
   height: 22px;
   min-height: 22px;
@@ -1047,6 +1217,34 @@ onBeforeUnmount(() => {
   flex-direction: row;
   position: relative;
 }
+
+/* 智能体面板最大化:悬浮铺满内容区(不挤压终端区) */
+.agent-maximized {
+  position: absolute;
+  inset: 0;
+  z-index: 800;
+}
+
+/* 窄窗浮层模式(宽度 < NARROW_THRESHOLD): 资源管理器/AI 面板悬浮于标签页之上,
+   不再挤压终端区;层级 标签页 < 资源管理器(600) < AI 面板(700) < AI 最大化(800) */
+.shell-sidebar.sidebar-overlay {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  z-index: 600;
+  box-shadow: 2px 0 12px rgba(0, 0, 0, 0.35);
+}
+.agent-overlay {
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  z-index: 700;
+  box-shadow: -2px 0 12px rgba(0, 0, 0, 0.35);
+}
+.resize-handle.handle-overlay { z-index: 610; }
+.agent-resize-handle.agent-handle-overlay { z-index: 710; }
 
 .session-dialog {
   display: flex;

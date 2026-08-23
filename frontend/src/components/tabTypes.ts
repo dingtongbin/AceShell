@@ -36,6 +36,14 @@ export interface Pane {
   activeTabId: string | null
 }
 
+// 活动标签页状态快照(供顶级菜单按活动标签页启用/禁用工具)
+export interface ActiveTabState {
+  hasTab: boolean
+  isTerminal: boolean
+  protocol: string
+  connected: boolean
+}
+
 export interface ComponentTabOptions {
   title: string
   component: Component
@@ -55,7 +63,7 @@ export interface ComponentTabPatch {
 }
 
 export interface TabPaneApi {
-  openSession: (sessionPath: string) => void
+  openSession: (sessionPath: string) => Promise<string>
   openSerial: (portName: string, baudRate: number, dataBits: number, stopBits: string, parity: string) => void
   openSftp: (tab?: Tab) => void
   openScriptDialog: (tab?: Tab) => void
@@ -70,6 +78,10 @@ export interface TabPaneApi {
   reportCursor: (row: number, col: number) => void
   copySelection: () => Promise<void>
   pasteClipboard: () => Promise<void>
+  // MCP 桥接扩展: 与用户操作完全相同的路径执行 MCP 命令
+  // activateTab=false 时(批量执行等后台化操作)不切换标签页
+  mcpTerminalSend: (tabId: string, text: string, needPasteConfirm: boolean, activateTab?: boolean) => Promise<{ ok: boolean; note?: string }>
+  mcpCloseTab: (tabId: string, activateTab?: boolean) => Promise<{ ok: boolean; note?: string }>
 }
 
 export type SplitDir = 'h' | 'v'
@@ -103,6 +115,7 @@ export interface PaneActions {
   onFocus: (paneId: string) => void
   openRdp: (meta: { sessionPath: string; name: string; host: string; port: number }) => void
   onStatus: (paneId: string, text: string, row: number, col: number, encoding: string, hasTab: boolean) => void
+  onActiveTabState: (paneId: string, state: ActiveTabState) => void
   registerPane: (paneId: string, api: TabPaneApi) => () => void
   paneExists: (paneId: string) => boolean
 }

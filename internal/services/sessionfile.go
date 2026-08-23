@@ -10,7 +10,6 @@ import (
 	"runtime"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/pelletier/go-toml/v2"
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -267,6 +266,13 @@ func (s *SessionFileService) UpdateSession(filePath string, data string) error {
 		return fmt.Errorf("无效的会话数据: %w", err)
 	}
 
+	// 会话名与其他入口统一走 sanitizeName,拒绝非法字符与保留名
+	safeName := sanitizeName(info.Name)
+	if safeName == "" {
+		return fmt.Errorf("非法的会话名称")
+	}
+	info.Name = safeName
+
 	if info.Password != "" {
 		encrypted, err := s.encrypt(info.Password)
 		if err != nil {
@@ -323,6 +329,13 @@ func (s *SessionFileService) SaveSession(folder string, data string) error {
 	var info SessionInfo
 	if err := toml.Unmarshal([]byte(data), &info); err != nil {
 		return fmt.Errorf("无效的会话数据: %w", err)
+	}
+
+	// folder 来自外部输入,必须先校验在 sessionsDir 内,防止 ../ 路径穿越写盘
+	if folder != "" && folder != "." {
+		if _, err := s.safeSessionPath(folder); err != nil {
+			return err
+		}
 	}
 
 	if info.Password != "" {
@@ -806,7 +819,3 @@ func (s *SessionFileService) saveCredentials(sessionPath, username, password str
 
 var AppServiceRegistry = map[string]interface{}{}
 var MainLogService *LogService
-
-func init() {
-	_ = time.Now()
-}

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"os/signal"
 	"strings"
 	"syscall"
@@ -20,16 +19,27 @@ import (
 var assets embed.FS
 
 // init 注册所有 Wails 事件类型，必须在 main 之前执行。
+// 规则:Emit 过的事件必须在此注册;已废弃的事件应同步移除注册与 Emit 点。
 func init() {
 	application.RegisterEvent[string]("theme-changed")
 	application.RegisterEvent[string]("session-output")
 	application.RegisterEvent[string]("session-status-changed")
-	application.RegisterEvent[string]("session-list-changed")
 	application.RegisterEvent[string]("session-tree-changed")
 	application.RegisterEvent[string]("sftp-transfer-progress")
-	application.RegisterEvent[string]("sftp-status-changed")
-	application.RegisterEvent[string]("sftp-add-tab")
 	application.RegisterEvent[string]("sftp-files-dropped")
+	// MCP 服务
+	application.RegisterEvent[string]("mcp-command")
+	application.RegisterEvent[string]("mcp-approval-requested")
+	application.RegisterEvent[string]("mcp-approval-removed")
+	application.RegisterEvent[string]("mcp-audit-appended")
+	application.RegisterEvent[string]("mcp-status-changed")
+	application.RegisterEvent[string]("mcp-critical-blocked")
+	// 内嵌智能体
+	application.RegisterEvent[string]("agent-event")
+	application.RegisterEvent[string]("agent-stream")
+	application.RegisterEvent[string]("agent-status-changed")
+	application.RegisterEvent[string]("agent-pending-changed")
+	application.RegisterEvent[string]("agent-error")
 }
 
 // services 聚合所有后端服务实例，便于统一初始化和注入。
@@ -49,12 +59,14 @@ type services struct {
 	clipboard    *appservices.ClipboardService
 	version      *appservices.VersionService
 	rdp          *appservices.RdpService
+	mcp          *appservices.McpService
+	agent        *appservices.AgentService
 }
 
 // main 应用入口。
 func main() {
 	if !appservices.CheckSingleInstance() {
-		fmt.Println("AceShell 已在运行")
+		appservices.ShowFatalBox("AceShell", "AceShell 已在运行,请勿双开(双实例会导致配置不同步)。请使用已打开的窗口,或在任务管理器结束后再启动。")
 		return
 	}
 
@@ -68,6 +80,7 @@ func main() {
 	if err := app.Run(); err != nil {
 		fmt.Println(err)
 	}
+	svc.mcp.Stop()
 	svc.rdp.Stop()
 }
 
@@ -83,14 +96,8 @@ func setupCleanup(onExit func()) {
 	}()
 }
 
-// killChildProcesses 杀死所有 node 子进程（开发服务器）。
-func killChildProcesses() {
-	if _, err := exec.LookPath("taskkill"); err == nil {
-		cmd := exec.Command("taskkill", "/f", "/im", "node.exe")
-		appservices.HideWindow(cmd)
-		cmd.Run()
-	}
-}
+// killChildProcesses 的实现按构建模式拆分:
+// 开发模式见 main_cleanup_dev.go,生产模式见 main_cleanup_prod.go。
 
 // initServices 创建并初始化所有后端服务实例。
 func initServices() *services {
@@ -114,6 +121,8 @@ func initServices() *services {
 
 	svc.config.Init()
 	svc.log.Init()
+	svc.mcp = appservices.NewMcpService(svc.config, svc.sessionFile)
+	svc.agent = appservices.NewAgentService(svc.config, svc.mcp)
 
 	return svc
 }
@@ -138,8 +147,10 @@ func createApp(svc *services) *application.App {
 			application.NewService(svc.browser),
 			application.NewService(svc.clipboard),
 			application.NewService(svc.version),
-			application.NewService(svc.rdp),
-		},
+		application.NewService(svc.rdp),
+		application.NewService(svc.mcp),
+		application.NewService(svc.agent),
+	},
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(assets),
 		},
@@ -175,6 +186,18 @@ func wireServices(svc *services, app *application.App) {
 		fmt.Printf("RDP bridge start failed: %v\n", err)
 	}
 	svc.rdp.SetSessionFiles(svc.sessionFile)
+
+	// MCP 服务:注入应用实例供事件推送;配置了随应用启动则自动拉起
+	svc.mcp.SetApp(app)
+	appservices.MainMcpService = svc.mcp
+	if svc.config.McpEnabled() {
+		if err := svc.mcp.Start(); err != nil {
+			fmt.Printf("MCP service start failed: %v\n", err)
+		}
+	}
+
+	// 内嵌智能体:注入应用实例供事件推送
+	svc.agent.SetApp(app)
 }
 
 // createMainWindow 创建主窗口。
@@ -188,7 +211,10 @@ func createMainWindow(app *application.App, svc *services) {
 		MinWidth:         800,
 		MinHeight:        500,
 		EnableFileDrop:   true,
-		Windows:          buildWindowsOptions(svc),
+		// 自绘标题栏:Frameless 窗口,菜单栏融入窗口控制(─□✕)与拖拽区;
+		// 关闭时回退系统原生标题栏(设置弹窗可即时切换,运行时走 Window.SetFrameless)
+		Frameless: svc.config.CustomTitlebarEnabled(),
+		Windows:   buildWindowsOptions(svc),
 	})
 
 	// 供 WindowService 在运行时调整原生标题栏主题色
@@ -201,6 +227,12 @@ func createMainWindow(app *application.App, svc *services) {
 			return
 		}
 		app.Event.Emit("sftp-files-dropped", payload)
+	})
+
+	// 窗口关闭时强制落盘面板布局(AI 面板显隐/宽度、资源管理器宽度):
+	// 面板布局走"内存更新 + 周期写盘",关闭必写保证持久化不丢。
+	win.OnWindowEvent(events.Common.WindowClosing, func(event *application.WindowEvent) {
+		svc.config.FlushPanelLayout()
 	})
 }
 

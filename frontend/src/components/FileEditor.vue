@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useMcpBridge } from '../composables/useMcpBridge'
 
 const { t } = useI18n()
 import { useMessage } from 'naive-ui'
@@ -12,6 +13,7 @@ import 'highlight.js/styles/vs2015.css'
 export interface FileEditorApi {
   isDirty: () => boolean
   save: () => Promise<boolean>
+  setContent: (text: string) => void
 }
 
 const props = defineProps<{
@@ -24,6 +26,7 @@ const props = defineProps<{
 }>()
 
 const message = useMessage()
+const { notifyUserInput: mcpNotifyUserInput, registerEditor, unregisterEditor } = useMcpBridge()
 const content = ref('')
 const contentHtml = ref('')
 const loading = ref(true)
@@ -79,6 +82,7 @@ function scheduleAutoSave() {
 }
 
 function onInput() {
+  mcpNotifyUserInput() // 用户手动键入:抢占挂起 MCP
   const el = editorEl.value
   const st = el?.scrollTop || 0
   const sl = el?.scrollLeft || 0
@@ -113,6 +117,7 @@ function reportCursorPos() {
 }
 
 function onTab(e: KeyboardEvent) {
+  mcpNotifyUserInput()
   const ta = e.target as HTMLTextAreaElement
   const p = ta.selectionStart
   const v = ta.value
@@ -150,6 +155,22 @@ async function save(): Promise<boolean> {
   return doSave(true)
 }
 
+// MCP script_write 写入:与用户编辑同路径(更新内容→高亮→脏标记→自动保存)
+function setContent(text: string) {
+  content.value = text
+  const ta = taRef.value
+  if (ta) {
+    ta.value = text
+    ta.selectionStart = 0
+    ta.selectionEnd = 0
+  }
+  lastLineCount = 0
+  updateLineNumbers()
+  updateHl()
+  markDirty()
+  reportCursorPos()
+}
+
 function onKeydown(e: KeyboardEvent) {
   if (e.ctrlKey && (e.key === 's' || e.key === 'S')) {
     e.preventDefault()
@@ -161,7 +182,10 @@ onMounted(async () => {
   props.onApiReady?.({
     isDirty: () => dirty.value,
     save,
+    setContent,
   })
+  // 注册到 MCP 桥接器:script_write 通过此 API 写入(与用户编辑同路径)
+  registerEditor(props.filePath, { isDirty: () => dirty.value, save, setContent })
   try {
     const cfg = JSON.parse(await GetConfig())
     autoSave.value = cfg.fileEditing?.autoSave ?? true
@@ -204,6 +228,7 @@ watch(() => props.active, (act) => {
 })
 
 onUnmounted(async () => {
+  unregisterEditor(props.filePath)
   if (autoSaveTimer) { clearTimeout(autoSaveTimer); autoSaveTimer = null }
   if (dirty.value && !saved.value) {
     if (saveInFlight) { await saveInFlight; return }

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, provide, onMounted, watchEffect, watch, computed } from 'vue'
-import { NConfigProvider, NMessageProvider, zhCN, enUS } from 'naive-ui'
+import { NConfigProvider, NMessageProvider, NDialogProvider, zhCN, enUS } from 'naive-ui'
 import ShellPanel from './components/ShellPanel.vue'
 import SettingsDialog from './components/SettingsDialog.vue'
 import { useTheme } from './stores/theme'
@@ -120,10 +120,12 @@ watchEffect(() => {
 <template>
   <n-config-provider :theme="theme" :theme-overrides="themeOverrides" :locale="naiveLocale">
     <n-message-provider>
-      <div class="app-root">
-        <ShellPanel @open-settings="handleOpenSettings" />
-        <SettingsDialog :show="showSettings" @close="handleCloseSettings" />
-      </div>
+      <n-dialog-provider>
+        <div class="app-root">
+          <ShellPanel @open-settings="handleOpenSettings" />
+          <SettingsDialog :show="showSettings" @close="handleCloseSettings" />
+        </div>
+      </n-dialog-provider>
     </n-message-provider>
   </n-config-provider>
 </template>

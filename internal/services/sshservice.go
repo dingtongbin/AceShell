@@ -57,117 +57,85 @@ func (s *SSHService) emit(event string, data string) {
 	}
 }
 
-// Connect 建立 SSH 连接，完成认证、PTY 请求、管道搭建，并启动数据读取循环。
-// ciphers 参数指定 SSH 加密算法列表，为空则使用默认算法。
+// Connect 建立 SSH 密码认证连接: 占位 → 拨号认证 → PTY/管道 → 启动读/保活循环。
+// ciphers 为空时使用默认加密算法。
 func (s *SSHService) Connect(id, host string, port int, user, password, folder string, ciphers []string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if _, exists := s.sess[id]; exists {
-		return fmt.Errorf("会话已存在")
-	}
-
-	addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
-	client, err := s.dialSSH(addr, user, password, folder, ciphers)
-	if err != nil {
-		s.emitError(id, err)
-		return err
-	}
-
-	session, stdin, stdout, stderr, err := s.setupSession(id, client)
-	if err != nil {
-		client.Close()
-		s.emitError(id, err)
-		return err
-	}
-
-	sess := &SSHSession{
-		ID:      id,
-		Host:    host,
-		Port:    port,
-		User:    user,
-		Status:  "connected",
-		client:  client,
-		session: session,
-		stdin:   stdin,
-		stdout:  stdout,
-		stderr:  stderr,
-	}
-	s.sess[id] = sess
-
-	s.emit("session-status-changed", fmt.Sprintf(`{"id":"%s","status":"connected"}`, id))
-
-	if MainLogService != nil {
-		MainLogService.StartSession(id, "ssh", host, port, user, fmt.Sprintf("%s@%s:%d", user, host, port))
-	}
-
-	go s.readLoop(sess)
-	go s.keepaliveLoop(sess)
-	return nil
+	return s.connectCommon(id, host, port, user, []ssh.AuthMethod{ssh.Password(password)}, folder, ciphers)
 }
 
-// ConnectWithKey 使用私钥 PEM 建立 SSH 连接，完成认证、PTY 请求、管道搭建，并启动数据读取循环。
-// keyPEM 为私钥文件内容（可为加密 PEM，需提供 keyPass）；ciphers 为空时使用默认加密算法。
+// ConnectWithKey 使用私钥 PEM 建立 SSH 连接(可为加密 PEM,需提供 keyPass)。
 func (s *SSHService) ConnectWithKey(id, host string, port int, user, keyPEM, keyPass, folder string, ciphers []string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if _, exists := s.sess[id]; exists {
-		return fmt.Errorf("会话已存在")
-	}
-
-	addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
-	client, err := s.dialSSHWithKey(addr, user, keyPEM, keyPass, folder, ciphers)
-	if err != nil {
-		s.emitError(id, err)
-		return err
-	}
-
-	session, stdin, stdout, stderr, err := s.setupSession(id, client)
-	if err != nil {
-		client.Close()
-		s.emitError(id, err)
-		return err
-	}
-
-	sess := &SSHSession{
-		ID:      id,
-		Host:    host,
-		Port:    port,
-		User:    user,
-		Status:  "connected",
-		client:  client,
-		session: session,
-		stdin:   stdin,
-		stdout:  stdout,
-		stderr:  stderr,
-	}
-	s.sess[id] = sess
-
-	s.emit("session-status-changed", fmt.Sprintf(`{"id":"%s","status":"connected"}`, id))
-
-	if MainLogService != nil {
-		MainLogService.StartSession(id, "ssh", host, port, user, fmt.Sprintf("%s@%s:%d", user, host, port))
-	}
-
-	go s.readLoop(sess)
-	go s.keepaliveLoop(sess)
-	return nil
-}
-
-// dialSSH 建立 TCP 连接并完成 SSH 密码认证，返回 ssh.Client。
-// ciphers 为空时使用 crypto/ssh 默认加密算法。
-func (s *SSHService) dialSSH(addr, user, password, folder string, ciphers []string) (*ssh.Client, error) {
-	return s.dialSSHAuths(addr, user, []ssh.AuthMethod{ssh.Password(password)}, folder, ciphers)
-}
-
-// dialSSHWithKey 建立 TCP 连接并完成 SSH 密钥认证，返回 ssh.Client。
-func (s *SSHService) dialSSHWithKey(addr, user, keyPEM, keyPass, folder string, ciphers []string) (*ssh.Client, error) {
 	signer, err := parsePrivateKey([]byte(keyPEM), []byte(keyPass))
 	if err != nil {
-		return nil, fmt.Errorf("解析私钥失败: %w", err)
+		err = fmt.Errorf("解析私钥失败: %w", err)
+		s.emitError(id, err)
+		return err
 	}
-	return s.dialSSHAuths(addr, user, []ssh.AuthMethod{ssh.PublicKeys(signer)}, folder, ciphers)
+	return s.connectCommon(id, host, port, user, []ssh.AuthMethod{ssh.PublicKeys(signer)}, folder, ciphers)
+}
+
+// connectCommon 连接公共路径: 先以 connecting 状态占位并立即释放服务锁,
+// 拨号/认证在锁外执行(避免 10s 握手阻塞 Disconnect/GetSessions 等调用方),
+// 成功后二次加锁升级为 connected;期间被移除则释放新建资源。
+func (s *SSHService) connectCommon(id, host string, port int, user string, auths []ssh.AuthMethod, folder string, ciphers []string) error {
+	addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
+
+	s.mu.Lock()
+	if _, exists := s.sess[id]; exists {
+		s.mu.Unlock()
+		return fmt.Errorf("会话已存在")
+	}
+	placeholder := &SSHSession{ID: id, Host: host, Port: port, User: user, Status: "connecting"}
+	s.sess[id] = placeholder
+	s.mu.Unlock()
+
+	client, err := s.dialSSHAuths(addr, user, auths, folder, ciphers)
+	if err != nil {
+		s.removeSession(id)
+		s.emitError(id, err)
+		return err
+	}
+
+	session, stdin, stdout, stderr, err := s.setupSession(id, client)
+	if err != nil {
+		client.Close()
+		s.removeSession(id)
+		s.emitError(id, err)
+		return err
+	}
+
+	s.mu.Lock()
+	if s.sess[id] != placeholder {
+		// 连接建立期间会话已被移除(如用户取消): 释放资源
+		s.mu.Unlock()
+		session.Close()
+		client.Close()
+		return fmt.Errorf("会话已断开")
+	}
+	placeholder.client = client
+	placeholder.session = session
+	placeholder.stdin = stdin
+	placeholder.stdout = stdout
+	placeholder.stderr = stderr
+	placeholder.Status = "connected"
+	s.mu.Unlock()
+
+	s.emit("session-status-changed", sessionStatusJSON(id, "connected", ""))
+
+	if MainLogService != nil {
+		MainLogService.StartSession(id, "ssh", host, port, user, fmt.Sprintf("%s@%s:%d", user, host, port))
+	}
+
+	go s.readLoop(placeholder)
+	go s.keepaliveLoop(placeholder)
+	return nil
+}
+
+// removeSession 移除尚未建立的占位会话(错误事件由调用方负责发送)。
+func (s *SSHService) removeSession(id string) {
+	s.mu.Lock()
+	delete(s.sess, id)
+	s.mu.Unlock()
 }
 
 // dialSSHAuths 建立 TCP 连接并完成 SSH 认证，返回 ssh.Client。
@@ -273,9 +241,9 @@ func (s *SSHService) setupPipes(session *ssh.Session) (io.WriteCloser, io.Reader
 	return stdin, stdout, stderr, nil
 }
 
-// emitError 发送会话错误事件。
+// emitError 发送会话错误事件(载荷经 json.Marshal,消息含特殊字符安全)。
 func (s *SSHService) emitError(id string, err error) {
-	s.emit("session-status-changed", fmt.Sprintf(`{"id":"%s","status":"error","message":"%s"}`, id, err.Error()))
+	s.emit("session-status-changed", sessionStatusJSON(id, "error", err.Error()))
 }
 
 // readLoop 持续读取 SSH 会话输出并发送到前端，直到连接断开。
@@ -285,9 +253,12 @@ func (s *SSHService) readLoop(sess *SSHSession) {
 		n, err := sess.stdout.Read(buf)
 		if n > 0 {
 			output := string(buf[:n])
-			s.emit("session-output", fmt.Sprintf(`{"id":"%s","data":"%s"}`, sess.ID, escapeJSON(output)))
+			s.emit("session-output", sessionOutputJSON(sess.ID, output))
 			if MainLogService != nil {
 				MainLogService.LogOutput(sess.ID, output)
+			}
+			if MainMcpService != nil {
+				MainMcpService.TapOutput(sess.ID, buf[:n])
 			}
 		}
 		if err != nil {
@@ -298,7 +269,7 @@ func (s *SSHService) readLoop(sess *SSHSession) {
 			if MainLogService != nil {
 				MainLogService.EndSession(sess.ID)
 			}
-			s.emit("session-output", fmt.Sprintf(`{"id":"%s","data":"%s"}`, sess.ID, escapeJSON(fmt.Sprintf("\r\n\x1b[33m%s\x1b[0m\r\n", reason))))
+			s.emit("session-output", sessionOutputJSON(sess.ID, fmt.Sprintf("\r\n\x1b[33m%s\x1b[0m\r\n", reason)))
 			s.closeSession(sess)
 			return
 		}
@@ -307,6 +278,8 @@ func (s *SSHService) readLoop(sess *SSHSession) {
 
 
 // keepaliveLoop 周期性发送 SSH 保活请求,检测对端存活;会话关闭后自动退出。
+// wantReply=false: 仅发送不等待回复,由 TCP 写失败感知死链,
+// 避免无超时阻塞的 SendRequest(true) 在半开连接上永久悬挂 goroutine。
 func (s *SSHService) keepaliveLoop(sess *SSHSession) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -318,7 +291,7 @@ func (s *SSHService) keepaliveLoop(sess *SSHSession) {
 		}
 		client := sess.client
 		sess.mu.Unlock()
-		if _, _, err := client.SendRequest("keepalive@openssh.com", true, nil); err != nil {
+		if _, _, err := client.SendRequest("keepalive@openssh.com", false, nil); err != nil {
 			return
 		}
 	}
@@ -336,6 +309,9 @@ func (s *SSHService) Send(id, data string) error {
 	if sess.closed {
 		return fmt.Errorf("会话已关闭")
 	}
+	if sess.stdin == nil {
+		return fmt.Errorf("会话尚未就绪")
+	}
 	_, err := sess.stdin.Write([]byte(data))
 	return err
 }
@@ -352,6 +328,9 @@ func (s *SSHService) Resize(id string, cols, rows int) error {
 	defer sess.mu.Unlock()
 	if sess.closed {
 		return fmt.Errorf("会话已关闭")
+	}
+	if sess.session == nil {
+		return fmt.Errorf("会话尚未就绪")
 	}
 	return sess.session.WindowChange(rows, cols)
 }
@@ -389,7 +368,7 @@ func (s *SSHService) closeSession(sess *SSHSession) {
 	s.mu.Lock()
 	delete(s.sess, sess.ID)
 	s.mu.Unlock()
-	s.emit("session-status-changed", fmt.Sprintf(`{"id":"%s","status":"disconnected"}`, sess.ID))
+	s.emit("session-status-changed", sessionStatusJSON(sess.ID, "disconnected", ""))
 }
 
 // Disconnect 断开指定 SSH 连接并清理资源。

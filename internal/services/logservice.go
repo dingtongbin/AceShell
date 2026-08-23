@@ -127,6 +127,9 @@ func (l *LogService) StartSession(id, protocol, host string, port int, username,
 
 // LogOutput 记录会话输出（加入缓冲区，定时批量写入）。
 func (l *LogService) LogOutput(id string, data string) {
+	if !validLogID(id) {
+		return
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.buffer[id] = append(l.buffer[id], data)
