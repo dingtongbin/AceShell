@@ -25,6 +25,8 @@ import {
 export interface McpStatus {
   enabled: boolean
   state: 'stopped' | 'running' | 'paused'
+  /** 仲裁执行槽占用中(工具调用执行期),驱动"MCP 执行中"按钮与标签页遮罩 */
+  busy: boolean
   mode: 'manual' | 'auto'
   url: string
   token: string
@@ -87,7 +89,7 @@ export interface McpTabManagerApi {
 // ==================== 状态 ====================
 
 const status = ref<McpStatus>({
-  enabled: false, state: 'stopped', mode: 'manual', url: '', token: '',
+  enabled: false, state: 'stopped', busy: false, mode: 'manual', url: '', token: '',
   port: 8940, pendingApprovals: 0, ballX: -1, ballY: -1,
   opDelayMs: 1000, batchIntervalMs: 300, grantsEnabled: true,
   auditRetentionDays: 30, terminalReadMax: 32768,

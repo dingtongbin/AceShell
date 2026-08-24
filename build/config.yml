@@ -35,7 +35,8 @@ dev_mode:
   root_path: .
   log_level: warn
   debounce: 1000
-  frontend_devserver_url: "http://localhost:9245"
+  # 与 vite.config.ts 的 host: "127.0.0.1" 保持一致;localhost 在部分环境解析为 ::1 导致连接失败
+  frontend_devserver_url: "http://127.0.0.1:9245"
   frontend_devserver_timeout: 30
   ignore:
     dir:

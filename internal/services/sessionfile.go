@@ -469,6 +469,11 @@ func (s *SessionFileService) connectToSessionWithCreds(filePath string, connID s
 			return serSvc.(*SerialService).Connect(id, info.Host, info.Port, info.DataBits, info.StopBits, info.Parity)
 		}
 		return fmt.Errorf("串口服务不可用")
+	case "shell":
+		if locSvc, ok := AppServiceRegistry["shell"]; ok {
+			return locSvc.(*LocalService).Connect(id, info.Host)
+		}
+		return fmt.Errorf("本地终端服务不可用")
 	default:
 		if telSvc, ok := AppServiceRegistry["telnet"]; ok {
 			return telSvc.(*DirectTelnetService).ConnectWithCreds(id, info.Host, info.Port, info.Username, password)

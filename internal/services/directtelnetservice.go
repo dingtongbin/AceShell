@@ -204,6 +204,10 @@ func (d *DirectTelnetService) connect(id, host string, port int, username, passw
 	sess := &TelnetSession{ID: id, Host: host, Port: port, conn: conn, username: username, password: password}
 	d.sess[id] = sess
 
+	if MainLogService != nil {
+		MainLogService.StartSession(id, "telnet", host, port, username, fmt.Sprintf("%s@%s:%d", username, host, port))
+	}
+
 	d.emit("session-status-changed", sessionStatusJSON(id, "connected", ""))
 
 	conn.Write([]byte{iac, will, optSuppressGA})

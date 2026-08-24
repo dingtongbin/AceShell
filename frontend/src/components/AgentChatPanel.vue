@@ -44,8 +44,8 @@ const {
   status, sessions, activeId, activeSession, events, headOffset, totalEvents,
   todos, streaming, agentError, skills, sessionSkills, pendingMsg,
   switchSession, newSession, deleteSession, renameSession, archiveSession,
-  send, interrupt, regenerate, pendingFlush, pendingDiscard,
-  setSessionSkills, loadMoreEvents, dismissError, refreshStatus,
+  send, interrupt, pendingFlush, pendingDiscard,
+  setSessionSkills, loadMoreEvents, refreshEvents, dismissError, refreshStatus,
 } = useAgentBridge()
 
 const sending = ref(false)
@@ -751,16 +751,11 @@ async function handleRename() {
   renameShow.value = false
 }
 
-// 刷新对话(重跑末轮;执行中 = 中断后重跑)
-async function handleRegenerate() {
+// 刷新会话记录:从后端重新拉取当前会话的事件列表(不重新执行对话)
+async function handleRefreshEvents() {
   if (!activeId.value) return
-  const res = await regenerate()
-  if (!res.ok && res.error) message.error(res.error)
-  else {
-    // 重跑也立即进入任务并开表(占位回合计时起点=此刻,不用旧用户消息时间戳)
-    markSendAt()
-    autoScroll.value = true
-  }
+  await refreshEvents()
+  autoScroll.value = true
 }
 
 // ==================== 发送/中断/挂起 ====================
@@ -1218,13 +1213,48 @@ function isTurnOpen(b: FlowBlock, isLatest: boolean): boolean {
   return false
 }
 
-// 回合分段: 最后一个工具/错误段之后的文本 = 结论(常显);其余 = 执行过程(可折叠)
+// 深度思考: 回合开头连续的文本段(工具调用前的分析文字)。
+// 仅当回合包含非文本段(即有工具调用)时,开头文本才视为思考;纯文本回合整体是普通回答。
+function thinkingSegCount(b: FlowBlock): number {
+  let n = 0
+  for (const s of b.segs) {
+    if (s.kind !== 'text') return n
+    n++
+  }
+  return 0
+}
+
+/** turnThinking 返回回合的深度思考 markdown(无则空串)。 */
+function turnThinking(b: FlowBlock): string {
+  const n = thinkingSegCount(b)
+  if (n === 0) return ''
+  return segsMd(b.segs.slice(0, n))
+}
+
+/** thinkLive 是否处于"深度思考中"阶段: 回合执行中且目前只有思考文本、尚未进入工具阶段。 */
+function thinkLive(b: FlowBlock): boolean {
+  const meta = turnMeta(b)
+  return meta.active && thinkingSegCount(b) > 0 && thinkingSegCount(b) === b.segs.length
+}
+
+// 思考区折叠状态(默认折叠;用户点击后记忆)
+const openThinks = reactive(new Set<string>())
+function isThinkOpen(key: string): boolean {
+  return openThinks.has(key)
+}
+function toggleThink(key: string) {
+  if (openThinks.has(key)) openThinks.delete(key)
+  else openThinks.add(key)
+}
+
+// 回合分段: 跳过开头的思考文本段后,最后一个工具/错误段之后的文本 = 结论(常显);其余 = 执行过程(可折叠)
 function turnSplit(b: FlowBlock): { proc: AiSeg[]; concl: AiSeg[] } {
-  let lastHeavy = -1
-  for (let i = 0; i < b.segs.length; i++) {
+  const head = thinkingSegCount(b)
+  let lastHeavy = head - 1
+  for (let i = head; i < b.segs.length; i++) {
     if (b.segs[i].kind !== 'text') lastHeavy = i
   }
-  return { proc: b.segs.slice(0, lastHeavy + 1), concl: b.segs.slice(lastHeavy + 1) }
+  return { proc: b.segs.slice(head, lastHeavy + 1), concl: b.segs.slice(lastHeavy + 1) }
 }
 
 // 段列表 → markdown 文本(错误段用引用块;流式光标由外层附加)
@@ -1366,11 +1396,11 @@ refreshProfiles()
         </n-tooltip>
         <n-tooltip trigger="hover" :delay="300">
           <template #trigger>
-            <button class="ah-btn" :disabled="!activeId" @click="handleRegenerate">
+            <button class="ah-btn" :disabled="!activeId" @click="handleRefreshEvents">
               <n-icon :size="17" :component="RefreshOutline" />
             </button>
           </template>
-          {{ t('agent.regenerate') }}
+          {{ t('agent.refreshEvents') }}
         </n-tooltip>
       </div>
     </div>
@@ -1405,11 +1435,10 @@ refreshProfiles()
 
           <div class="agent-flow">
           <template v-for="block in flowBlocks" :key="block.key">
-            <!-- 用户消息: 头像"我" + 名字 + markdown -->
+            <!-- 用户消息: 圆形头像 + markdown(不显示昵称) -->
             <div v-if="block.type === 'user'" class="msg user">
               <div class="msg-head">
                 <div class="msg-avatar user-avatar">我</div>
-                <span class="msg-name">我</span>
               </div>
               <div class="msg-body user-body md-body" v-html="cachedMd(block.md)" />
             </div>
@@ -1417,7 +1446,7 @@ refreshProfiles()
             <div v-else-if="block.type === 'system'" class="agent-ev system">
               <span class="agent-sys">{{ block.md }}</span>
             </div>
-            <!-- AI 回合: 工单结构 = 回合头(元信息) + 执行过程(可折叠) + 结论(常显) -->
+            <!-- AI 回合: 工单结构 = 回合头(元信息) + 深度思考(可折叠) + 执行过程(可折叠) + 结论(常显) -->
             <div v-else class="msg ai" :class="{ 'turn-open': isTurnOpen(block, block.key === latestAiKey) }">
               <div class="msg-head">
                 <div class="msg-avatar ai-avatar">
@@ -1430,6 +1459,15 @@ refreshProfiles()
                   <span v-else-if="!turnMeta(block).active && turnMeta(block).ops" class="turn-chip">{{ t('agent.turnDone') }}</span>
                 </span>
               </div>
+              <!-- 深度思考折叠块: 思考中带呼吸点;内容默认折叠,展开为自适应 MD 容器 -->
+              <template v-if="turnThinking(block)">
+                <div class="think-fold-bar" @click="toggleThink(block.key)">
+                  <span class="think-spark">✻</span>
+                  <span class="think-label" :class="{ live: thinkLive(block) }">{{ thinkLive(block) ? t('agent.thinking') : t('agent.deepThink') }}</span>
+                  <span class="think-arrow" :class="{ open: isThinkOpen(block.key) }">▸</span>
+                </div>
+                <div v-show="isThinkOpen(block.key)" class="think-body md-body" v-html="cachedMd(turnThinking(block))" />
+              </template>
               <!-- 执行过程折叠条(无过程段则不渲染) -->
               <div
                 v-if="turnSplit(block).proc.length"
@@ -1877,6 +1915,31 @@ refreshProfiles()
 .turn-chip { font-size: 10px; padding: 1px 8px; border-radius: 999px; background: rgba(255, 255, 255, 0.06); color: var(--text-secondary, #888); font-variant-numeric: tabular-nums; }
 .turn-chip-active { background: rgba(251, 191, 36, 0.14); color: #fbbf24; }
 .turn-chip-fail { background: rgba(248, 113, 113, 0.12); color: #f87171; }
+
+/* 深度思考折叠条 + 自适应 MD 容器(高度随内容,上限内滚动) */
+.think-fold-bar { display: flex; align-items: center; gap: 6px; width: 100%; box-sizing: border-box; margin-top: 6px; padding: 4px 10px; border-radius: 9px; cursor: pointer; user-select: none; font-size: 11.5px; color: var(--text-secondary, #999); transition: background 0.18s ease, color 0.18s ease; }
+.think-fold-bar:hover { color: var(--text-color, #ddd); background: rgba(124, 92, 255, 0.09); }
+.think-spark { color: #a78bfa; font-size: 12px; flex-shrink: 0; }
+.think-label { font-weight: 500; flex-shrink: 0; }
+/* 思考中: 标签尾部呼吸点 */
+.think-label.live::after { content: ''; display: inline-block; width: 6px; height: 6px; margin-left: 7px; border-radius: 50%; background: #a78bfa; vertical-align: middle; animation: think-breathe 1.1s ease-in-out infinite; }
+@keyframes think-breathe { 0%, 100% { opacity: 0.2; transform: scale(0.8); } 50% { opacity: 1; transform: scale(1); } }
+.think-arrow { margin-left: auto; font-size: 9px; color: #a78bfa; transition: transform 0.18s ease; }
+.think-arrow.open { transform: rotate(90deg); }
+.think-body {
+  width: 100%; box-sizing: border-box;
+  margin-top: 6px;
+  padding: 9px 12px;
+  font-size: 12px;
+  line-height: 1.6;
+  background: rgba(124, 92, 255, 0.06);
+  border: 1px solid var(--border-color, #454545);
+  border-left: 3px solid #7c5cff;
+  border-radius: 8px;
+  /* 高度自适应内容;超过上限后容器内滚动 */
+  max-height: 320px;
+  overflow-y: auto;
+}
 .turn-fold-bar { display: flex; align-items: center; gap: 8px; padding: 5px 11px; margin: 4px 0 6px; width: 100%; box-sizing: border-box; border-radius: 9px; cursor: pointer; user-select: none; font-size: 11px; color: var(--text-secondary, #999); background: rgba(255, 255, 255, 0.05); transition: background 0.18s ease, color 0.18s ease; }
 .turn-fold-bar:hover { color: var(--text-color, #ddd); background: rgba(255, 255, 255, 0.09); }
 .turn-fold-arrow { display: inline-block; font-size: 9px; transition: transform 0.18s ease; color: #a78bfa; }

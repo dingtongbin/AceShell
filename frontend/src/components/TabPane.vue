@@ -10,6 +10,7 @@ import { GetConfig } from '../../bindings/changeme/internal/services/configservi
 import { Send as TelnetSend, Disconnect as TelnetDisconnect } from '../../bindings/changeme/internal/services/directtelnetservice.js'
 import { Send as SSHSend, Disconnect as SSHDisconnect, Resize as SSHResize } from '../../bindings/changeme/internal/services/sshservice.js'
 import { Send as SerialSend, Disconnect as SerialDisconnect, Connect as SerialConnect } from '../../bindings/changeme/internal/services/serialservice.js'
+import { Send as LocalSend, Disconnect as LocalDisconnect, Resize as LocalResize } from '../../bindings/changeme/internal/services/localservice.js'
 import { SaveLogFile } from '../../bindings/changeme/internal/services/windowservice.js'
 import { createXterm, resetTermComposition, type TermConfig } from '../composables/useXterm'
 import type { EditorView } from '@codemirror/view'
@@ -79,6 +80,7 @@ async function sendToTab(id: string, p: string, d: string) {
   try {
     if (p === 'ssh') await SSHSend(id, d)
     else if (p === 'serial') await SerialSend(id, d)
+    else if (p === 'shell') await LocalSend(id, d)
     else await TelnetSend(id, d)
   } catch {
     const tab = findTabById(id)
@@ -165,8 +167,8 @@ const canScrollRight = ref(false)
 const verticalWidth = ref(props.verticalWidth)
 let isResizingVertical = false
 
-function gIcon(p: string) { switch (p) { case 'serial': return RadioOutline; default: return TerminalOutline } }
-function gColor(p: string) { switch (p) { case 'ssh': return '#4ec9b0'; case 'telnet': return '#569cd6'; case 'serial': return '#c586c0'; default: return '#6e9fc7' } }
+function gIcon(p: string) { switch (p) { case 'serial': return RadioOutline; case 'shell': return TerminalOutline; default: return TerminalOutline } }
+function gColor(p: string) { switch (p) { case 'ssh': return '#4ec9b0'; case 'telnet': return '#569cd6'; case 'serial': return '#c586c0'; case 'shell': return '#dcdcaa'; default: return '#6e9fc7' } }
 function gStatus(s: string) { switch (s) { case 'connected': return '#4ec9b0'; case 'connecting': return '#f2c97d'; case 'error': return '#e45858'; default: return '#555' } }
 
 async function openSession(sessionPath: string): Promise<string> {
@@ -266,6 +268,7 @@ function fitAndResize(terminal: Terminal | null, fitAddon: FitAddon | null, id: 
   const cols = terminal.cols
   const rows = terminal.rows
   if (protocol === 'ssh') SSHResize(id, cols, rows).catch(() => {})
+  else if (protocol === 'shell') LocalResize(id, cols, rows).catch(() => {})
 }
 
 function scheduleFit(tab: Tab) {
@@ -522,6 +525,7 @@ async function doCloseTab(tab: Tab) {
   if (tab.status === 'connected' || tab.status === 'connecting') {
     if (tab.protocol === 'ssh') SSHDisconnect(tab.id).catch(() => {})
     else if (tab.protocol === 'serial') SerialDisconnect(tab.id).catch(() => {})
+    else if (tab.protocol === 'shell') LocalDisconnect(tab.id).catch(() => {})
     else TelnetDisconnect(tab.id).catch(() => {})
   }
   pane.tabs.splice(idx, 1)
@@ -578,6 +582,7 @@ function disconnectTab(tab: Tab) {
   if (!tab.protocol) return
   if (tab.protocol === 'ssh') SSHDisconnect(tab.id).catch(() => {})
   else if (tab.protocol === 'serial') SerialDisconnect(tab.id).catch(() => {})
+  else if (tab.protocol === 'shell') LocalDisconnect(tab.id).catch(() => {})
   else TelnetDisconnect(tab.id).catch(() => {})
 }
 
@@ -980,6 +985,11 @@ function getStatusLeft(): string {
     }
     if (tab.protocol === 'telnet') return `Telnet:${tab.host || ''}:${tab.port || ''}`
     if (tab.protocol === 'serial') return t('tabPane.serialStatus', { host: tab.host || '', port: tab.port || '' })
+    if (tab.protocol === 'shell') {
+      const ref = tab.host || ''
+      const short = ref.includes('/') || ref.includes('\\') ? ref.split(/[\\/]/).pop()?.replace(/\.exe$/i, '') ?? ref : ref.replace(/^wsl:\/\//, '')
+      return t('tabPane.localStatus', { shell: short })
+    }
     return t('tabPane.notConnected')
   }
   if (tab.kind === 'component') {

@@ -96,6 +96,7 @@ watchEffect(() => {
     d.setProperty('--tab-active-bg', `rgba(22,22,22,${a})`)
     d.setProperty('--tab-inactive-bg', `rgba(44,44,44,${a})`)
     d.setProperty('--term-bg', `rgba(22,22,22,${a})`)
+    d.setProperty('--primary-color', '#0078d4')
   } else {
     d.setProperty('--sidebar-bg', '#efefef')
     d.setProperty('--sidebar-shadow', '#d9d9d9')
@@ -112,6 +113,7 @@ watchEffect(() => {
     d.setProperty('--tab-active-bg', '#ffffff')
     d.setProperty('--tab-inactive-bg', '#d9d9d9')
     d.setProperty('--term-bg', `rgba(245,245,245,${a})`)
+    d.setProperty('--primary-color', '#005a9e')
   }
   document.body.style.backgroundColor = isDark.value ? `rgba(38,38,38,${a})` : '#f7f7f7'
 })
@@ -208,6 +210,16 @@ body {
 .xterm-screen,
 .xterm .xterm-viewport {
   background-color: transparent !important;
+}
+
+/* 非阻塞提示浮层(message/notification)置于自绘标题栏之上,避免被标题栏遮挡;
+   弹窗/抽屉等阻塞型遮罩保持低于标题栏(标题栏 z-index: 1000000) */
+.n-message-container,
+.n-notification-container {
+  z-index: 1000001 !important;
+}
+.n-message-container {
+  top: 44px !important;
 }
 </style>
 

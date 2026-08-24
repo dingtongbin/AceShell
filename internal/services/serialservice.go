@@ -74,6 +74,10 @@ func (s *SerialService) Connect(id, portName string, baudRate, dataBits int, sto
 	}
 	s.sess[id] = sess
 
+	if MainLogService != nil {
+		MainLogService.StartSession(id, "serial", portName, baudRate, "", fmt.Sprintf("%s@%d", portName, baudRate))
+	}
+
 	s.safeEmit("session-status-changed", sessionStatusJSON(id, "connected", ""))
 
 	go s.readLoop(sess)
@@ -86,6 +90,7 @@ func (s *SerialService) readLoop(sess *SerialSession) {
 		n, err := sess.port.Read(buf)
 		if n > 0 {
 			s.safeEmit("session-output", sessionOutputJSON(sess.ID, string(buf[:n])))
+			if MainLogService != nil { MainLogService.LogOutput(sess.ID, string(buf[:n])) }
 			if MainMcpService != nil { MainMcpService.TapOutput(sess.ID, buf[:n]) }
 		}
 		if err != nil {
@@ -151,6 +156,9 @@ func (s *SerialService) closeSession(sess *SerialSession) {
 	s.mu.Lock()
 	delete(s.sess, sess.ID)
 	s.mu.Unlock()
+	if MainLogService != nil {
+		MainLogService.EndSession(sess.ID)
+	}
 	s.safeEmit("session-status-changed", sessionStatusJSON(sess.ID, "disconnected", ""))
 }
 

@@ -3,7 +3,7 @@ import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { NModal, NSwitch, NTag, NRadioGroup, NRadioButton, NButton, NInput, NCheckbox, NIcon, NSlider, NColorPicker, NInputNumber, NAutoComplete, NSelect, useMessage } from 'naive-ui'
 import { CloseOutline, LogoGithub, GlobeOutline } from '@vicons/ionicons5'
 import { useTheme } from '../stores/theme'
-import { GetConfig, SetTabOrientation, SetTheme, SetCloseConfirm, SetPanelOpacity, SetWallpaper, SetTerminalConfig, SetShowSerial, SetShowHelp, SetFileEditingAutoSave, SetLanguage, SetCustomTitlebar } from '../../bindings/changeme/internal/services/configservice.js'
+import { GetConfig, SetTabOrientation, SetTheme, SetCloseConfirm, SetPanelOpacity, SetWallpaper, SetTerminalConfig, SetShowSerial, SetShowHelp, SetFileEditingAutoSave, SetLanguage, SetCustomTitlebar, SetShowToolbar, SetShowAssistant } from '../../bindings/changeme/internal/services/configservice.js'
 import { OpenFileDialog } from '../../bindings/changeme/internal/services/windowservice.js'
 import { OpenUrl as BrowserOpenUrl } from '../../bindings/changeme/internal/services/browserservice.js'
 import { GetVersion } from '../../bindings/changeme/internal/services/versionservice.js'
@@ -37,6 +37,12 @@ const customTitlebar = ref(true)
 const autoSave = ref(true)
 const language = ref('zh-CN')
 const appVersion = ref('0.1.0')
+// 视图 tab 与顶级菜单视图菜单同步的项(顺序/变量/持久化口径一致)
+const showToolbar = ref(true)
+const personalize = ref(false)
+const copyOnSelect = ref(true)
+const cursorBlink = ref(true)
+const showAssistant = ref(false)
 
 const navItems = computed(() => [
   { key: 'general', label: t('settings.nav.general') },
@@ -191,6 +197,40 @@ async function handleAutoSaveChange(value: boolean) {
   try { await SetFileEditingAutoSave(value); window.dispatchEvent(new Event('config-changed')) } catch (e) { console.warn('设置自动保存失败:', e) }
 }
 
+async function handleShowToolbarChange(value: boolean) {
+  showToolbar.value = value
+  try { await SetShowToolbar(value); window.dispatchEvent(new Event('config-changed')) } catch (e) { console.warn('切换工具栏失败:', e) }
+}
+
+// personalize/copyOnSelect/cursorBlink 走 SetTerminalConfig 整包(与顶级菜单 setTermField 同一口径)
+async function setTermFieldSync(field: 'personalize' | 'copyOnSelect' | 'cursorBlink', value: boolean) {
+  try {
+    const cfg = JSON.parse(await GetConfig())
+    const t = cfg?.terminal ?? {}
+    await SetTerminalConfig(JSON.stringify({
+      showToolbar: cfg?.view?.showToolbar ?? true,
+      personalize: field === 'personalize' ? value : (t.personalize ?? false),
+      fontColor: t.fontColor || '#FFFFFF',
+      bgColor: t.bgColor || '#0C0C0C',
+      bgOpacity: t.bgOpacity ?? 100,
+      bgImage: t.bgImage || '',
+      fontFamily: t.fontFamily || '"Cascadia Code", Consolas, "Courier New", monospace',
+      fontSize: t.fontSize ?? 16,
+      lineHeight: t.lineHeight ?? 1,
+      copyOnSelect: field === 'copyOnSelect' ? value : (t.copyOnSelect ?? true),
+      cursorBlink: field === 'cursorBlink' ? value : (t.cursorBlink ?? true),
+      cursorStyle: t.cursorStyle || 'bar',
+      scrollback: t.scrollback ?? 1000,
+    }))
+    window.dispatchEvent(new Event('config-changed'))
+  } catch (e) { console.warn('切换终端选项失败:', e) }
+}
+
+async function handleShowAssistantChange(value: boolean) {
+  showAssistant.value = value
+  try { await SetShowAssistant(value); window.dispatchEvent(new Event('config-changed')) } catch (e) { console.warn('切换智能助手失败:', e) }
+}
+
 async function handlePickWallpaper() {
   const path = await OpenFileDialog(t('settings.wallPickerTitle'), t('settings.imageType'), '*.png;*.jpg;*.jpeg;*.gif;*.bmp;*.webp')
   if (!path) return
@@ -221,6 +261,12 @@ async function loadConfig() {
     customTitlebar.value = cfg.view?.customTitlebar ?? true
     language.value = cfg.language ?? 'zh-CN'
     autoSave.value = cfg.fileEditing?.autoSave ?? true
+    // 视图 tab 同步项(与顶级菜单视图菜单一致)
+    showToolbar.value = cfg.view?.showToolbar ?? true
+    personalize.value = cfg.terminal?.personalize ?? false
+    copyOnSelect.value = cfg.terminal?.copyOnSelect ?? true
+    cursorBlink.value = cfg.terminal?.cursorBlink ?? true
+    showAssistant.value = cfg.view?.showAssistant ?? false
     loadTermForm(cfg)
   } catch {}
 }
@@ -278,18 +324,50 @@ watch(() => props.show, (val) => { if (val) loadConfig() })
               </div>
             </div>
           </div>
+          <!-- 视图: 与顶级菜单「视图」下拉完全同步(顺序/功能/变量) -->
           <div v-if="activeNav === 'view'">
             <div class="setting-item">
               <div class="setting-label">{{ t('settings.serialManager') }}</div>
               <n-switch :value="showSerial" size="small" @update:value="handleShowSerialChange" />
             </div>
-            <div class="setting-item" style="margin-top: 12px;">
+            <div class="setting-item">
               <div class="setting-label">{{ t('settings.help') }}</div>
               <n-switch :value="showHelp" size="small" @update:value="handleShowHelpChange" />
             </div>
-            <div class="setting-item" style="margin-top: 12px;">
+            <div class="setting-item">
               <div class="setting-label">{{ t('settings.customTitlebar') }}<span class="setting-desc">{{ t('settings.customTitlebarDesc') }}</span></div>
               <n-switch :value="customTitlebar" size="small" @update:value="handleCustomTitlebarChange" />
+            </div>
+            <div class="settings-divider"></div>
+            <div class="setting-item">
+              <div class="setting-label">{{ t('settings.toolbarSwitch') }}</div>
+              <n-switch :value="showToolbar" size="small" @update:value="handleShowToolbarChange" />
+            </div>
+            <div class="setting-item">
+              <div class="setting-label">{{ t('settings.personalize') }}</div>
+              <n-switch :value="personalize" size="small" @update:value="(v: boolean) => setTermFieldSync('personalize', v)" />
+            </div>
+            <div class="setting-item">
+              <div class="setting-label">{{ t('settings.copyOnSelect') }}</div>
+              <n-switch :value="copyOnSelect" size="small" @update:value="(v: boolean) => setTermFieldSync('copyOnSelect', v)" />
+            </div>
+            <div class="setting-item">
+              <div class="setting-label">{{ t('settings.cursorBlink') }}</div>
+              <n-switch :value="cursorBlink" size="small" @update:value="(v: boolean) => setTermFieldSync('cursorBlink', v)" />
+            </div>
+            <div class="settings-divider"></div>
+            <div class="setting-item">
+              <div class="setting-label">{{ t('settings.autoSave') }}</div>
+              <n-switch :value="autoSave" size="small" @update:value="handleAutoSaveChange" />
+            </div>
+            <div class="setting-item">
+              <div class="setting-label">{{ t('settings.noCloseConfirm') }}</div>
+              <n-switch :value="closeNoConfirm" size="small" @update:value="handleCloseNoConfirmChange" />
+            </div>
+            <div class="settings-divider"></div>
+            <div class="setting-item">
+              <div class="setting-label">{{ t('settings.assistant') }}</div>
+              <n-switch :value="showAssistant" size="small" @update:value="handleShowAssistantChange" />
             </div>
           </div>
           <div v-if="activeNav === 'terminal'" class="term-settings">
@@ -573,5 +651,10 @@ watch(() => props.show, (val) => { if (val) loadConfig() })
   font-size: 11px;
   color: var(--icon-color, #888);
   font-weight: normal;
+}
+.settings-divider {
+  height: 1px;
+  background: var(--border-color, #3c3c3c);
+  margin: 10px 0;
 }
 </style>

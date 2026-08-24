@@ -15,6 +15,7 @@ import { SaveSession, CreateFolder, LoadSession, GetTree, UpdateSession } from '
 import { GetVersion } from '../../bindings/changeme/internal/services/versionservice.js'
 import { GetConfig, SetShowSession, SetShowSerial, SetCustomTitlebar, SetPanelLayout } from '../../bindings/changeme/internal/services/configservice.js'
 import { ListPorts } from '../../bindings/changeme/internal/services/serialservice.js'
+import { ListShells } from '../../bindings/changeme/internal/services/localservice.js'
 import { OpenUrl as BrowserOpenUrl } from '../../bindings/changeme/internal/services/browserservice.js'
 import { useI18n } from 'vue-i18n'
 import { ListKeys, DeleteKey } from '../../bindings/changeme/internal/services/globalkeyservice.js'
@@ -27,12 +28,31 @@ import type { FileEditorApi } from './FileEditor.vue'
 import McpSettingsPanel from './McpSettingsPanel.vue'
 import AgentChatPanel from './AgentChatPanel.vue'
 import AgentSettingsDialog from './AgentSettingsDialog.vue'
+import WelcomeDialog from './WelcomeDialog.vue'
 import { useMcpBridge } from '../composables/useMcpBridge'
 import { useAgentBridge } from '../composables/useAgentBridge'
 
 const message = useMessage()
 const { t } = useI18n()
-const { initMcpBridge, bindTabManager, bindOpenScriptHandler, criticalBlock } = useMcpBridge()
+const { status: mcpStatus, initMcpBridge, bindTabManager, bindOpenScriptHandler, criticalBlock } = useMcpBridge()
+// MCP 忙碌源:工具调用进行中(含槽外回读/只读工具)或等待用户审批
+const mcpBusySource = computed(() => {
+  const s = mcpStatus.value
+  if (!s.enabled || s.state !== 'running') return false
+  return !!s.busy || s.pendingApprovals > 0
+})
+// 熄灭防抖 900ms:短调用也至少完整可见一个闪烁周期;期间新忙碌立即恢复
+const mcpBusy = ref(false)
+let mcpBusyTimer: ReturnType<typeof setTimeout> | null = null
+watch(mcpBusySource, (v) => {
+  if (mcpBusyTimer) { clearTimeout(mcpBusyTimer); mcpBusyTimer = null }
+  if (v) {
+    mcpBusy.value = true
+  } else {
+    mcpBusyTimer = setTimeout(() => { mcpBusy.value = false; mcpBusyTimer = null }, 900)
+  }
+})
+onBeforeUnmount(() => { if (mcpBusyTimer) clearTimeout(mcpBusyTimer) })
 const { initAgentBridge } = useAgentBridge()
 
 const emit = defineEmits<{
@@ -85,7 +105,7 @@ const newFolderParent = ref('')
 // Session dialog
 const showSessionDialog = ref(false)
 const isEditMode = ref(false)
-const selectedProtocol = ref<'ssh' | 'sftp' | 'telnet' | 'serial' | 'http' | 'rdp'>('ssh')
+const selectedProtocol = ref<'ssh' | 'sftp' | 'telnet' | 'serial' | 'http' | 'rdp' | 'shell'>('ssh')
 
 // Common fields
 const sessName = ref('')
@@ -117,6 +137,11 @@ const serialBaud = ref(9600)
 const serialDataBits = ref(8)
 const serialStopBits = ref('1')
 const serialParity = ref('none')
+
+// Local shell
+const localShell = ref('')
+const localShells = ref<{ label: string; value: string }[]>([])
+const scanningShells = ref(false)
 
 // HTTP
 const httpUrl = ref('')
@@ -237,7 +262,39 @@ async function loadConfig() {
     showAgentPanel.value = cfg.view?.showAgentPanel ?? false
     agentPanelWidth.value = cfg.view?.agentPanelWidth ?? 300
     sessionWidth.value = cfg.view?.sessionWidth ?? 220
+    applyAssistant(!!(cfg.view?.showAssistant))
+    // 首次使用引导: 仅在明确读到 onboarded === false(全新安装)时弹出;
+    // 字段缺失/读取异常一律视为已引导,宁可少弹不误弹
+    showOnboarding.value = cfg.view?.onboarded === false
   } catch {}
+}
+
+// 智能助手总开关: 关闭时隐藏顶栏三个入口按钮,并联动收起资源管理器/AI 面板
+// (收纳按钮已隐藏,若面板仍展开将无法操作)
+const showAssistant = ref(false)
+
+function applyAssistant(on: boolean) {
+  const wasOn = showAssistant.value
+  showAssistant.value = on
+  if (!on) {
+    if (leftPanel.value === 'resource') {
+      leftPanel.value = 'none'
+      SetShowSession(false).catch(() => {})
+    }
+    if (showAgentPanel.value) {
+      showAgentPanel.value = false
+      agentMaximized.value = false
+      pushPanelLayout()
+    }
+  }
+}
+
+// 首次使用引导向导显隐(WelcomeDialog)
+const showOnboarding = ref(false)
+
+function onOnboardingDone(assistant: boolean) {
+  // 向导完成后按用户选择联动界面(开启则展示智能助手入口并激活视图)
+  applyAssistant(assistant)
 }
 
 // 面板布局持久化: 前端只上报最新值,Go 侧周期写盘(1s)+窗口关闭必写,保护磁盘
@@ -392,6 +449,10 @@ function validateRdp(): string | null {
   return null
 }
 
+function validateShell(): string | null {
+  return null
+}
+
 function validateCurrent(): string | null {
   const nameErr = validateName(sessName.value.trim())
   if (nameErr) return nameErr
@@ -403,6 +464,7 @@ function validateCurrent(): string | null {
     case 'serial': return validateSerial()
     case 'http': return validateHttp()
     case 'rdp': return validateRdp()
+    case 'shell': return validateShell()
     default: return t('shellPanel.unknownProtocol')
   }
 }
@@ -490,6 +552,11 @@ function buildRdpToml(name: string): string {
   return `name = "${escapeToml(name)}"\nhost = "${escapeToml(rdpHost.value.trim())}"\nport = ${rdpPort.value}\nusername = "${escapeToml(rdpUser.value)}"\npassword = "${escapeToml(rdpPassword.value)}"\nprotocol = "rdp"\nnotes = ""\ncreated = "${escapeToml(sessCreated.value || nowStr())}"\nupdated = "${escapeToml(nowStr())}"\n`
 }
 
+function buildShellToml(name: string): string {
+  const shellRef = escapeToml(localShell.value)
+  return `name = "${escapeToml(name)}"\nhost = "${shellRef}"\nport = 0\nprotocol = "shell"\nnotes = ""\ncreated = "${escapeToml(sessCreated.value || nowStr())}"\nupdated = "${escapeToml(nowStr())}"\n`
+}
+
 function buildToml(name: string): string {
   switch (selectedProtocol.value) {
     case 'ssh': return buildSshToml(name, 'ssh')
@@ -498,6 +565,7 @@ function buildToml(name: string): string {
     case 'serial': return buildSerialToml(name)
     case 'http': return buildHttpToml(name)
     case 'rdp': return buildRdpToml(name)
+    case 'shell': return buildShellToml(name)
     default: return ''
   }
 }
@@ -590,19 +658,36 @@ async function refreshSerialPorts() {
   }
 }
 
-watch(selectedProtocol, (v) => { if (v === 'serial') refreshSerialPorts() })
+watch(selectedProtocol, (v) => {
+  if (v === 'serial') refreshSerialPorts()
+  if (v === 'shell') refreshShells()
+})
+
+async function refreshShells() {
+  scanningShells.value = true
+  try {
+    const raw = await ListShells()
+    const list = JSON.parse(raw) as { name: string; path: string }[]
+    localShells.value = Array.isArray(list) ? list.map((s) => ({ label: s.name, value: s.path })) : []
+  } catch {
+    localShells.value = []
+  } finally {
+    scanningShells.value = false
+  }
+}
 
 function resetSshFields() { sshHost.value = ''; sshPort.value = 22; sshUser.value = ''; sshPassword.value = ''; sshAuthMode.value = 'password'; sshKeyRef.value = ''; sessAllowedCiphers.value = [] }
 function resetTelnetFields() { telnetHost.value = ''; telnetPort.value = 23; telnetAccount.value = ''; telnetPassword.value = '' }
 function resetSerialFields() { serialDevice.value = ''; serialBaud.value = 9600; serialDataBits.value = 8; serialStopBits.value = '1'; serialParity.value = 'none' }
 function resetHttpFields() { httpUrl.value = ''; httpBrowser.value = '' }
 function resetRdpFields() { rdpHost.value = ''; rdpPort.value = 3389; rdpUser.value = ''; rdpPassword.value = ''; rdpTestSel.value = '' }
+function resetShellFields() { localShell.value = ''; localShells.value = [] }
 function resetAllFields() {
   sessName.value = ''; sessCreated.value = ''; sessUpdated.value = ''; sessFolder.value = ''; sessPath.value = ''
-  resetSshFields(); resetTelnetFields(); resetSerialFields(); resetHttpFields(); resetRdpFields()
+  resetSshFields(); resetTelnetFields(); resetSerialFields(); resetHttpFields(); resetRdpFields(); resetShellFields()
 }
 
-function openNewSession(folderPath: string, protocol: 'ssh' | 'sftp' | 'telnet' | 'serial' | 'http' | 'rdp' = 'ssh') {
+function openNewSession(folderPath: string, protocol: 'ssh' | 'sftp' | 'telnet' | 'serial' | 'http' | 'rdp' | 'shell' = 'ssh') {
   resetAllFields()
   selectedProtocol.value = protocol
   sessFolder.value = folderPath
@@ -635,7 +720,7 @@ async function openEditSession(path: string) {
     sessFolder.value = path.substring(0, path.lastIndexOf('/'))
     sessCreated.value = meta.created || ''
     sessUpdated.value = meta.updated || ''
-    selectedProtocol.value = meta.protocol === 'serial' ? 'serial' : (meta.protocol === 'telnet' ? 'telnet' : (meta.protocol === 'sftp' ? 'sftp' : (meta.protocol === 'http' ? 'http' : (meta.protocol === 'rdp' ? 'rdp' : 'ssh'))))
+    selectedProtocol.value = meta.protocol === 'serial' ? 'serial' : (meta.protocol === 'telnet' ? 'telnet' : (meta.protocol === 'sftp' ? 'sftp' : (meta.protocol === 'http' ? 'http' : (meta.protocol === 'rdp' ? 'rdp' : (meta.protocol === 'shell' ? 'shell' : 'ssh')))))
     switch (selectedProtocol.value) {
       case 'ssh':
       case 'sftp':
@@ -671,6 +756,10 @@ async function openEditSession(path: string) {
         rdpUser.value = meta.username || ''
         rdpPassword.value = meta.password || ''
         loadRdpTestServers()
+        break
+      case 'shell':
+        localShell.value = meta.host || ''
+        refreshShells()
         break
     }
     sessionSide.value = 'settings'
@@ -849,6 +938,7 @@ onBeforeUnmount(() => {
     <TopMenuBar
       :show-session="showSessionManager"
       :show-agent="showAgentPanel"
+      :show-assistant="showAssistant"
       :active-tab-state="activeTabState"
       :frameless-enabled="customTitlebar"
       @toggle-session="toggleSessionManager"
@@ -896,7 +986,8 @@ onBeforeUnmount(() => {
         />
       </div>
       <div v-if="leftPanel !== 'none'" class="resize-handle" :class="{ 'handle-overlay': isNarrow }" :style="{ left: sessionWidth + 'px' }" @pointerdown="startResize" />
-      <div class="tab-area">
+      <div class="tab-area" :class="{ 'mcp-busy': mcpBusy }">
+        <div v-if="mcpBusy" class="mcp-tab-mask" @click.stop @contextmenu.stop.prevent @mousedown.stop @wheel.stop />
         <TabManager ref="tabManagerRef" :show-toolbar="showToolbar" :tab-orientation="tabOrientation" :vertical-tab-width="verticalTabWidth"
           @new-ssh="openNewSession('', 'ssh')" @new-telnet="openNewSession('', 'telnet')" @new-serial="openNewSession('', 'serial')" @status="onTabStatus" @active-tab-state="(s) => { activeTabState = s }" />
       </div>
@@ -922,6 +1013,7 @@ onBeforeUnmount(() => {
       />
       <!-- 智能体设置弹窗(独立于主设置) -->
       <AgentSettingsDialog v-model:show="showAgentSettings" />
+      <WelcomeDialog v-model:show="showOnboarding" @done="onOnboardingDone" />
         </div>
       <div class="global-status-bar">
         <span v-if="globalStatus.text" class="gs-left">{{ globalStatus.text }}</span>
@@ -965,6 +1057,10 @@ onBeforeUnmount(() => {
             <div class="type-item" :class="{ active: selectedProtocol === 'rdp' }" @click="selectedProtocol = 'rdp'; loadRdpTestServers()">
               <span class="type-name">RDP</span>
               <span class="type-desc">{{ t('shellPanel.rdpDesc') }}</span>
+            </div>
+            <div class="type-item" :class="{ active: selectedProtocol === 'shell' }" @click="selectedProtocol = 'shell'; refreshShells()">
+              <span class="type-name">{{ t('shellPanel.shellType') }}</span>
+              <span class="type-desc">{{ t('shellPanel.shellDesc') }}</span>
             </div>
           </div>
         </n-scrollbar>
@@ -1036,6 +1132,16 @@ onBeforeUnmount(() => {
                 <label class="form-label">{{ t('shellPanel.testServer') }}</label>
                 <n-select v-model:value="rdpTestSel" :options="rdpTestServers" :placeholder="t('shellPanel.testServerPlaceholder')" filterable clearable style="width: 100%" @update:value="applyRdpTestServer" />
               </div>
+            </template>
+            <template v-else-if="selectedProtocol === 'shell'">
+              <div class="form-group">
+                <label class="form-label">{{ t('shellPanel.selectTerminal') }}</label>
+                <div style="display: flex; gap: 6px; align-items: center; width: 100%">
+                  <n-select v-model:value="localShell" :options="localShells" :placeholder="t('shellPanel.scanningShells')" filterable clearable :loading="scanningShells" style="flex: 1; min-width: 0" @focus="refreshShells" />
+                  <n-button size="small" @click="refreshShells">{{ t('shellPanel.rescan') }}</n-button>
+                </div>
+              </div>
+              <div class="http-hint">{{ t('shellPanel.shellHint') }}</div>
             </template>
           </div>
           <div v-else-if="sessionSide === 'meta'" class="anim-fade">
@@ -1153,6 +1259,20 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  position: relative;
+}
+
+/* MCP 执行中: 主题色窄边框持久亮起 + 纯透明遮罩拦截鼠标(键盘走用户抢占通道) */
+.tab-area.mcp-busy {
+  outline: 2px solid var(--primary-color, #0078d4);
+  outline-offset: -2px;
+}
+
+.mcp-tab-mask {
+  position: absolute;
+  inset: 0;
+  z-index: 500;
+  cursor: not-allowed;
 }
 
 .resize-handle {
