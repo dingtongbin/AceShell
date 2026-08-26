@@ -87,6 +87,7 @@ type AgentConfig struct {
 	MaxSteps          int    `toml:"maxSteps" json:"maxSteps"`                 // 单轮工具调用上限
 	HistoryWindow     int    `toml:"historyWindow" json:"historyWindow"`       // 前端渲染窗口(分页大小)
 	ContextMaxEvents  int    `toml:"contextMaxEvents" json:"contextMaxEvents"` // 上下文截断上限
+	WebSearch         bool   `toml:"webSearch" json:"webSearch"`               // 联网搜索工具开关(默认开启,AI 视情况调用)
 	ActiveProfileID   string `toml:"activeProfileId" json:"activeProfileId"`   // 当前活动档案
 	Profiles          []AgentProfile `toml:"profile" json:"profiles"`          // 多 AI 档案
 	// 旧版单份配置(仅作迁移源读取;迁移完成后零值)
@@ -124,6 +125,11 @@ type ViewConfig struct {
 	AgentPanelWidth int  `toml:"agentPanelWidth" json:"agentPanelWidth"`
 	// 资源管理器面板宽度(px)。
 	SessionWidth int `toml:"sessionWidth" json:"sessionWidth"`
+	// 智能助手总开关(视图菜单): 关闭时隐藏顶栏 MCP 按钮/资源管理器收纳按钮/AI 面板按钮。
+	ShowAssistant bool `toml:"showAssistant" json:"showAssistant"`
+	// 首次使用引导: false = 待引导(前端弹欢迎向导);完成后置 true 不再弹。
+	// 缺失/读取异常时前端按已引导处理(宁可不弹不误弹)。
+	Onboarded bool `toml:"onboarded" json:"onboarded"`
 }
 
 type SectionState struct {
@@ -236,6 +242,10 @@ func (c *ConfigService) Init() {
 			ShowAgentPanel:  false,
 			AgentPanelWidth: 300,
 			SessionWidth:    220,
+			// 智能助手总开关默认关闭(视图菜单可开启)
+			ShowAssistant: false,
+			// 全新安装默认待引导(首次启动弹欢迎向导);完成后置 true
+			Onboarded: false,
 		},
 		Sections: SectionsConfig{
 			Session: SectionState{Expanded: true, Size: 0},
@@ -285,6 +295,7 @@ func (c *ConfigService) Init() {
 			MaxSteps:         24,
 			HistoryWindow:    200,
 			ContextMaxEvents: 400,
+			WebSearch:        true, // 联网搜索默认开启
 		},
 		Language: "zh-CN",
 	}
@@ -314,6 +325,10 @@ func (c *ConfigService) load() {
 			Agent AgentConfig `toml:"agent"`
 		}
 		if uerr := toml.Unmarshal(data, &f); uerr == nil {
+			// 旧版配置文件不含 webSearch 键: 反序列化零值会整体覆盖默认值,导致联网搜索被静默关闭——回退到默认值
+			if !strings.Contains(string(data), "webSearch") {
+				f.Agent.WebSearch = c.config.Agent.WebSearch
+			}
 			c.config.Agent = f.Agent
 		} else {
 			// 解析失败留痕(静默吞掉会导致档案/密钥"凭空消失")
@@ -566,6 +581,32 @@ func (c *ConfigService) SetShowSerial(show bool) string {
 	c.config.View.ShowSerial = show
 	c.save()
 	return c.configJSONLocked()
+}
+
+// SetShowAssistant 设置智能助手总开关(视图菜单)并持久化。
+// 关闭时前端隐藏顶栏 MCP 按钮/资源管理器收纳按钮/AI 面板按钮。
+func (c *ConfigService) SetShowAssistant(show bool) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.config.View.ShowAssistant = show
+	c.save()
+	return c.configJSONLocked()
+}
+
+// SetOnboarded 标记首次使用引导已完成并持久化(之后不再弹欢迎向导)。
+func (c *ConfigService) SetOnboarded(done bool) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.config.View.Onboarded = done
+	c.save()
+	return c.configJSONLocked()
+}
+
+// Onboarded 返回引导完成状态(供诊断;前端经 GetConfig 读取)。
+func (c *ConfigService) IsOnboarded() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.config.View.Onboarded
 }
 
 // SetShowHelp 设置帮助按钮与帮助弹窗可见性并持久化。

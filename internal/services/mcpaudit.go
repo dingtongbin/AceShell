@@ -66,6 +66,16 @@ func (s *McpAuditService) Append(source, level, action, subject, detail, risk, d
 	return s.AppendBatch(source, level, action, subject, detail, risk, decision, byUser, "")
 }
 
+// Close 关闭当前打开的审计文件句柄(服务停止或测试清理时调用,幂等)。
+func (s *McpAuditService) Close() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.file != nil {
+		s.file.Close()
+		s.file = nil
+	}
+}
+
 // AppendBatch 追加带批量关联 ID 的审计记录。
 func (s *McpAuditService) AppendBatch(source, level, action, subject, detail, risk, decision string, byUser bool, batchID string) McpAuditEntry {
 	if source == "" {

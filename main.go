@@ -47,6 +47,7 @@ type services struct {
 	directTelnet *appservices.DirectTelnetService
 	ssh          *appservices.SSHService
 	serial       *appservices.SerialService
+	local        *appservices.LocalService
 	fileTree     *appservices.FileTreeService
 	scriptFile   *appservices.ScriptFileService
 	window       *appservices.WindowService
@@ -105,6 +106,7 @@ func initServices() *services {
 		directTelnet: &appservices.DirectTelnetService{},
 		ssh:          &appservices.SSHService{},
 		serial:       &appservices.SerialService{},
+		local:        &appservices.LocalService{},
 		fileTree:     &appservices.FileTreeService{},
 		scriptFile:   &appservices.ScriptFileService{},
 		window:       &appservices.WindowService{},
@@ -136,6 +138,7 @@ func createApp(svc *services) *application.App {
 			application.NewService(svc.directTelnet),
 			application.NewService(svc.ssh),
 			application.NewService(svc.serial),
+			application.NewService(svc.local),
 			application.NewService(svc.fileTree),
 			application.NewService(svc.scriptFile),
 			application.NewService(svc.window),
@@ -168,6 +171,7 @@ func wireServices(svc *services, app *application.App) {
 	svc.sessionFile.SSHSvc = svc.ssh
 	svc.sessionFile.GlobalKeys = svc.globalKeys
 	svc.serial.SetApp(app)
+	svc.local.SetApp(app)
 	svc.window.SetApp(app)
 	svc.sessionFile.SetApp(app)
 	svc.sftp.SetApp(app)
@@ -179,6 +183,7 @@ func wireServices(svc *services, app *application.App) {
 	appservices.AppServiceRegistry["telnet"] = svc.directTelnet
 	appservices.AppServiceRegistry["ssh"] = svc.ssh
 	appservices.AppServiceRegistry["serial"] = svc.serial
+	appservices.AppServiceRegistry["shell"] = svc.local
 
 	// RDP 图形会话桥:启动本机 WebSocket 字节桥(仅 127.0.0.1)
 	svc.rdp.SetApp(app)

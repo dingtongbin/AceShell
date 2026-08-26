@@ -94,12 +94,23 @@ type McpService struct {
 	listener   net.Listener
 	token      string
 	state      string
-	pendingCmd map[string]chan mcpCmdResult // requestId → 结果通道
-	approvals  map[string]*mcpApproval      // approvalId → 审批请求
-	outBuf     map[string][]byte            // tabId → 原始输出缓冲
-	outCursor  map[string]int               // tabId → terminal_read 游标
+	busy       bool                          // 工具调用进行中(槽占用或任一工具活动,驱动前端"执行中"遮罩)
+	slotBusy   bool                          // 仲裁执行槽占用中
+	activeCnt  int                           // 槽外进行中的工具调用数(含审批等待/输出回读/只读工具)
+	pendingCmd map[string]chan mcpCmdResult  // requestId → 结果通道
+	approvals  map[string]*mcpApproval       // approvalId → 审批请求
+	outBuf     map[string][]byte             // tabId → 原始输出缓冲
+	outCursor  map[string]int                // tabId → terminal_read 游标
 	reqSeq     int64
 	apprSeq    int64
+
+	// 挂起期间用户活动捕获(见 mcpsuspend.go)
+	suspendCapturing bool              // 正在捕获(挂起期间)
+	suspendUnread    bool              // 有已结束捕获的未读报告(待智能体 drain)
+	suspendBuf       map[string][]byte // tabId → 捕获的增量输出
+	suspendTabCut    map[string]bool   // tabId → 该页内容被裁剪过
+	suspendGlobalCut bool              // 全局总量超限
+	suspendStartedAt time.Time         // 本次捕获开始时间
 
 	// 全局串行仲裁器: 所有标签页操作(内外智能体)单车道执行,优先级出队
 	arbP1   chan *mcpArbItem // 内嵌智能体队列
@@ -174,13 +185,62 @@ func (s *McpService) startArbiter() {
 }
 
 // runArbItem 执行槽内操作(原子:执行中不被抢占,保证命令完整)。
+// 槽占用计入忙碌状态,供前端展示"MCP 执行中"并锁定标签页区域。
 func (s *McpService) runArbItem(it *mcpArbItem) {
+	s.mu.Lock()
+	s.slotBusy = true
+	changed := s.recomputeBusyLocked()
+	s.mu.Unlock()
+	if changed {
+		s.emitStatus()
+	}
 	defer func() {
 		if r := recover(); r != nil {
 			it.done <- fmt.Errorf("内部错误: %v", r)
 		}
+		s.mu.Lock()
+		s.slotBusy = false
+		ch := s.recomputeBusyLocked()
+		s.mu.Unlock()
+		if ch {
+			s.emitStatus()
+		}
 	}()
 	it.done <- it.fn()
+}
+
+// beginActivity 标记一个工具调用开始(覆盖审批等待/槽外回读/只读工具的全生命周期)。
+func (s *McpService) beginActivity() {
+	s.mu.Lock()
+	s.activeCnt++
+	changed := s.recomputeBusyLocked()
+	s.mu.Unlock()
+	if changed {
+		s.emitStatus()
+	}
+}
+
+// endActivity 标记一个工具调用结束(与 beginActivity 配对,建议 defer 调用)。
+func (s *McpService) endActivity() {
+	s.mu.Lock()
+	if s.activeCnt > 0 {
+		s.activeCnt--
+	}
+	changed := s.recomputeBusyLocked()
+	s.mu.Unlock()
+	if changed {
+		s.emitStatus()
+	}
+}
+
+// recomputeBusyLocked 合并槽占用与活动计数得出忙碌状态(调用方持锁),返回是否发生变化。
+func (s *McpService) recomputeBusyLocked() bool {
+	nb := s.slotBusy || s.activeCnt > 0
+	if nb == s.busy {
+		return false
+	}
+	s.busy = nb
+	return true
 }
 
 // arbitrate 将操作排入串行车道并等待完成。
@@ -316,6 +376,9 @@ func (s *McpService) Stop() {
 	s.listener = nil
 	s.mu.Unlock()
 
+	// 服务停止:结束捕获且不保留未读报告(下次启动从干净状态开始)
+	s.endSuspendCapture(false)
+
 	if server != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
@@ -326,6 +389,7 @@ func (s *McpService) Stop() {
 }
 
 // Pause 挂起: 拒绝新请求、取消在途请求,端口与 Token 保留。
+// 用户手动挂起时开始捕获终端活动,供智能体感知用户中断期间的操作。
 func (s *McpService) Pause(byUser bool) {
 	s.mu.Lock()
 	if s.state != mcpStateRunning {
@@ -336,11 +400,14 @@ func (s *McpService) Pause(byUser bool) {
 	s.cancelPendingLocked("MCP 已被挂起")
 	s.mu.Unlock()
 
+	if byUser {
+		s.beginSuspendCapture()
+	}
 	s.audit.Append("system", "system", "pause", "", "MCP 已挂起,拒绝新请求", "-", "-", byUser)
 	s.emitStatus()
 }
 
-// Resume 恢复运行。
+// Resume 恢复运行,并结束挂起期活动捕获。
 func (s *McpService) Resume() {
 	s.mu.Lock()
 	if s.state != mcpStatePaused {
@@ -350,6 +417,7 @@ func (s *McpService) Resume() {
 	s.state = mcpStateRunning
 	s.mu.Unlock()
 
+	s.endSuspendCapture(true)
 	s.audit.Append("system", "system", "resume", "", "MCP 已恢复运行", "-", "-", true)
 	s.emitStatus()
 }
@@ -438,6 +506,7 @@ func (s *McpService) statusMap() map[string]any {
 	return map[string]any{
 		"enabled":            enabled,
 		"state":              s.state,
+		"busy":               s.busy,
 		"mode":               mode,
 		"url":                fmt.Sprintf("http://127.0.0.1:%d/mcp", port),
 		"token":              s.token,
@@ -475,6 +544,10 @@ func (s *McpService) TapOutput(tabID string, data []byte) {
 		}
 	}
 	s.outBuf[tabID] = buf
+	// 挂起期间同步捕获(供智能体感知用户手动操作)
+	if s.suspendCapturing {
+		s.appendSuspendLocked(tabID, data)
+	}
 }
 
 // readOutput 读取自上次调用以来的新增输出(剥离 ANSI,限 32KB)。
@@ -510,11 +583,23 @@ func stripAnsi(s string) string {
 
 // ==================== 工具注册(外部 HTTP,P2 优先级) ====================
 
+// addTrackedTool 注册工具并自动跟踪调用生命周期(beginActivity/endActivity 包裹),
+// 使外部客户端的任意工具调用(含只读)都驱动前端忙碌状态。
+func addTrackedTool[In, Out any](s *McpService, server *mcp.Server, tool *mcp.Tool, h func(context.Context, *mcp.CallToolRequest, In) (*mcp.CallToolResult, Out, error)) {
+	mcp.AddTool(server, tool, func(ctx context.Context, req *mcp.CallToolRequest, in In) (*mcp.CallToolResult, Out, error) {
+		s.beginActivity()
+		defer s.endActivity()
+		return h(ctx, req, in)
+	})
+}
+
 func (s *McpService) registerTools(server *mcp.Server) {
+	s.registerLogTools(server)
+
 	type listSessionsOut struct {
 		Sessions []mcpSessionInfo `json:"sessions"`
 	}
-	mcp.AddTool(server, &mcp.Tool{
+	addTrackedTool(s, server, &mcp.Tool{
 		Name:        "list_sessions",
 		Description: "列出全部已保存的会话(不含任何密码或密钥)。返回路径供 open_session 使用。",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in struct{}) (*mcp.CallToolResult, listSessionsOut, error) {
@@ -530,7 +615,7 @@ func (s *McpService) registerTools(server *mcp.Server) {
 	type listTabsOut struct {
 		Tabs []mcpTabInfo `json:"tabs"`
 	}
-	mcp.AddTool(server, &mcp.Tool{
+	addTrackedTool(s, server, &mcp.Tool{
 		Name:        "list_tabs",
 		Description: "列出当前打开的全部标签页(终端与脚本编辑器),含状态与标签页 ID。",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in struct{}) (*mcp.CallToolResult, listTabsOut, error) {
@@ -550,7 +635,7 @@ func (s *McpService) registerTools(server *mcp.Server) {
 		TabID  string `json:"tab_id"`
 		Status string `json:"status"`
 	}
-	mcp.AddTool(server, &mcp.Tool{
+	addTrackedTool(s, server, &mcp.Tool{
 		Name:        "open_session",
 		Description: "在标签页中打开终端会话(SSH/Telnet/串口)。已打开则定位激活该标签页。界面会同步跳转,与用户手动打开完全一致。",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in openSessionIn) (*mcp.CallToolResult, openSessionOut, error) {
@@ -571,7 +656,7 @@ func (s *McpService) registerTools(server *mcp.Server) {
 		Ok   bool   `json:"ok"`
 		Note string `json:"note,omitempty"`
 	}
-	mcp.AddTool(server, &mcp.Tool{
+	addTrackedTool(s, server, &mcp.Tool{
 		Name:        "terminal_send",
 		Description: "向终端标签页输入文本。输入会显示在终端上,与用户手动输入完全一致;目标标签页会被激活。单行命令会自动等待并返回执行输出(output 字段),无需再调 terminal_read;多行输入与用户粘贴相同逻辑。",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in terminalSendIn) (*mcp.CallToolResult, terminalSendOut, error) {
@@ -590,7 +675,7 @@ func (s *McpService) registerTools(server *mcp.Server) {
 	type terminalReadOut struct {
 		Output string `json:"output"`
 	}
-	mcp.AddTool(server, &mcp.Tool{
+	addTrackedTool(s, server, &mcp.Tool{
 		Name:        "terminal_read",
 		Description: "读取终端标签页自上次调用以来的新增输出(已剥离控制序列的纯文本)。首次调用返回最近的历史输出。",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in terminalReadIn) (*mcp.CallToolResult, terminalReadOut, error) {
@@ -610,7 +695,7 @@ func (s *McpService) registerTools(server *mcp.Server) {
 		Count   int    `json:"count"`
 		Note    string `json:"note,omitempty"`
 	}
-	mcp.AddTool(server, &mcp.Tool{
+	addTrackedTool(s, server, &mcp.Tool{
 		Name:        "batch_execute",
 		Description: "批量顺序执行命令(不切换标签页,前台界面不跳转)。整批共用一次授权确认;任一命令为绝对危险则整批拒绝。适合巡检等只读命令序列。",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in batchIn) (*mcp.CallToolResult, batchOut, error) {
@@ -629,7 +714,7 @@ func (s *McpService) registerTools(server *mcp.Server) {
 	type openScriptOut struct {
 		TabID string `json:"tab_id"`
 	}
-	mcp.AddTool(server, &mcp.Tool{
+	addTrackedTool(s, server, &mcp.Tool{
 		Name:        "open_script",
 		Description: "在脚本编辑器标签页中打开脚本文件。已打开则定位激活。与用户手动打开完全一致。",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in openScriptIn) (*mcp.CallToolResult, openScriptOut, error) {
@@ -650,7 +735,7 @@ func (s *McpService) registerTools(server *mcp.Server) {
 		Ok   bool   `json:"ok"`
 		Note string `json:"note,omitempty"`
 	}
-	mcp.AddTool(server, &mcp.Tool{
+	addTrackedTool(s, server, &mcp.Tool{
 		Name:        "script_write",
 		Description: "向脚本编辑器写入内容(编辑器会显示为未保存/自动保存状态,与用户手动编辑完全一致)。属常规危险操作,默认需用户授权。",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in scriptWriteIn) (*mcp.CallToolResult, scriptWriteOut, error) {
@@ -670,7 +755,7 @@ func (s *McpService) registerTools(server *mcp.Server) {
 		Ok   bool   `json:"ok"`
 		Note string `json:"note,omitempty"`
 	}
-	mcp.AddTool(server, &mcp.Tool{
+	addTrackedTool(s, server, &mcp.Tool{
 		Name:        "close_tab",
 		Description: "关闭指定标签页。与用户手动关闭完全一致(未保存脚本会弹确认)。",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in closeTabIn) (*mcp.CallToolResult, closeTabOut, error) {
@@ -986,7 +1071,10 @@ func (s *McpService) ExecuteEmbedded(ctx context.Context, name string, argsJSON 
 // 与外部 HTTP 客户端走完全相同的分级/审批/审计/仲裁,仅优先级更高(P1)。
 // 智能体手动模式传 forceManual=true(忽略全局 auto 设置强制审批);
 // noPaste=true 时多行文本不再触发前端粘贴弹窗(审批弹窗已一次性授权)。
+// 全程计入忙碌状态(含审批等待与输出回读),驱动前端"执行中"遮罩。
 func (s *McpService) ExecuteEmbeddedOpts(ctx context.Context, name string, argsJSON string, opts execOpts) (string, error) {
+	s.beginActivity()
+	defer s.endActivity()
 	var args map[string]any
 	if argsJSON != "" {
 		if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
@@ -1042,6 +1130,28 @@ func (s *McpService) ExecuteEmbeddedOpts(ctx context.Context, name string, argsJ
 		return s.toolScriptWrite(ctx, opts, getStr("file_path"), getStr("content"))
 	case "close_tab":
 		return s.toolCloseTab(ctx, opts, getStr("tab_id"))
+	case "search_logs":
+		if err := s.checkRunning(); err != nil {
+			return "", err
+		}
+		includeContent := false
+		if v, ok := args["include_content"].(bool); ok {
+			includeContent = v
+		}
+		limit := 0
+		if v, ok := args["limit"].(float64); ok {
+			limit = int(v)
+		}
+		return s.toolSearchLogs(opts.source, getStr("query"), getStr("protocol"), includeContent, limit)
+	case "log_detail":
+		if err := s.checkRunning(); err != nil {
+			return "", err
+		}
+		tailLines := 0
+		if v, ok := args["tail_lines"].(float64); ok {
+			tailLines = int(v)
+		}
+		return s.toolLogDetail(opts.source, getStr("log_id"), tailLines)
 	default:
 		return "", fmt.Errorf("未知工具: %s", name)
 	}
@@ -1064,6 +1174,7 @@ func (s *McpService) EmbeddedToolDefs() string {
 	str := func(desc string) param { return param{Type: "string", Description: desc} }
 	arr := func(desc string) param { return param{Type: "array", Description: desc, Items: &param{Type: "string"}} }
 	intp := func(desc string) param { return param{Type: "integer", Description: desc} }
+	boolp := func(desc string) param { return param{Type: "boolean", Description: desc} }
 	obj := func(props map[string]param, required ...string) map[string]any {
 		raw, _ := json.Marshal(props)
 		var p map[string]any
@@ -1080,6 +1191,8 @@ func (s *McpService) EmbeddedToolDefs() string {
 		{Name: "open_script", Description: "在脚本编辑器标签页中打开脚本文件。已打开则定位激活。与用户手动打开完全一致。", Parameters: obj(map[string]param{"file_path": str("脚本文件路径")}, "file_path")},
 		{Name: "script_write", Description: "向脚本编辑器写入内容(编辑器会显示为未保存/自动保存状态,与用户手动编辑完全一致)。属常规危险操作,默认需用户授权。", Parameters: obj(map[string]param{"file_path": str("目标脚本文件路径"), "content": str("要写入的完整内容")}, "file_path", "content")},
 		{Name: "close_tab", Description: "关闭指定标签页。与用户手动关闭完全一致(未保存脚本会弹确认)。", Parameters: obj(map[string]param{"tab_id": str("要关闭的标签页 ID")}, "tab_id")},
+		{Name: "search_logs", Description: "搜索会话自动日志。按关键字匹配会话标题/主机/用户名,可选协议过滤(ssh/telnet/serial/shell)与正文检索。返回日志 ID 供 log_detail 使用。", Parameters: obj(map[string]param{"query": str("关键字,留空则列出最近的日志"), "protocol": str("可选协议过滤:ssh/telnet/serial/shell,留空不过滤"), "include_content": boolp("是否同时在日志正文中检索命中行"), "limit": intp("最多返回条数(默认 20)")})},
+		{Name: "log_detail", Description: "查看自动日志详情:元数据(协议/主机/端口/用户名/起止时间/行数字节数)与正文尾部内容。", Parameters: obj(map[string]param{"log_id": str("日志 ID(search_logs 返回的 id)"), "tail_lines": intp("返回正文末尾行数(默认 500)")}, "log_id")},
 	}
 	data, _ := json.Marshal(defs)
 	return string(data)
@@ -1397,6 +1510,8 @@ func (s *McpService) McpNotifyPreemption() string {
 	}
 	s.mu.Unlock()
 
+	// 用户抢占:开始捕获挂起期间的终端活动(供智能体感知用户手动操作)
+	s.beginSuspendCapture()
 	s.audit.Append("system", "system", "preempt", "", "检测到用户键盘输入,MCP 已自动挂起(用户优先)", "-", "preempted", true)
 	s.emitStatus()
 	return `{"ok":true}`

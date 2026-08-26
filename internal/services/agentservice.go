@@ -39,6 +39,7 @@ var agentPlanReadableTools = map[string]bool{
 	"list_sessions": true,
 	"list_tabs":     true,
 	"terminal_read": true,
+	"web_search":    true,
 }
 
 // agentPendingMsg 挂起消息(容量1:新消息覆盖旧消息)。
@@ -53,6 +54,7 @@ type AgentService struct {
 	cfg   *ConfigService
 	mcp   *McpService
 	store *AgentStore
+	remote *AgentMcpClient // 外接 MCP 服务器客户端(Context7 等,懒连接)
 
 	mu             sync.Mutex
 	running        string             // 当前运行中的会话 ID(空 = 空闲)
@@ -65,16 +67,88 @@ type AgentService struct {
 
 // NewAgentService 创建服务。
 func NewAgentService(cfg *ConfigService, mcp *McpService) *AgentService {
+	mcpCfg, _ := LoadAgentMcpConfig() // 失败时也返回默认配置
 	return &AgentService{
-		cfg:   cfg,
-		mcp:   mcp,
-		store: NewAgentStore(DataDir()),
+		cfg:    cfg,
+		mcp:    mcp,
+		store:  NewAgentStore(DataDir()),
+		remote: NewAgentMcpClient(mcpCfg),
 	}
 }
 
 // SetApp 注入 Wails 应用实例(wireServices 调用)。
 func (s *AgentService) SetApp(app *application.App) {
 	s.app = app
+}
+
+// ==================== 外接 MCP 配置管理(设置页 MCP tab) ====================
+
+// AgentGetMcpConfig 返回 agent-mcp.json 全量配置(JSON 字符串;文件不存在时初始化默认捆绑)。
+func (s *AgentService) AgentGetMcpConfig() string {
+	cfg, err := LoadAgentMcpConfig()
+	// 配置对象有效即正常返回(写入失败等场景降级为可用);仅拿不到配置时才报错
+	if cfg == nil {
+		return marshalJSON(map[string]any{"error": fmt.Sprintf("%v", err)})
+	}
+	if err != nil {
+		logConfigLoadError("agent-get-mcp-config", err)
+	}
+	data, merr := json.Marshal(cfg)
+	if merr != nil {
+		return marshalJSON(map[string]any{"error": merr.Error()})
+	}
+	return string(data)
+}
+
+// AgentSetMcpConfig 保存 agent-mcp.json 并热重载客户端连接。
+func (s *AgentService) AgentSetMcpConfig(jsonStr string) string {
+	var cfg AgentMcpConfig
+	if err := json.Unmarshal([]byte(jsonStr), &cfg); err != nil {
+		return marshalJSON(map[string]any{"error": "配置解析失败: " + err.Error()})
+	}
+	if err := SaveAgentMcpConfig(&cfg); err != nil {
+		return marshalJSON(map[string]any{"error": "保存失败: " + err.Error()})
+	}
+	s.remote.Reload(&cfg)
+	return `{"ok":true}`
+}
+
+// AgentTestMcpServer 测试指定服务器连通性(独立临时会话,不影响运行态)。
+// 返回 {ok, tools:[...]} 或 {error}。
+func (s *AgentService) AgentTestMcpServer(name string) string {
+	cfg, _ := LoadAgentMcpConfig()
+	srv, ok := cfg.McpServers[strings.TrimSpace(name)]
+	if !ok || srv == nil {
+		return marshalJSON(map[string]any{"error": "未找到该服务器配置: " + name})
+	}
+	tester := NewAgentMcpClient(cfg)
+	tester.mu.Lock()
+	tr, err := transportFor(srv)
+	if err != nil {
+		tester.mu.Unlock()
+		return marshalJSON(map[string]any{"error": err.Error()})
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), mcpConnectTimeout)
+	defer cancel()
+	session, err := tester.client.Connect(ctx, tr, nil)
+	tester.mu.Unlock()
+	if err != nil {
+		return marshalJSON(map[string]any{"error": "连接失败: " + err.Error()})
+	}
+	defer session.Close()
+
+	lctx, lcancel := context.WithTimeout(context.Background(), mcpConnectTimeout)
+	defer lcancel()
+	resp, err := session.ListTools(lctx, nil)
+	if err != nil {
+		return marshalJSON(map[string]any{"error": "工具枚举失败: " + err.Error(), "ok": false})
+	}
+	names := []string{}
+	for _, t := range resp.Tools {
+		names = append(names, t.Name)
+	}
+	data, _ := json.Marshal(map[string]any{"ok": true, "tools": names})
+	return string(data)
 }
 
 // emit 安全发送事件(锁外调用)。
@@ -238,19 +312,21 @@ func agentSystemPrompt(permMode, lang string, skills []string) string {
 	if lang == "en-US" {
 		b.WriteString("You are the embedded ops agent of AceShell terminal app, operating terminal sessions and script editor via tools.\n")
 		b.WriteString("Rules:\n")
-		b.WriteString("1. Observe before act: use list_tabs / terminal_read to learn current state first\n")
-		b.WriteString("2. Every tool operation is visible to the user; do not retry rejected/timed-out operations as-is, stop and explain\n")
-		b.WriteString("3. Prefer batch_execute for read-only inspection command sequences to reduce round-trips\n")
-		b.WriteString("4. Record steps with update_todo when producing plans; keep it updated as you progress\n")
-		b.WriteString("5. Reply in English, concise and professional; format replies in real Markdown syntax (headings/lists/tables/bold), and always wrap commands and code in fenced code blocks\n")
+		b.WriteString("1. Deep thinking first: at the start of every turn, you MUST output a short paragraph (2-4 sentences) of your analysis, goal and execution path BEFORE calling any tool; it is shown to the user as the 'Deep Thinking' section\n")
+		b.WriteString("2. Observe before act: use list_tabs / terminal_read to learn current state first\n")
+		b.WriteString("3. Every tool operation is visible to the user; do not retry rejected/timed-out operations as-is, stop and explain\n")
+		b.WriteString("4. Prefer batch_execute for read-only inspection command sequences to reduce round-trips\n")
+		b.WriteString("5. Record steps with update_todo when producing plans; keep it updated as you progress\n")
+		b.WriteString("6. Reply in English, concise and professional; format replies in real Markdown syntax (headings/lists/tables/bold), and always wrap commands and code in fenced code blocks\n")
 	} else {
 		b.WriteString("你是 AceShell 终端应用的内嵌运维智能体,通过工具操作终端会话与脚本编辑器。\n")
 		b.WriteString("工作规则:\n")
-		b.WriteString("1. 先观察后行动: 用 list_tabs / terminal_read 了解当前状态,再决定下一步\n")
-		b.WriteString("2. 每个工具操作对用户可见;被用户拒绝或超时的操作不要原样重试,应停下来向用户说明并询问\n")
-		b.WriteString("3. 只读巡检类命令序列优先用 batch_execute 一次性执行,减少交互往返\n")
-		b.WriteString("4. 产出方案或计划时先用 update_todo 记录步骤,随进度更新状态\n")
-		b.WriteString("5. 回复使用中文,简洁专业;最终回答必须使用真实 Markdown 语法组织(标题/列表/表格/加粗),命令与代码一律用围栏代码块包裹\n")
+		b.WriteString("1. 深度思考先行: 每轮开始执行任务时,必须先输出一小段文字(2-4 句)写出你的分析、目标与执行路径,然后才能调用任何工具;这段文字会作为「深度思考」区块展示给用户\n")
+		b.WriteString("2. 先观察后行动: 用 list_tabs / terminal_read 了解当前状态,再决定下一步\n")
+		b.WriteString("3. 每个工具操作对用户可见;被用户拒绝或超时的操作不要原样重试,应停下来向用户说明并询问\n")
+		b.WriteString("4. 只读巡检类命令序列优先用 batch_execute 一次性执行,减少交互往返\n")
+		b.WriteString("5. 产出方案或计划时先用 update_todo 记录步骤,随进度更新状态\n")
+		b.WriteString("6. 回复使用中文,简洁专业;最终回答必须使用真实 Markdown 语法组织(标题/列表/表格/加粗),命令与代码一律用围栏代码块包裹\n")
 	}
 	switch permMode {
 	case agentPermPlan:
@@ -332,6 +408,60 @@ func (s *AgentService) agentBuildTools(permMode string) []chatTool {
 			},
 		},
 	})
+	// web_search: 联网搜索(默认开启,模型视情况自行调用;只读,所有模式可用)
+	if s.cfg.AgentCfg().WebSearch {
+		tools = append(tools, chatTool{
+			Type: "function",
+			Function: chatToolFn{
+				Name:        "web_search",
+				Description: "联网搜索最新公开信息(DuckDuckGo)。当任务涉及时效性内容(新闻/版本发布/价格/安全通告)、你不确定的事实或需要外部资料佐证时调用;返回标题+链接+摘要列表。",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"query":       map[string]any{"type": "string", "description": "搜索关键词(中英文均可,可用空格组合多个词)"},
+						"max_results": map[string]any{"type": "integer", "description": "返回条数上限(默认 8,最大 15)"},
+					},
+					"required": []string{"query"},
+				},
+			},
+		})
+	}
+	// 外接 MCP 服务器的工具(Context7 等): 原名暴露;跨服务器同名时以服务器名消歧
+	builtinNames := map[string]bool{}
+	for _, t := range tools {
+		builtinNames[t.Function.Name] = true
+	}
+	counts := map[string]int{}
+	var remote []remoteToolDef
+	for _, t := range s.remote.RemoteTools() {
+		counts[t.Name]++
+		t.exposed = t.Name
+		if builtinNames[t.Name] {
+			t.exposed = t.Server + "_" + t.Name
+		}
+		remote = append(remote, t)
+	}
+	// 二次处理: 外部工具之间同名 → 全部加前缀
+	for i := range remote {
+		if counts[remote[i].Name] > 1 && !strings.HasPrefix(remote[i].exposed, remote[i].Server+"_") {
+			remote[i].exposed = remote[i].Server + "_" + remote[i].Name
+		}
+		s.remote.RememberExposure(remote[i].Server, remote[i].Name, remote[i].exposed)
+	}
+	for _, t := range remote {
+		params := t.Schema
+		if params == nil {
+			params = map[string]any{"type": "object", "properties": map[string]any{}}
+		}
+		tools = append(tools, chatTool{
+			Type: "function",
+			Function: chatToolFn{
+				Name:        t.Exposed(),
+				Description: fmt.Sprintf("[%s] %s", t.Server, t.Description),
+				Parameters:  params,
+			},
+		})
+	}
 	return tools
 }
 
@@ -534,6 +664,12 @@ func (s *AgentService) runTurn(ctx context.Context, sessionID string) {
 			return
 		}
 		msgs := append([]chatMessage{sysMsg}, agentBuildContext(events, acfg.ContextMaxEvents)...)
+		// 用户中断期间的手动操作注入:让模型知晓 MCP 挂起期间用户在终端做了什么(drain 语义)
+		if MainMcpService != nil {
+			if prompt := formatSuspendPrompt(MainMcpService.DrainMcpSuspendActivity()); prompt != "" {
+				msgs = append(msgs, chatMessage{Role: "system", Content: prompt})
+			}
+		}
 
 		res, err := client.Chat(ctx, chatRequest{Model: profile.Model, Messages: msgs, Tools: tools}, func(delta string) {
 			// 流式增量实时推送(不持久化;最终消息落盘后前端替换)
@@ -632,6 +768,18 @@ func (s *AgentService) agentExecuteTool(ctx context.Context, sessionID, permMode
 		ev.Ok = true
 		ev.Content = "待办清单已更新"
 		ev.Todos = in.Todos
+		return ev
+	}
+
+	// 外接/内置 MCP 服务器的工具(web_search 经内置 server、Context7 等外接): 路由到对应会话
+	if server, realName, ok := s.remote.LookupExposed(call.Name); ok {
+		result, err := s.remote.Call(ctx, server, realName, call.Arguments)
+		if err != nil {
+			ev.Content = "ERROR: " + err.Error()
+			return ev
+		}
+		ev.Ok = true
+		ev.Content = result
 		return ev
 	}
 

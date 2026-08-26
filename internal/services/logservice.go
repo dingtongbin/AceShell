@@ -25,17 +25,18 @@ type LogService struct {
 }
 
 // LogSessionMeta 会话日志元数据。
+// json tag 供 GetLogMeta/GetLogTree 序列化给前端与 MCP 使用,key 与前端读取字段一致(小驼峰)。
 type LogSessionMeta struct {
-	SessionID  string `toml:"sessionID"`
-	Protocol   string `toml:"protocol"`
-	Host       string `toml:"host"`
-	Port       int    `toml:"port"`
-	Username   string `toml:"username"`
-	Title      string `toml:"title"`
-	StartTime  string `toml:"startTime"`
-	EndTime    string `toml:"endTime,omitempty"`
-	TotalLines int    `toml:"totalLines"`
-	TotalBytes int    `toml:"totalBytes"`
+	SessionID  string `toml:"sessionID" json:"sessionID"`
+	Protocol   string `toml:"protocol" json:"protocol"`
+	Host       string `toml:"host" json:"host"`
+	Port       int    `toml:"port" json:"port"`
+	Username   string `toml:"username" json:"username"`
+	Title      string `toml:"title" json:"title"`
+	StartTime  string `toml:"startTime" json:"startTime"`
+	EndTime    string `toml:"endTime,omitempty" json:"endTime,omitempty"`
+	TotalLines int    `toml:"totalLines" json:"totalLines"`
+	TotalBytes int    `toml:"totalBytes" json:"totalBytes"`
 }
 
 // validLogID 校验日志会话 ID 合法性,拒绝空值或含路径分隔符/遍历段的 ID(防路径穿越)。
@@ -353,6 +354,128 @@ func (l *LogService) GetLogMeta(id string) string {
 	}
 	result, _ := json.Marshal(meta)
 	return string(result)
+}
+
+// ==================== 日志搜索(MCP 工具支撑) ====================
+
+// LogSearchHit 日志搜索结果条目。
+type LogSearchHit struct {
+	ID        string   `json:"id"`
+	Title     string   `json:"title"`
+	Protocol  string   `json:"protocol"`
+	Host      string   `json:"host"`
+	Port      int      `json:"port"`
+	Username  string   `json:"username"`
+	StartTime string   `json:"startTime"`
+	EndTime   string   `json:"endTime,omitempty"`
+	Matches   []string `json:"matches,omitempty"` // 内容命中行(includeContent 时返回)
+}
+
+// loadAllMeta 读取全部会话元数据,按开始时间倒序(最新在前)。
+func (l *LogService) loadAllMeta() []LogSessionMeta {
+	entries, err := os.ReadDir(l.metaDir)
+	if err != nil {
+		return nil
+	}
+	metas := []LogSessionMeta{}
+	for _, entry := range entries {
+		if !strings.HasSuffix(entry.Name(), ".toml") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(l.metaDir, entry.Name()))
+		if err != nil {
+			continue
+		}
+		var meta LogSessionMeta
+		if toml.Unmarshal(data, &meta) != nil {
+			continue
+		}
+		meta.SessionID = strings.TrimSuffix(entry.Name(), ".toml")
+		metas = append(metas, meta)
+	}
+	sort.SliceStable(metas, func(i, j int) bool {
+		ti, tj := parseMetaTime(metas[i].StartTime), parseMetaTime(metas[j].StartTime)
+		if ti.Equal(tj) {
+			return metas[i].SessionID < metas[j].SessionID
+		}
+		return ti.After(tj)
+	})
+	return metas
+}
+
+// SearchLogs 搜索自动日志:query 匹配标题/主机/用户名;includeContent 时同时搜索日志正文并返回命中行。
+// protocol 为空不过滤;limit<=0 默认 20;query 为空时返回最近日志列表。
+func (l *LogService) SearchLogs(query, protocol string, includeContent bool, limit int) []LogSearchHit {
+	if limit <= 0 {
+		limit = 20
+	}
+	q := strings.ToLower(strings.TrimSpace(query))
+	hits := []LogSearchHit{}
+	for _, meta := range l.loadAllMeta() {
+		if l.hitLimitReached(hits, limit) {
+			break
+		}
+		if protocol != "" && meta.Protocol != protocol {
+			continue
+		}
+		var matches []string
+		if includeContent && q != "" {
+			matches = l.matchContentLines(meta.SessionID, q, 5)
+		}
+		if !metaMatchesQuery(meta, q) && len(matches) == 0 {
+			continue
+		}
+		hits = append(hits, LogSearchHit{
+			ID: meta.SessionID, Title: meta.Title, Protocol: meta.Protocol,
+			Host: meta.Host, Port: meta.Port, Username: meta.Username,
+			StartTime: meta.StartTime, EndTime: meta.EndTime, Matches: matches,
+		})
+	}
+	return hits
+}
+
+// hitLimitReached 判断搜索结果是否已达上限。
+func (l *LogService) hitLimitReached(hits []LogSearchHit, limit int) bool {
+	return limit > 0 && len(hits) >= limit
+}
+
+// metaMatchesQuery 判断元数据是否匹配关键字(标题/主机/用户名,大小写不敏感;空关键字恒真)。
+func metaMatchesQuery(meta LogSessionMeta, q string) bool {
+	return q == "" ||
+		strings.Contains(strings.ToLower(meta.Title), q) ||
+		strings.Contains(strings.ToLower(meta.Host), q) ||
+		strings.Contains(strings.ToLower(meta.Username), q)
+}
+
+// matchContentLines 返回日志正文中包含 q 的行(最多 max 行,每行剥离控制序列后截断 200 字符)。
+func (l *LogService) matchContentLines(id, q string, max int) []string {
+	data, err := os.ReadFile(filepath.Join(l.logDir, id+".log"))
+	if err != nil {
+		return nil
+	}
+	lines := []string{}
+	for _, line := range strings.Split(string(data), "\n") {
+		clean := strings.TrimSpace(stripAnsi(line))
+		if clean == "" || !strings.Contains(strings.ToLower(clean), q) {
+			continue
+		}
+		lines = append(lines, truncateUtf8(clean, 200))
+		if len(lines) >= max {
+			break
+		}
+	}
+	return lines
+}
+
+// LogDetail 返回日志元数据 JSON 与尾部内容(tailLines<=0 默认 500 行)。
+func (l *LogService) LogDetail(id string, tailLines int) (string, string) {
+	if !validLogID(id) {
+		return "{}", ""
+	}
+	if tailLines <= 0 {
+		tailLines = 500
+	}
+	return l.GetLogMeta(id), l.GetLogTail(id, tailLines)
 }
 
 // GetLogTail 返回指定会话日志末尾最多 maxLines 行（避免大日志一次性读入内存）。

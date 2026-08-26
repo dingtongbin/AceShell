@@ -19,20 +19,26 @@ import {
   CopyOutline,
   ClipboardOutline,
   CloseOutline,
+  HardwareChipOutline,
 } from '@vicons/ionicons5'
 import { Window, Events } from '@wailsio/runtime'
 import { useTheme } from '../stores/theme'
-import { GetConfig, SetTheme, SetShowSerial, SetShowHelp, SetCustomTitlebar, SetCloseConfirm, SetFileEditingAutoSave, SetShowToolbar, SetTerminalConfig } from '../../bindings/changeme/internal/services/configservice.js'
+import { GetConfig, SetTheme, SetShowSerial, SetShowHelp, SetCustomTitlebar, SetCloseConfirm, SetFileEditingAutoSave, SetShowToolbar, SetTerminalConfig, SetShowAssistant } from '../../bindings/changeme/internal/services/configservice.js'
+import { SetMcpEnabled, McpResume, McpNotifyPreemption } from '../../bindings/changeme/internal/services/mcpservice.js'
+import { useMcpBridge } from '../composables/useMcpBridge'
 import { useI18n } from 'vue-i18n'
 import type { ActiveTabState } from './tabTypes'
 
 const { t } = useI18n()
 const message = useMessage()
 const { toggleTheme, isDark } = useTheme()
+const { status: mcpStatus } = useMcpBridge()
 
 const props = defineProps<{
   showSession: boolean
   showAgent: boolean
+  /** 智能助手总开关(视图菜单): 关闭时隐藏 MCP/资源管理器/AI 面板三个顶栏按钮 */
+  showAssistant: boolean
   /** 活动标签页状态快照:用于按活动标签页启用/禁用工具菜单项 */
   activeTabState: ActiveTabState
   /** 自绘标题栏开关(Frameless 模式):关闭时不渲染 ─□✕ 与拖拽区 */
@@ -71,6 +77,7 @@ const viewCfg = reactive({
   cursorBlink: true,
   autoSave: true,
   closeNoConfirm: false,
+  showAssistant: false,
 })
 
 async function loadViewCfg() {
@@ -85,6 +92,7 @@ async function loadViewCfg() {
     viewCfg.cursorBlink = cfg.terminal?.cursorBlink ?? true
     viewCfg.autoSave = cfg.fileEditing?.autoSave ?? true
     viewCfg.closeNoConfirm = cfg.view?.closeConfirm === false
+    viewCfg.showAssistant = cfg.view?.showAssistant ?? false
   } catch {}
 }
 
@@ -149,6 +157,10 @@ async function toggleViewItem(key: string) {
       viewCfg.closeNoConfirm = !viewCfg.closeNoConfirm
       await SetCloseConfirm(!viewCfg.closeNoConfirm).catch(() => {})
       break
+    case 'v-assistant':
+      viewCfg.showAssistant = !viewCfg.showAssistant
+      await SetShowAssistant(viewCfg.showAssistant).catch(() => {})
+      break
     default:
       return
   }
@@ -208,6 +220,8 @@ const menus = computed<MenuEntry[]>(() => [
       { key: 'dv2', divider: true },
       { key: 'v-autosave', label: t('settings.autoSave'), checked: viewCfg.autoSave },
       { key: 'v-close-confirm', label: t('settings.noCloseConfirm'), checked: viewCfg.closeNoConfirm },
+      { key: 'dv3', divider: true },
+      { key: 'v-assistant', label: t('settings.assistant'), checked: viewCfg.showAssistant },
     ],
   },
   {
@@ -235,6 +249,47 @@ const menus = computed<MenuEntry[]>(() => [
     ],
   },
 ])
+
+// ==================== MCP 开关(顶栏右段) ====================
+
+// 四态:off 关闭 / idle 已开启空闲 / paused 已挂起 / busy 执行中(含等待审批)
+const mcpPhase = computed<'off' | 'idle' | 'paused' | 'busy'>(() => {
+  const s = mcpStatus.value
+  if (!s.enabled || s.state === 'stopped') return 'off'
+  if (s.state === 'paused') return 'paused'
+  return (s.busy || s.pendingApprovals > 0) ? 'busy' : 'idle'
+})
+
+const mcpTooltip = computed(() => ({
+  off: t('topMenu.mcpOff'),
+  idle: t('topMenu.mcpOn'),
+  paused: t('topMenu.mcpPaused'),
+  busy: t('topMenu.mcpBusy'),
+}[mcpPhase.value]))
+
+async function handleMcpToggle() {
+  try {
+    switch (mcpPhase.value) {
+      case 'off': {
+        const res = JSON.parse(await SetMcpEnabled(true))
+        if (res?.error) message.error(t('topMenu.mcpStartFailed', { err: res.error }))
+        break
+      }
+      case 'idle':
+        await SetMcpEnabled(false)
+        break
+      case 'paused':
+        await McpResume()
+        break
+      case 'busy':
+        // 执行中点击 = 用户打断:挂起并取消在途操作(与键盘抢占同路径)
+        await McpNotifyPreemption()
+        break
+    }
+  } catch (e: any) {
+    message.error(t('topMenu.mcpStartFailed', { err: (e && e.message) || e }))
+  }
+}
 
 // ==================== 菜单交互:点击展开 → 悬停切换,Esc/外部点击关闭 ====================
 
@@ -283,6 +338,7 @@ function handleSelect(key: string) {
     case 'v-cursor-blink':
     case 'v-autosave':
     case 'v-close-confirm':
+    case 'v-assistant':
       toggleViewItem(key)
       break
     case 'about': emit('about'); break
@@ -409,8 +465,17 @@ onBeforeUnmount(() => {
     <!-- 中段:拖拽区(--wails-draggable 由 runtime 处理窗口拖动) -->
     <div class="tmb-drag" @dblclick="onDragDblClick"></div>
 
-    <!-- 右段:收纳按钮 + 窗口控制 -->
+    <!-- 右段:MCP 开关 + 收纳按钮 + 窗口控制(前三者随"智能助手"开关显隐,默认关闭) -->
     <div class="tmb-right">
+      <template v-if="showAssistant">
+      <n-tooltip placement="bottom" trigger="hover" :delay="300">
+        <template #trigger>
+          <button class="tmb-mcp-btn" :class="mcpPhase" :title="mcpTooltip" @click="handleMcpToggle">
+            <n-icon :size="16" :component="HardwareChipOutline" />
+          </button>
+        </template>
+        {{ mcpTooltip }}
+      </n-tooltip>
       <n-tooltip placement="bottom" trigger="hover" :delay="300">
         <template #trigger>
           <button class="tmb-panel-btn" :class="{ active: showSession }" @click="emit('toggle-session')">
@@ -435,6 +500,7 @@ onBeforeUnmount(() => {
         </template>
         {{ t('agent.panelTitle') }}
       </n-tooltip>
+      </template>
 
       <!-- 窗口控制:仅 Frameless 模式渲染 -->
       <div v-if="showWinControls" class="tmb-win-controls">
@@ -468,7 +534,9 @@ onBeforeUnmount(() => {
   border-bottom: 1px solid var(--border-color, #3c3c3c);
   user-select: none;
   position: relative;
-  z-index: 900;
+  /* 自绘标题栏必须凌驾于一切应用内弹层(Naive UI 弹窗遮罩从 2000 起动态递增),
+     保证任意弹窗打开时窗口拖拽/移动/关闭等标题栏能力不受遮罩影响 */
+  z-index: 1000000;
 }
 
 /* 应用 Logo */
@@ -640,6 +708,41 @@ onBeforeUnmount(() => {
 .tmb-panel-btn.active {
   color: #4ec9b0;
   opacity: 1;
+}
+
+/* MCP 开关:off 关闭(暗灰) / idle 已开启(绿) / paused 挂起(黄) / busy 执行中(主题色,静态指示) */
+.tmb-mcp-btn {
+  width: 30px;
+  height: 30px;
+  margin-right: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.2s;
+}
+
+.tmb-mcp-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.tmb-mcp-btn.off {
+  color: var(--icon-color, #6e6e6e);
+}
+
+.tmb-mcp-btn.idle {
+  color: #4ec9b0;
+}
+
+.tmb-mcp-btn.paused {
+  color: #f2c97d;
+}
+
+.tmb-mcp-btn.busy {
+  color: var(--primary-color, #0078d4);
 }
 
 /* 窗口控制按钮 */

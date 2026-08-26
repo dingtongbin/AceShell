@@ -12,9 +12,10 @@ import {
 import {
   ServerOutline, SettingsOutline, ExtensionPuzzleOutline, AddOutline, TrashOutline,
   CheckmarkCircleOutline, RefreshOutline, KeyOutline, CreateOutline, PulseOutline,
+  CubeOutline,
 } from '@vicons/ionicons5'
 import { useI18n } from 'vue-i18n'
-import { GetAgentPresets, AgentTestConnection, AgentListModels, GetAgentSkills, AgentDiagnose } from '../../bindings/changeme/internal/services/agentservice.js'
+import { GetAgentPresets, AgentTestConnection, AgentListModels, GetAgentSkills, AgentDiagnose, AgentGetMcpConfig, AgentSetMcpConfig, AgentTestMcpServer } from '../../bindings/changeme/internal/services/agentservice.js'
 import { AgentCfg, AgentProfilesGet, AgentProfilesSet, SetAgentBehavior, SetAgentEnabled } from '../../bindings/changeme/internal/services/configservice.js'
 import { useAgentBridge, agentDensity, setAgentDensity, type AgentDensity } from '../composables/useAgentBridge'
 
@@ -47,11 +48,12 @@ interface ProfileForm {
 
 // ==================== Tab ====================
 
-const activeTab = ref<'service' | 'behavior' | 'skills'>('service')
+const activeTab = ref<'service' | 'behavior' | 'skills' | 'mcp'>('service')
 
 const tabs = computed(() => [
   { key: 'service', label: t('agentSettings.tabService'), icon: ServerOutline },
   { key: 'behavior', label: t('agentSettings.tabBehavior'), icon: SettingsOutline },
+  { key: 'mcp', label: t('agentSettings.tabMcp'), icon: CubeOutline },
   { key: 'skills', label: t('agentSettings.tabSkills'), icon: ExtensionPuzzleOutline },
 ])
 
@@ -241,6 +243,113 @@ const behavior = ref({
 
 const skills = ref<{ id: string; name: string; desc: string; prompt: string }[]>([])
 
+// ==================== 外接 MCP(设置页 MCP tab) ====================
+
+interface McpServerForm {
+  name: string
+  type: 'http' | 'sse' | 'stdio' | 'builtin'
+  url: string
+  command: string
+  argsText: string // JSON 数组文本,如 ["-y","pkg"]
+  envJson: string // JSON 对象文本
+  headersJson: string // JSON 对象文本
+  enabled: boolean
+}
+
+const mcpServers = ref<McpServerForm[]>([])
+const mcpSaving = ref(false)
+const mcpTestResults = ref<Record<string, string>>({})
+
+async function loadMcpConfig() {
+  try {
+    const raw = JSON.parse(await AgentGetMcpConfig())
+    console.log('[agent-mcp] config loaded:', raw)
+    if (raw?.error) { message.error(String(raw.error)); return }
+    const map = raw?.mcpServers || {}
+    mcpServers.value = Object.entries(map).map(([name, s]: [string, any]) => ({
+      name,
+      type: (['http', 'sse', 'stdio', 'builtin'].includes(s?.type) ? s.type : 'http') as McpServerForm['type'],
+      url: String(s?.url || ''),
+      command: String(s?.command || ''),
+      argsText: Array.isArray(s?.args) ? JSON.stringify(s.args) : '',
+      envJson: s?.env && Object.keys(s.env).length ? JSON.stringify(s.env, null, 2) : '',
+      headersJson: s?.headers && Object.keys(s.headers).length ? JSON.stringify(s.headers, null, 2) : '',
+      enabled: !!s?.enabled,
+    }))
+  } catch (e: any) {
+    message.error(String(e?.message || e))
+  }
+}
+
+function addMcpServer() {
+  mcpServers.value.push({ name: '', type: 'http', url: '', command: '', argsText: '', envJson: '', headersJson: '', enabled: true })
+}
+
+function removeMcpServer(i: number) {
+  const name = mcpServers.value[i]?.name
+  mcpServers.value.splice(i, 1)
+  if (name) delete mcpTestResults.value[name]
+}
+
+function parseJsonField(text: string, field: string): Record<string, string> | any[] | null {
+  if (!text.trim()) return null
+  try {
+    return JSON.parse(text)
+  } catch {
+    throw new Error(t('agentSettings.mcpBadJson', { field }))
+  }
+}
+
+async function saveMcpConfig() {
+  const map: Record<string, any> = {}
+  for (const s of mcpServers.value) {
+    const name = s.name.trim()
+    if (!name) { message.error(t('agentSettings.mcpNameRequired')); return }
+    if (map[name]) { message.error(t('agentSettings.mcpDupName', { name })); return }
+    let entry: Record<string, any> = { type: s.type, enabled: s.enabled }
+    try {
+      if (s.type === 'http' || s.type === 'sse') {
+        entry.url = s.url.trim()
+        entry.headers = parseJsonField(s.headersJson, 'headers') ?? {}
+        if (!entry.url) throw new Error(t('agentSettings.mcpUrlRequired'))
+      } else if (s.type === 'stdio') {
+        entry.command = s.command.trim()
+        entry.args = parseJsonField(s.argsText, 'args') ?? []
+        entry.env = parseJsonField(s.envJson, 'env') ?? {}
+        if (!entry.command) throw new Error(t('agentSettings.mcpCmdRequired'))
+      }
+      // builtin 无附加字段
+    } catch (e: any) {
+      message.error(`[${name}] ` + String(e?.message || e))
+      return
+    }
+    map[name] = entry
+  }
+  mcpSaving.value = true
+  try {
+    const res = JSON.parse(await AgentSetMcpConfig(JSON.stringify({ mcpServers: map })))
+    if (res?.error) { message.error(String(res.error)); return }
+    message.success(t('agentSettings.saved'))
+    await loadMcpConfig()
+  } catch (e: any) {
+    message.error(String(e?.message || e))
+  } finally { mcpSaving.value = false }
+}
+
+async function testMcpServer(name: string) {
+  mcpTestResults.value[name] = t('agentSettings.mcpTesting')
+  try {
+    const res = JSON.parse(await AgentTestMcpServer(name))
+    if (res?.error) {
+      mcpTestResults.value[name] = '✗ ' + String(res.error)
+    } else {
+      mcpTestResults.value[name] = '✓ ' + t('agentSettings.mcpToolsFound', { n: (res.tools || []).length }) + ((res.tools || []).length ? ': ' + res.tools.join(', ') : '')
+    }
+  } catch (e: any) {
+    mcpTestResults.value[name] = '✗ ' + String(e?.message || e)
+  }
+}
+
 // ==================== 加载/保存 ====================
 
 watch(show, async open => {
@@ -284,6 +393,12 @@ watch(show, async open => {
     const raw = JSON.parse(await GetAgentSkills())
     if (Array.isArray(raw)) skills.value = raw
   } catch { /* ignore */ }
+  await loadMcpConfig()
+})
+
+// 切到 MCP tab 时若尚未加载过则补拉(防弹窗打开早期调用失败后无重试机会)
+watch(activeTab, async tab => {
+  if (tab === 'mcp' && mcpServers.value.length === 0) await loadMcpConfig()
 })
 
 function apiKeyInputsClear() {
@@ -350,7 +465,7 @@ async function handleSave() {
 </script>
 
 <template>
-  <n-modal v-model:show="show" :title="t('agentSettings.title')" preset="dialog" :show-icon="false" style="width: 740px" :mask-closable="false">
+  <n-modal v-model:show="show" :title="t('agentSettings.title') + ' [v2]'" preset="dialog" :show-icon="false" style="width: 740px" :mask-closable="false">
     <div class="agent-settings">
       <!-- 左侧 Tab 导航(垂直) -->
       <div class="as-tabs">
@@ -412,6 +527,9 @@ async function handleSave() {
                 <template #icon><n-icon :size="12" :component="TrashOutline" /></template>
               </n-button>
             </div>
+            <div class="as-pane-save">
+              <n-button size="small" type="primary" :loading="saving" @click="handleSave">{{ t('common.save') }}</n-button>
+            </div>
           </div>
 
           <!-- ==================== 对话行为 ==================== -->
@@ -470,10 +588,66 @@ async function handleSave() {
               </div>
               <n-input-number v-model:value="behavior.contextMaxEvents" size="small" :min="20" :max="2000" :step="50" style="width: 110px; flex-shrink: 0" />
             </div>
+            <div class="as-pane-save">
+              <n-button size="small" type="primary" :loading="saving" @click="handleSave">{{ t('common.save') }}</n-button>
+            </div>
+          </div>
+
+          <!-- ==================== 外接 MCP ==================== -->
+          <!-- 独立 v-if(不挂 v-else-if 链),避免链式分支受相邻节点变化影响 -->
+          <div v-if="activeTab === 'mcp'" class="as-pane">
+            <div style="padding:4px 0;color:#888;font-size:11px">MCP PANEL · {{ mcpServers.length }} servers</div>
+            <div class="as-section-title">
+              {{ t('agentSettings.mcpServers') }}
+              <div style="display:flex;gap:4px">
+                <n-button size="tiny" quaternary @click="loadMcpConfig">
+                  <template #icon><n-icon :size="12" :component="RefreshOutline" /></template>
+                  {{ t('common.refresh') }}
+                </n-button>
+                <n-button size="tiny" quaternary type="primary" @click="addMcpServer">
+                  <template #icon><n-icon :size="12" :component="AddOutline" /></template>
+                  {{ t('agentSettings.mcpAdd') }}
+                </n-button>
+                <n-button size="tiny" quaternary type="success" :loading="mcpSaving" @click="saveMcpConfig">{{ t('common.save') }}</n-button>
+              </div>
+            </div>
+            <div class="cfg-desc" style="margin-bottom: 8px">{{ t('agentSettings.mcpHint') }}</div>
+            <div v-if="!mcpServers.length" class="as-empty">{{ t('agentSettings.mcpEmpty') }}</div>
+            <div v-for="(s, i) in mcpServers" :key="i" class="mcp-item" :class="{ disabled: !s.enabled }">
+              <div class="mcp-row">
+                <n-switch v-model:value="s.enabled" size="small" />
+                <n-input v-model:value="s.name" size="small" :placeholder="t('agentSettings.mcpNamePh')" style="width: 150px" />
+                <n-select v-model:value="s.type" size="small" style="width: 120px" :options="[
+                  { label: 'HTTP', value: 'http' },
+                  { label: 'SSE', value: 'sse' },
+                  { label: 'stdio', value: 'stdio' },
+                  { label: t('agentSettings.mcpTypeBuiltin'), value: 'builtin' },
+                ]" />
+                <div style="margin-left:auto;display:flex;gap:4px;flex-shrink:0">
+                  <n-button size="tiny" quaternary :disabled="!s.name.trim() || !s.enabled || s.type === 'builtin'" @click="testMcpServer(s.name)">{{ t('agentSettings.mcpTest') }}</n-button>
+                  <n-button size="tiny" quaternary type="error" @click.stop="removeMcpServer(i)">
+                    <template #icon><n-icon :size="12" :component="TrashOutline" /></template>
+                  </n-button>
+                </div>
+              </div>
+              <div v-if="s.type === 'http' || s.type === 'sse'" class="mcp-fields">
+                <n-input v-model:value="s.url" size="small" :placeholder="t('agentSettings.mcpUrlPh')" />
+                <n-input v-model:value="s.headersJson" type="textarea" size="small" :rows="2" :placeholder="t('agentSettings.mcpHeadersJson')" />
+              </div>
+              <div v-else-if="s.type === 'stdio'" class="mcp-fields">
+                <div style="display:flex;gap:6px">
+                  <n-input v-model:value="s.command" size="small" :placeholder="t('agentSettings.mcpCommandPh')" style="width: 160px; flex-shrink:0" />
+                  <n-input v-model:value="s.argsText" size="small" :placeholder="t('agentSettings.mcpArgsJson')" style="flex:1" />
+                </div>
+                <n-input v-model:value="s.envJson" type="textarea" size="small" :rows="2" :placeholder="t('agentSettings.mcpEnvJson')" />
+              </div>
+              <div v-if="s.type === 'builtin'" class="cfg-desc">{{ t('agentSettings.mcpBuiltinDesc') }}</div>
+              <div v-if="mcpTestResults[s.name]" class="mcp-test-result">{{ mcpTestResults[s.name] }}</div>
+            </div>
           </div>
 
           <!-- ==================== 技能库 ==================== -->
-          <div v-else class="as-pane">
+          <div v-if="activeTab === 'skills'" class="as-pane">
             <div class="cfg-desc" style="margin-bottom: 10px">{{ t('agentSettings.skillsDesc') }}</div>
             <div v-for="s in skills" :key="s.id" class="skill-card">
               <div class="skill-card-head">
@@ -487,14 +661,7 @@ async function handleSave() {
         </n-scrollbar>
       </div>
 
-      <!-- 底部操作 -->
-      <div class="as-actions">
-        <div />
-        <div class="as-actions-right">
-          <n-button size="small" @click="show = false">{{ t('common.cancel') }}</n-button>
-          <n-button size="small" type="primary" :loading="saving" @click="handleSave">{{ t('common.save') }}</n-button>
-        </div>
-      </div>
+      <!-- 底部操作: 已移除全局取消/保存,各 Tab 自治保存(MCP tab 有独立保存;技能库只读) -->
       </div>
     </div>
   </n-modal>
@@ -640,6 +807,16 @@ async function handleSave() {
 .as-content { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .as-pane { padding: 10px 12px 8px 14px; display: flex; flex-direction: column; }
 .as-empty { padding: 24px; text-align: center; font-size: 12px; color: var(--text-secondary, #6e6e6e); }
+
+/* 外接 MCP 服务器卡片 */
+.mcp-item { border: 1px solid var(--border-color, #3c3c3c); border-radius: 6px; padding: 8px 10px; margin-bottom: 8px; display: flex; flex-direction: column; gap: 6px; }
+.mcp-item.disabled { opacity: 0.55; }
+.mcp-row { display: flex; align-items: center; gap: 8px; }
+.mcp-fields { display: flex; flex-direction: column; gap: 5px; }
+.mcp-test-result { font-size: 11px; color: var(--text-secondary, #999); word-break: break-all; line-height: 1.5; }
+
+/* 各 Tab 就近保存按钮行 */
+.as-pane-save { display: flex; justify-content: flex-end; padding-top: 10px; margin-top: 4px; border-top: 1px solid var(--border-color, #3c3c3c); }
 .as-section-title { display: flex; align-items: center; justify-content: space-between; font-size: 13px; font-weight: 600; color: var(--text-color, #d4d4d4); margin-bottom: 8px; }
 
 /* 档案列表 */

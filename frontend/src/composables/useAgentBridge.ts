@@ -313,6 +313,12 @@ async function loadMoreEvents(): Promise<boolean> {
   } catch { return false } finally { loadingEvents = false }
 }
 
+/** refreshEvents 刷新当前会话记录:丢弃本地分页窗口,从后端重新拉取尾部窗口。 */
+async function refreshEvents() {
+  if (!activeId.value) return
+  await loadEventsTail(activeId.value)
+}
+
 /** newSession 新建会话;若当前会话执行中 → 'confirm-needed'。 */
 async function newSession(title: string, force: boolean): Promise<{ ok: boolean; id?: string; confirmNeeded?: boolean; error?: string }> {
   if (!force && status.value.running && status.value.sessionId === activeId.value) {
@@ -443,7 +449,7 @@ export function useAgentBridge() {
     // 技能
     refreshSkills, refreshSessionSkills, setSessionSkills,
     // 分页
-    loadMoreEvents,
+    loadMoreEvents, refreshEvents,
     // 错误
     dismissError,
   }
