@@ -5,13 +5,13 @@ version: '3'
 
 # This information is used to generate the build assets.
 info:
-  companyName: "My Company" # The name of the company
-  productName: "My Product" # The name of the application
-  productIdentifier: "com.mycompany.myproduct" # The unique product identifier
-  description: "A program that does X" # The application description
-  copyright: "(c) 2025, My Company" # Copyright text
-  comments: "Some Product Comments" # Comments
-  version: "0.0.1" # The application version
+  companyName: "dingtongbin" # The name of the company
+  productName: "AceShell" # The name of the application
+  productIdentifier: "com.dingtongbin.aceshell" # The unique product identifier
+  description: "跨平台网络终端管理工具" # The application description
+  copyright: "(c) 2026, dingtongbin" # Copyright text
+  comments: "AceShell - SSH/Telnet/串口/SFTP/RDP 一体化终端管理工具" # Comments
+  version: "0.2.2" # The application version
   # cfBundleIconName: "appicon" # The macOS icon name in Assets.car icon bundles (optional)
   #                               # Should match the name of your .icon file without the extension
   #                               # If not set and Assets.car exists, defaults to "appicon"

@@ -1,15 +1,15 @@
 {
 	"fixed": {
-		"file_version": "0.1.3"
+		"file_version": "0.2.2"
 	},
 	"info": {
 		"0000": {
-			"ProductVersion": "0.1.3",
-			"CompanyName": "My Company",
-			"FileDescription": "A AceShell application",
-			"LegalCopyright": "© 2026, My Company",
-			"ProductName": "My Product",
-			"Comments": "This is a comment"
+			"ProductVersion": "0.2.2",
+			"CompanyName": "dingtongbin",
+			"FileDescription": "跨平台网络终端管理工具",
+			"LegalCopyright": "(c) 2026, dingtongbin",
+			"ProductName": "AceShell",
+			"Comments": "AceShell - SSH/Telnet/串口/SFTP/RDP 一体化终端管理工具"
 		}
 	}
 }
