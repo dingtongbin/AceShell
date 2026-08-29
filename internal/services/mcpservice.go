@@ -615,11 +615,14 @@ func (s *McpService) registerTools(server *mcp.Server) {
 	type listTabsOut struct {
 		Tabs []mcpTabInfo `json:"tabs"`
 	}
+	type listTabsIn struct {
+		Keyword string `json:"keyword" jsonschema:"可选;按名称或ID模糊过滤标签页(不区分大小写),不传返回全部"`
+	}
 	addTrackedTool(s, server, &mcp.Tool{
 		Name:        "list_tabs",
-		Description: "列出当前打开的全部标签页(终端与脚本编辑器),含状态与标签页 ID。",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, in struct{}) (*mcp.CallToolResult, listTabsOut, error) {
-		res, err := s.toolListTabs(ctx, mcpSrcExternal)
+		Description: "列出当前打开的标签页(终端与脚本编辑器),含状态与标签页 ID。建议传 keyword 按名称/ID 模糊过滤,避免返回全部标签页。",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in listTabsIn) (*mcp.CallToolResult, listTabsOut, error) {
+		res, err := s.toolListTabs(ctx, mcpSrcExternal, in.Keyword)
 		if err != nil {
 			return nil, listTabsOut{}, err
 		}
@@ -782,12 +785,12 @@ const (
 
 // ==================== 工具主体(内外智能体共享同一实现) ====================
 
-// toolListTabs 列出标签页(纯读,不进仲裁车道)。
-func (s *McpService) toolListTabs(ctx context.Context, source string) (string, error) {
+// toolListTabs 列出标签页(纯读,不进仲裁车道)。keyword 非空时由前端按名称/ID 模糊过滤。
+func (s *McpService) toolListTabs(ctx context.Context, source, keyword string) (string, error) {
 	if err := s.checkRunning(); err != nil {
 		return "", err
 	}
-	return s.routeCommand(ctx, "list_tabs", map[string]any{}, mcpCmdTimeout, RiskAuto, "list_tabs", source)
+	return s.routeCommand(ctx, "list_tabs", map[string]any{"keyword": keyword}, mcpCmdTimeout, RiskAuto, "list_tabs", source)
 }
 
 // toolOpenSession 打开会话(进仲裁车道;打开动作本身即激活标签页)。
@@ -1098,7 +1101,7 @@ func (s *McpService) ExecuteEmbeddedOpts(ctx context.Context, name string, argsJ
 		data, _ := json.Marshal(out)
 		return string(data), nil
 	case "list_tabs":
-		return s.toolListTabs(ctx, opts.source)
+		return s.toolListTabs(ctx, opts.source, getStr("keyword"))
 	case "open_session":
 		return s.toolOpenSession(ctx, opts, getStr("session_path"))
 	case "terminal_send":
@@ -1183,7 +1186,7 @@ func (s *McpService) EmbeddedToolDefs() string {
 	}
 	defs := []fnDef{
 		{Name: "list_sessions", Description: "列出全部已保存的会话(不含任何密码或密钥)。返回路径供 open_session 使用。", Parameters: obj(map[string]param{})},
-		{Name: "list_tabs", Description: "列出当前打开的全部标签页(终端与脚本编辑器),含状态与标签页 ID。", Parameters: obj(map[string]param{})},
+		{Name: "list_tabs", Description: "列出当前打开的标签页(终端与脚本编辑器),含状态与标签页 ID。建议传 keyword 按名称/ID 模糊过滤,避免返回全部标签页。", Parameters: obj(map[string]param{"keyword": str("可选;按名称或ID模糊过滤标签页(不区分大小写),不传返回全部")})},
 		{Name: "open_session", Description: "在标签页中打开终端会话(SSH/Telnet/串口)。已打开则定位激活该标签页。界面会同步跳转,与用户手动打开完全一致。", Parameters: obj(map[string]param{"session_path": str("会话相对路径(list_sessions 返回的 path)")}, "session_path")},
 		{Name: "terminal_send", Description: "向终端标签页输入文本。输入会显示在终端上,与用户手动输入完全一致;目标标签页会被激活。单行命令会自动等待并返回执行输出(output 字段),无需再调 terminal_read;多行输入与用户粘贴相同逻辑。", Parameters: obj(map[string]param{"tab_id": str("目标终端标签页 ID"), "text": str("要输入的文本。单行为命令(自动带回执行输出);多行视为批量输入,与用户多行粘贴相同逻辑")}, "tab_id", "text")},
 		{Name: "terminal_read", Description: "读取终端标签页自上次调用以来的新增输出(已剥离控制序列的纯文本)。首次调用返回最近的历史输出。", Parameters: obj(map[string]param{"tab_id": str("目标终端标签页 ID")}, "tab_id")},

@@ -65,6 +65,7 @@ export interface AgentEvent {
   role: 'user' | 'assistant' | 'tool' | 'system'
   kind: 'message' | 'tool_call' | 'tool_result' | 'error'
   content?: string
+  reasoning?: string // 模型思考内容(reasoning_content,assistant 轮次)
   toolName?: string
   toolArgs?: string
   toolCallId?: string
@@ -92,7 +93,6 @@ export interface AgentStatus {
   running: boolean
   sessionId: string
   step: number
-  maxSteps: number
   pending: AgentPendingMsg | null
   activeProfileId: string
   activeProfile: string
@@ -109,7 +109,7 @@ const MEM_CAP = 500 // 前端内存事件上限(超限裁剪头部,更早的靠"
 
 const status = ref<AgentStatus>({
   enabled: false, model: '', permMode: 'manual',
-  running: false, sessionId: '', step: 0, maxSteps: 30,
+  running: false, sessionId: '', step: 0,
   pending: null, activeProfileId: '', activeProfile: '', language: 'zh-CN',
 })
 const sessions = ref<AgentSessionMeta[]>([])
@@ -299,18 +299,43 @@ async function loadEventsTail(id: string) {
   } finally { loadingEvents = false }
 }
 
-/** loadMoreEvents 向上翻页(懒加载更早的事件);到顶返回 false。 */
+/** loadMoreEvents 向上翻页(懒加载更早的事件);到顶返回 false。10s 超时保护,避免桥接调用异常挂起时按钮永久转圈。 */
 async function loadMoreEvents(): Promise<boolean> {
   if (!activeId.value || loadingEvents || headOffset.value <= 0) return false
   loadingEvents = true
   try {
-    const raw = JSON.parse(await AgentSessionEvents(activeId.value, Math.max(0, headOffset.value - PAGE_SIZE), PAGE_SIZE))
+    // 只取 [start, headOffset) 这一段,避免与现有窗口重叠造成事件重复
+    const start = Math.max(0, headOffset.value - PAGE_SIZE)
+    const raw = JSON.parse(await withTimeout(
+      AgentSessionEvents(activeId.value, start, headOffset.value - start), 10_000))
     const older: AgentEvent[] = Array.isArray(raw.events) ? raw.events : []
     if (older.length === 0) return false
     events.value = [...older, ...events.value]
     headOffset.value = Number(raw.offset) || 0
     return true
-  } catch { return false } finally { loadingEvents = false }
+  } catch (e) {
+    console.error('[agent] loadMoreEvents failed:', e)
+    lastEventsError = e instanceof Error ? e.message : String(e)
+    return false
+  } finally { loadingEvents = false }
+}
+
+// 桥接调用超时包装
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(`桥接调用超过 ${ms}ms 未响应`)), ms)
+    p.then(v => { clearTimeout(t); resolve(v) }, e => { clearTimeout(t); reject(e) })
+  })
+}
+
+// 最近一次事件加载失败原因(供界面提示)
+let lastEventsError = ''
+
+/** consumeEventsError 取走最近一次事件加载失败原因(取后清空)。 */
+function consumeEventsError(): string {
+  const e = lastEventsError
+  lastEventsError = ''
+  return e
 }
 
 /** refreshEvents 刷新当前会话记录:丢弃本地分页窗口,从后端重新拉取尾部窗口。 */
@@ -449,7 +474,7 @@ export function useAgentBridge() {
     // 技能
     refreshSkills, refreshSessionSkills, setSessionSkills,
     // 分页
-    loadMoreEvents, refreshEvents,
+    loadMoreEvents, refreshEvents, consumeEventsError,
     // 错误
     dismissError,
   }

@@ -196,7 +196,14 @@ async function dispatchCommand(requestId: string, type: string, payload: any) {
 
   switch (type) {
     case 'list_tabs': {
-      const tabs = tabManagerApi ? tabManagerApi.listTabs() : []
+      // keyword 非空时按名称/ID 模糊过滤(不区分大小写),避免动辄返回全部标签页
+      const kw = String(payload?.keyword || '').trim().toLowerCase()
+      const all = tabManagerApi ? tabManagerApi.listTabs() : []
+      const tabs = kw
+        ? all.filter(tb =>
+            String(tb?.title || '').toLowerCase().includes(kw) ||
+            String(tb?.id || '').toLowerCase().includes(kw))
+        : all
       McpResolveCommand(requestId, JSON.stringify(tabs), '').catch(() => {})
       break
     }

@@ -171,7 +171,7 @@ func TestConfigService_McpAgentSplitFiles(t *testing.T) {
 
 	// 修改 mcp/agent 配置触发保存
 	svc.SetMcpPort(8951)
-	svc.SetAgentBehavior("auto", 24, 200, 400)
+	svc.SetAgentBehavior("auto", 200, 400)
 
 	// 1. config.toml 不得包含 mcp/agent 节
 	main, err := os.ReadFile(configFile)

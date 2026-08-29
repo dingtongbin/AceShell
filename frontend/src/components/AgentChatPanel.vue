@@ -6,7 +6,7 @@
 // - 待办清单: 悬浮卡片(可折叠)
 // - 挂起队列: 执行中同会话新消息挂起(容量1),支持立即发送(打断式)/丢弃
 // - 底部工具栏: 技能选择 / 权限模式 / 模型切换 / AI 服务切换 / 设置
-import { ref, reactive, computed, watch, nextTick, h, onBeforeUnmount, onMounted } from 'vue'
+import { ref, reactive, computed, watch, nextTick, h, onBeforeUnmount, onMounted, type Component } from 'vue'
 import {
   NIcon, NButton, NTag, NScrollbar, NInput, NTooltip, NDropdown, NModal, NPopselect, NPopover,
   useMessage, useDialog,
@@ -19,11 +19,13 @@ import {
   ShieldHalfOutline, ServerOutline, ExpandOutline, ContractOutline,
   RocketOutline, TimeOutline, ShieldCheckmarkOutline, ChevronDownOutline, SparklesOutline,
   ChevronForwardOutline, ChevronBackOutline, CopyOutline,
+  SearchOutline, TerminalOutline, AlertCircleOutline,
   ArrowUp, StopSharp,
 } from '@vicons/ionicons5'
 import { useI18n } from 'vue-i18n'
 import { useAgentBridge, agentDensity } from '../composables/useAgentBridge'
 import { useMcpBridge } from '../composables/useMcpBridge'
+import { useTheme } from '../stores/theme'
 import { renderMd } from '../utils/markdown'
 import { ExportSessionPdf, AgentListModels } from '../../bindings/changeme/internal/services/agentservice.js'
 import { AgentCfg, AgentProfilesGet, AgentProfilesSet, AgentSetActiveProfile, SetAgentBehavior } from '../../bindings/changeme/internal/services/configservice.js'
@@ -39,13 +41,14 @@ const emit = defineEmits<{
 const { t, locale } = useI18n()
 const message = useMessage()
 const dialog = useDialog()
+const { isDark } = useTheme()
 
 const {
   status, sessions, activeId, activeSession, events, headOffset, totalEvents,
   todos, streaming, agentError, skills, sessionSkills, pendingMsg,
   switchSession, newSession, deleteSession, renameSession, archiveSession,
   send, interrupt, pendingFlush, pendingDiscard,
-  setSessionSkills, loadMoreEvents, refreshEvents, dismissError, refreshStatus,
+  setSessionSkills, loadMoreEvents, refreshEvents, dismissError, refreshStatus, consumeEventsError,
 } = useAgentBridge()
 
 const sending = ref(false)
@@ -97,18 +100,19 @@ const pmBtnLabel = computed(() => {
 })
 
 // 自适应弹层定位: 向上弹出,水平/垂直均钳制在可视区内(左侧不越界,高度不超按钮上方可用空间)
-function popupStyleAbove(rect: DOMRect, panelWidth: number): { left: string; bottom: string; maxHeight: string } {
+function popupStyleAbove(rect: DOMRect, panelWidth: number, maxVh = 1): { left: string; bottom: string; maxHeight: string } {
   const vw = window.innerWidth
   const left = Math.min(Math.max(8, rect.left), Math.max(8, vw - panelWidth - 8))
   const bottom = window.innerHeight - rect.top + 6
-  const maxHeight = Math.max(80, rect.top - 14)
+  // maxHeight 不超过窗口高度的 maxVh 比例(模型列表等长列表固定 50%,避免占满整窗)
+  const maxHeight = Math.max(80, Math.min(rect.top - 14, window.innerHeight * maxVh))
   return { left: `${left}px`, bottom: `${bottom}px`, maxHeight: `${maxHeight}px` }
 }
 
 function toggleProfileModel() {
   if (showProfileModel.value) { closeProfileModel(); return }
   const rect = pmBtnRef.value?.getBoundingClientRect()
-  if (rect) pmStyle.value = popupStyleAbove(rect, 260)
+  if (rect) pmStyle.value = popupStyleAbove(rect, 260, 0.5)
   showProfileModel.value = true
   pmDrillId.value = '' // 始终从一级供应商列表开始
 }
@@ -241,7 +245,7 @@ const permBtnIcon = computed(() => {
 async function handlePermChange(mode: string) {
   try {
     const cfg = await AgentCfg()
-    const raw = await SetAgentBehavior(mode, cfg.maxSteps, cfg.historyWindow, cfg.contextMaxEvents)
+    const raw = await SetAgentBehavior(mode, cfg.historyWindow, cfg.contextMaxEvents)
     const err = raw ? JSON.parse(raw) : null
     if (err?.error) { message.error(String(err.error)); return }
     await refreshStatus()
@@ -281,7 +285,7 @@ const ctxRingColor = computed(() => {
   const p = ctxPercent.value
   if (p >= 85) return '#e45858'
   if (p >= 60) return '#e2a03f'
-  return '#4ec9b0'
+  return '#0078d4'
 })
 // 用量文案: 千分位 + K/M 缩写
 function fmtTokens(n: number): string {
@@ -432,14 +436,6 @@ async function handleSkillToggle(id: string) {
 // ==================== 派生状态 ====================
 
 const activeTitle = computed(() => activeSession.value?.title || t('agent.selectSession'))
-
-// AI 消息头部标签: 服务名 · 模型名
-const aiLabel = computed(() => {
-  const parts: string[] = []
-  if (status.value.activeProfile) parts.push(status.value.activeProfile)
-  if (status.value.model) parts.push(status.value.model)
-  return parts.length ? parts.join(' · ') : 'AI'
-})
 
 const hasMore = computed(() => headOffset.value > 0)
 const runningHere = computed(() => status.value.running && status.value.sessionId === activeId.value)
@@ -617,6 +613,8 @@ async function handleLoadMore() {
   const { box } = scrollEls()
   const prevHeight = box?.scrollHeight || 0
   const ok = await loadMoreEvents()
+  const err = consumeEventsError()
+  if (!ok && err) message.error(t('agent.loadMoreFail', { reason: err }))
   if (ok) {
     await nextTick()
     if (box) box.scrollTop = box.scrollHeight - prevHeight // 保持视口位置
@@ -794,11 +792,12 @@ async function handlePendingFlush() {
 
 // ==================== 事件流合并(回合=工单: 执行过程可折叠+结论常显) ====================
 
-// AI 组片段: 文本 / 工具调用(结果按 toolCallId 配对回填) / 错误
+// AI 组片段: 文本 / 工具调用(结果按 toolCallId 配对回填) / 思考(模型 reasoning) / 错误
 interface ToolSeg { kind: 'tool'; id: string; name: string; args?: string; result?: string; ok?: boolean; done: boolean; ts?: number; dur?: number }
-interface TextSeg { kind: 'text'; text: string; streaming?: boolean }
-interface ErrSeg { kind: 'error'; text: string }
-type AiSeg = ToolSeg | TextSeg | ErrSeg
+interface TextSeg { kind: 'text'; text: string; streaming?: boolean; ts?: number }
+interface ThinkSeg { kind: 'think'; text: string; ts?: number }
+interface ErrSeg { kind: 'error'; text: string; ts?: number }
+type AiSeg = ToolSeg | TextSeg | ThinkSeg | ErrSeg
 
 // 回合 token 用量: 缓存未命中输入 / 缓存命中输入 / 输出
 interface TurnTokens { in: number; cached: number; out: number }
@@ -906,6 +905,9 @@ const flowBlocks = computed<FlowBlock[]>(() => {
     } else if (ev.kind === 'tool_call') {
       const b = ensureAi()
       initTurn(b, ev, ts)
+      // 思考内容与动作前的叙述文本随本轮 tool_call 事件持久化 → 思考段 + 文本段
+      if (ev.reasoning) b.segs.push({ kind: 'think', text: ev.reasoning, ts })
+      if (ev.content) b.segs.push({ kind: 'text', text: ev.content, ts })
       for (const tc of ev.toolCalls || []) {
         b.segs.push({ kind: 'tool', id: tc.id, name: tc.name, args: tc.arguments, done: false, ts })
       }
@@ -931,7 +933,8 @@ const flowBlocks = computed<FlowBlock[]>(() => {
     } else if (ev.role === 'assistant' && ev.kind === 'message' && ev.content) {
       const b = ensureAi()
       initTurn(b, ev, ts)
-      b.segs.push({ kind: 'text', text: ev.content })
+      if (ev.reasoning) b.segs.push({ kind: 'think', text: ev.reasoning, ts })
+      b.segs.push({ kind: 'text', text: ev.content, ts })
       accumTokens(b, ev)
       b.lastTs = ts
     }
@@ -977,12 +980,13 @@ function str(v: unknown): string | null {
 
 // ==================== 类型化工具渲染(终端/清单/会话事件/计划/写操作) ====================
 
-type ToolKind = 'terminal' | 'list' | 'event' | 'todo' | 'write' | 'generic'
+type ToolKind = 'terminal' | 'list' | 'event' | 'session' | 'tabquery' | 'todo' | 'write' | 'generic'
 function classifyTool(name: string): ToolKind {
   switch (name) {
     case 'terminal_send': case 'batch_execute': case 'terminal_read': return 'terminal'
-    case 'list_sessions': case 'list_tabs': return 'list'
-    case 'open_session': case 'close_tab': case 'open_script': case 'switch_tab': return 'event'
+    case 'open_session': case 'close_tab': case 'switch_tab': return 'session'
+    case 'list_tabs': return 'tabquery'
+    case 'list_sessions': case 'open_script': return 'event'
     case 'update_todo': return 'todo'
     case 'script_write': return 'write'
     default: return 'generic'
@@ -1028,8 +1032,13 @@ function friendlyCmd(seg: ToolSeg): { cmd: string; host?: string } {
       const more = cmds.length > 1 ? ` 等 ${cmds.length} 条` : ''
       return { cmd: head + more, host: hostChip(str(a.tab_id)) }
     }
-    case 'terminal_read':
-      return { cmd: t('agent.readOutput'), host: hostChip(str(a.tab_id)) }
+    case 'terminal_read': {
+      // 折叠行显示读取到的输出首行(而非固定文案),可追溯读了什么
+      const out = outText(seg)
+      const line = out?.split('\n').map(s => s.trim()).filter(Boolean)[0] || ''
+      const preview = line.length > 100 ? line.slice(0, 100) + '…' : line
+      return { cmd: preview ? `↳ ${preview}` : t('agent.readOutput'), host: hostChip(str(a.tab_id)) }
+    }
     case 'open_session': {
       const p = str(a.session_path) || ''
       return { cmd: `${t('agent.openSession')} ${p.split(/[\\/]/).pop() || p}` }
@@ -1051,7 +1060,25 @@ function friendlyCmd(seg: ToolSeg): { cmd: string; host?: string } {
       return { cmd: t('agent.planUpdated') }
     case 'list_sessions': return { cmd: t('agent.listSessions') }
     case 'list_tabs': return { cmd: t('agent.listTabs') }
-    default: return { cmd: seg.name }
+    case 'web_search': {
+      const q = str(a.query) || str(a.search) || str(a.keyword) || ''
+      return { cmd: q || t('agent.webSearch') }
+    }
+    default: {
+      // 通用工具(MCP 等): 优先提取查询/路径/URL 等关键参数,让折叠行可追溯
+      const keys = ['query', 'search', 'keyword', 'q', 'path', 'file_path', 'url', 'pattern', 'command', 'name', 'tab_id', 'session_path', 'id']
+      for (const k of keys) {
+        const v = a[k]
+        if (typeof v === 'string' && v.trim()) {
+          const val = v.trim()
+          const shown = val.length > 80 ? val.slice(0, 80) + '…' : val
+          return { cmd: `${seg.name}: ${shown}`, host: k === 'tab_id' ? hostChip(val) : undefined }
+        }
+      }
+      // 对象/数组参数: 取 JSON 预览
+      const preview = seg.args && seg.args !== '{}' ? seg.args : ''
+      return { cmd: preview && preview.length > 90 ? `${seg.name} ${preview.slice(0, 90)}…` : (preview ? `${seg.name} ${preview}` : seg.name) }
+    }
   }
 }
 function hostChip(tabId?: string | null): string | undefined {
@@ -1138,6 +1165,26 @@ function toolSegMd(seg: ToolSeg): string {
   if (kind === 'event') {
     return `${st} **${escMd(f.cmd)}**${metaStr}`
   }
+  // 查询标签页: 完整列出查询关键词与全部匹配结果(不省略)
+  if (kind === 'tabquery') {
+    const kw = str(parseJson(seg.args)?.keyword) || ''
+    const headQ = kw
+      ? `**${t('agent.listTabs')}** \`${kw}\`${metaStr}`
+      : `**${t('agent.listTabsAll')}**${metaStr}`
+    if (!seg.done) return headQ
+    const rows = parseJson(seg.result)
+    const arr = Array.isArray(rows) ? rows.filter((x): x is Record<string, unknown> => !!x && typeof x === 'object') : []
+    const lines = arr.map(x => {
+      const title = String(x.title ?? '')
+      const id = String(x.id ?? '')
+      const stq = String(x.status ?? '')
+      const proto = String(x.protocol ?? '')
+      return `- **${escMd(title)}** \`${id}\`${proto ? ` (${proto})` : ''} ${stq}`
+    })
+    return lines.length
+      ? `${headQ}\n\n${lines.join('\n')}`
+      : `${headQ}\n\n${kw ? t('agent.listTabsNoMatch') : t('agent.pmEmpty')}`
+  }
   // 计划更新: GFM 任务列表
   if (kind === 'todo') {
     const todos = parseTodos(seg)
@@ -1213,66 +1260,30 @@ function isTurnOpen(b: FlowBlock, isLatest: boolean): boolean {
   return false
 }
 
-// 深度思考: 回合开头连续的文本段(工具调用前的分析文字)。
-// 仅当回合包含非文本段(即有工具调用)时,开头文本才视为思考;纯文本回合整体是普通回答。
-function thinkingSegCount(b: FlowBlock): number {
-  let n = 0
-  for (const s of b.segs) {
-    if (s.kind !== 'text') return n
-    n++
-  }
-  return 0
-}
+// 思考段(seg.kind='think')来自模型 reasoning_content;动作前的叙述文本为普通文本段。
+// turnSplit 中思考段按非文本段处理: 最后一个非文本段之后的纯文本 = 结论(常显),思考/工具/错误 = 执行过程。
 
-/** turnThinking 返回回合的深度思考 markdown(无则空串)。 */
-function turnThinking(b: FlowBlock): string {
-  const n = thinkingSegCount(b)
-  if (n === 0) return ''
-  return segsMd(b.segs.slice(0, n))
-}
-
-/** thinkLive 是否处于"深度思考中"阶段: 回合执行中且目前只有思考文本、尚未进入工具阶段。 */
-function thinkLive(b: FlowBlock): boolean {
-  const meta = turnMeta(b)
-  return meta.active && thinkingSegCount(b) > 0 && thinkingSegCount(b) === b.segs.length
-}
-
-// 思考区折叠状态(默认折叠;用户点击后记忆)
-const openThinks = reactive(new Set<string>())
-function isThinkOpen(key: string): boolean {
-  return openThinks.has(key)
-}
-function toggleThink(key: string) {
-  if (openThinks.has(key)) openThinks.delete(key)
-  else openThinks.add(key)
-}
-
-// 回合分段: 跳过开头的思考文本段后,最后一个工具/错误段之后的文本 = 结论(常显);其余 = 执行过程(可折叠)
+/** turnSplit 回合分段: 最后一个非文本段之前的所有段 = 执行过程(可折叠),其后的连续文本 = 结论(常显)。 */
 function turnSplit(b: FlowBlock): { proc: AiSeg[]; concl: AiSeg[] } {
-  const head = thinkingSegCount(b)
-  let lastHeavy = head - 1
-  for (let i = head; i < b.segs.length; i++) {
+  let lastHeavy = -1
+  for (let i = 0; i < b.segs.length; i++) {
     if (b.segs[i].kind !== 'text') lastHeavy = i
   }
-  return { proc: b.segs.slice(head, lastHeavy + 1), concl: b.segs.slice(lastHeavy + 1) }
+  return { proc: b.segs.slice(0, lastHeavy + 1), concl: b.segs.slice(lastHeavy + 1) }
 }
 
-// 段列表 → markdown 文本(错误段用引用块;流式光标由外层附加)
+// 段列表 → markdown 文本(思考/文本段原样,错误段用引用块;流式光标由外层附加)
 function segsMd(segs: AiSeg[]): string {
   const parts: string[] = []
   for (const seg of segs) {
-    if (seg.kind === 'text') parts.push(seg.text)
+    if (seg.kind === 'text' || seg.kind === 'think') parts.push(seg.text)
     else if (seg.kind === 'tool') parts.push(toolSegMd(seg))
     else parts.push('> ✗ ' + seg.text.split('\n').join('\n> '))
   }
   return parts.join('\n\n')
 }
 
-/** aiProcHtml / aiConclHtml: 回合分段 markdown → 统一 renderMd 渲染。 */
-function aiProcHtml(b: FlowBlock): string {
-  const html = cachedMd(segsMd(turnSplit(b).proc))
-  return appendCursor(html, b)
-}
+/** aiConclHtml: 回合结论 markdown → 统一 renderMd 渲染。 */
 function aiConclHtml(b: FlowBlock): string {
   const html = cachedMd(segsMd(turnSplit(b).concl))
   return appendCursor(html, b)
@@ -1300,6 +1311,254 @@ function tokenLabel(b: FlowBlock): string {
 function appendCursor(html: string, b: FlowBlock): string {
   const last = b.segs[b.segs.length - 1]
   return last && last.kind === 'text' && last.streaming ? html + '<span class="stream-cursor"></span>' : html
+}
+
+// ==================== 执行过程 → 活动摘要行(参考现代助手对话的紧凑时间线) ====================
+
+type ActRowKind = 'think' | 'explore' | 'terminal' | 'write' | 'todo' | 'error'
+interface ActRow {
+  kind: ActRowKind
+  icon: Component
+  label: string
+  detail?: string
+  sub?: string
+  meta: string
+  ok: boolean | null // true 成功 / false 失败 / null 进行中
+  segs: ToolSeg[]    // 点击展开详情(工具段走原 markdown 管线)
+  thinkMd?: string   // 思考行展开内容(无背景框灰调文本)
+}
+type ActItem = { type: 'row'; key: string; row: ActRow } | { type: 'text'; key: string; html: string }
+
+// 活动行展开详情(用户点击记忆,不持久化)
+const openActs = reactive(new Set<string>())
+function actOpen(key: string): boolean { return openActs.has(key) }
+function toggleAct(key: string) {
+  if (openActs.has(key)) openActs.delete(key)
+  else openActs.add(key)
+}
+
+// 每回合文件更改汇总(写操作去重;仅展示,不含 diff 统计)
+function turnFiles(b: FlowBlock): string[] {
+  const out: string[] = []
+  for (const s of b.segs) {
+    if (s.kind !== 'tool' || classifyTool(s.name) !== 'write') continue
+    const p = str(parseJson(s.args)?.file_path) || ''
+    if (p && !out.includes(p)) out.push(p)
+  }
+  return out
+}
+const openFileBars = reactive(new Set<string>())
+function filesOpen(key: string): boolean { return openFileBars.has(key) }
+function toggleFiles(key: string) {
+  if (openFileBars.has(key)) openFileBars.delete(key)
+  else openFileBars.add(key)
+}
+function pathBase(p: string): string { return p.split(/[\\/]/).pop() || p }
+function pathDir(p: string): string {
+  const i = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'))
+  return i > 0 ? p.slice(0, i) : ''
+}
+
+// 工具段 → 单条活动行(命令/写文件/计划/标签页操作/查询)
+function toolActRow(seg: ToolSeg, key: string): ActItem {
+  const kind = classifyTool(seg.name)
+  const ok = !seg.done ? null : seg.ok !== false
+  const metaParts: string[] = []
+  const f = friendlyCmd(seg)
+  if (f.host) metaParts.push(f.host)
+  if (seg.dur != null) metaParts.push(fmtDur(seg.dur))
+  const meta = metaParts.join(' · ')
+  // 标签页打开/切换/关闭: 独立动作行,动词做标签、目标做内容
+  if (kind === 'session') {
+    const verbs: Record<string, string> = {
+      open_session: t('agent.openSession'),
+      close_tab: t('agent.closeTab'),
+      switch_tab: t('agent.switchTab'),
+    }
+    const a = parseJson(seg.args) || {}
+    const target = seg.name === 'open_session'
+      ? (str(a.session_path) || '').split(/[\\/]/).pop() || f.cmd
+      : (tabLabels.get(str(a.tab_id) || '') || shortId(str(a.tab_id)) || f.cmd)
+    return { type: 'row', key, row: {
+      kind: 'terminal', icon: TerminalOutline,
+      label: verbs[seg.name] || f.cmd,
+      detail: target,
+      meta, ok, segs: [seg],
+    } }
+  }
+  // 查询标签页: 折叠行显示查询关键词,展开列出全部匹配结果
+  if (kind === 'tabquery') {
+    const kw = str(parseJson(seg.args)?.keyword) || ''
+    return { type: 'row', key, row: {
+      kind: 'terminal', icon: SearchOutline,
+      label: t('agent.listTabs'),
+      detail: kw ? `"${kw}"` : t('agent.listTabsAll'),
+      meta, ok, segs: [seg],
+    } }
+  }
+  if (kind === 'write') {
+    const p = str(parseJson(seg.args)?.file_path) || ''
+    return { type: 'row', key, row: {
+      kind: 'write', icon: CreateOutline,
+      label: t('agent.actEdited'),
+      detail: pathBase(p) || f.cmd,
+      sub: pathDir(p) || undefined,
+      meta, ok, segs: [seg],
+    } }
+  }
+  if (kind === 'todo') {
+    const todos = parseTodos(seg)
+    const done = todos.filter(x => x.status === 'done').length
+    return { type: 'row', key, row: {
+      kind: 'todo', icon: ListOutline,
+      label: t('agent.planUpdated'),
+      detail: todos.length ? `${done}/${todos.length}` : undefined,
+      meta, ok, segs: [seg],
+    } }
+  }
+  // terminal(其余类别不会走到这里)
+  return { type: 'row', key, row: {
+    kind: 'terminal', icon: TerminalOutline,
+    label: t('agent.actRanCmd'),
+    detail: f.cmd,
+    meta, ok, segs: [seg],
+  } }
+}
+
+/** turnActs 把执行过程段组装为摘要行序列: 每回合至多一个思考行(合并全部模型 reasoning,展示真实耗时) + 连续轻量操作聚合为"探索" + 命令/写文件/错误行,动作前的叙述文本原样穿插。 */
+function turnActs(b: FlowBlock): ActItem[] {
+  const items: ActItem[] = []
+  let textBuf: string[] = []
+  let group: ToolSeg[] = []
+  let seq = 0
+  const nextKey = () => `${b.key}:a${seq++}`
+  const flushText = () => {
+    if (textBuf.length) {
+      // 叙述文本是已落盘内容,不加流式光标(光标只应出现在结论区正在输出的那段)
+      items.push({ type: 'text', key: nextKey(), html: cachedMd(textBuf.join('\n\n')) })
+      textBuf = []
+    }
+  }
+  // 思考行: 每回合一个,think 段就近插入首现位置、内容持续合并;耗时 = 首末思考段间的真实时间
+  let thinkRow: ActRow | null = null
+  let thinkKey = ''
+  let thinkStartTs: number | null = null
+  let thinkEndTs: number | null = null
+  let prevTs: number | null = null
+  const addThink = (seg: ThinkSeg) => {
+    if (!thinkRow) {
+      thinkRow = { kind: 'think', icon: SparklesOutline, label: t('agent.deepThink'), meta: '', ok: true, segs: [], thinkMd: '' }
+      thinkKey = nextKey()
+      items.push({ type: 'row', key: thinkKey, row: thinkRow })
+      thinkStartTs = prevTs ?? b.firstTs ?? null
+    }
+    thinkRow.thinkMd = thinkRow.thinkMd ? `${thinkRow.thinkMd}\n\n${seg.text}` : seg.text
+    if (seg.ts != null) thinkEndTs = seg.ts
+  }
+  const flushGroup = () => {
+    if (!group.length) return
+    let dur = 0, allDone = true, anyFail = false
+    const labels: string[] = []
+    for (const s of group) {
+      if (s.dur != null) dur += s.dur
+      if (!s.done) allDone = false
+      if (s.ok === false) anyFail = true
+      // 折叠行显示每项的实际内容(列出会话/打开 X/搜索词...),而非"N 枚举"计数
+      labels.push(friendlyCmd(s).cmd)
+    }
+    const detail = labels.length <= 3
+      ? labels.join(' · ')
+      : `${labels.slice(0, 3).join(' · ')} ${t('agent.actMore', { n: labels.length })}`
+    items.push({ type: 'row', key: nextKey(), row: {
+      kind: 'explore', icon: SearchOutline,
+      label: t('agent.actExplore'),
+      detail,
+      meta: dur > 0 ? fmtDur(dur) : '',
+      ok: !allDone ? null : (anyFail ? false : true),
+      segs: group,
+    } })
+    group = []
+  }
+  for (const seg of turnSplit(b).proc) {
+    if (seg.kind === 'think') { flushText(); flushGroup(); addThink(seg) }
+    else if (seg.kind === 'text') { group.length && flushGroup(); textBuf.push(seg.text) }
+    else if (seg.kind === 'error') {
+      flushText(); flushGroup()
+      items.push({ type: 'row', key: nextKey(), row: {
+        kind: 'error', icon: AlertCircleOutline,
+        label: t('common.error'),
+        detail: seg.text.split('\n')[0],
+        meta: '', ok: false, segs: [],
+      } })
+    } else {
+      // 空输出的读取(没有新内容可看)不渲染行,避免无信息量的"读取输出"噪音
+      if (seg.name === 'terminal_read' && !outText(seg)) { if (seg.ts != null) prevTs = seg.ts; continue }
+      // 工具段: 轻量操作(列出会话/打开脚本/通用)聚合为探索,其余独立成行
+      const k = classifyTool(seg.name)
+      if (k === 'event' || k === 'generic') {
+        textBuf.length && flushText()
+        group.push(seg)
+      } else {
+        flushText(); flushGroup()
+        items.push(toolActRow(seg, nextKey()))
+      }
+    }
+    if (seg.ts != null) prevTs = seg.ts
+  }
+  flushText(); flushGroup()
+  // 思考行收尾: 真实耗时;回合仍在思考中(末段即思考) → "思考中"+转圈
+  const tr = thinkRow as ActRow | null
+  if (tr) {
+    const live = turnMeta(b).active && b.segs[b.segs.length - 1]?.kind === 'think'
+    tr.label = live ? t('agent.thinking') : t('agent.deepThink')
+    tr.ok = live ? null : true
+    const dur = thinkStartTs != null && thinkEndTs != null ? Math.max(0, thinkEndTs - thinkStartTs) : null
+    tr.meta = !live && dur != null ? fmtDur(dur) : ''
+    if (!tr.thinkMd?.trim()) {
+      // 无实际思考内容 → 不渲染该行
+      const idx = items.findIndex(i => i.key === thinkKey)
+      if (idx >= 0) items.splice(idx, 1)
+    }
+  }
+  return items
+}
+
+// 活动行展开详情(工具段复用原 markdown 管线)
+function actDetailHtml(row: ActRow): string {
+  return cachedMd(row.segs.map(s => toolSegMd(s)).join('\n\n'))
+}
+// 思考行展开详情(无背景框灰调文本)
+function actThinkHtml(row: ActRow): string {
+  return cachedMd(row.thinkMd || '')
+}
+
+// 回合头文案: 已工作 X(执行中实时跳动)
+function workedLabel(b: FlowBlock): string {
+  const meta = turnMeta(b)
+  if (meta.durMs > 0) return t('agent.workedFor', { time: fmtDur(meta.durMs) })
+  if (meta.active) return t('agent.turnActive')
+  return t('agent.workedFor', { time: '0s' })
+}
+// 回合开始时刻(HH:MM)
+function turnTime(b: FlowBlock): string {
+  if (!b.firstTs) return ''
+  const d = new Date(b.firstTs)
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
+// 复制用户消息原文
+function copyUserMd(md: string) {
+  navigator.clipboard.writeText(md).then(
+    () => message.success(t('agent.copiedTurn')),
+    () => message.error(t('common.error')),
+  )
+}
+
+// 回到底部浮动按钮: 用户上翻(停止跟随)时出现
+const showJumpBtn = computed(() => !autoScroll.value)
+async function jumpToBottom() {
+  autoScroll.value = true
+  await scrollToBottom()
 }
 
 // 最新 AI 回合 key(默认展开)
@@ -1340,11 +1599,10 @@ refreshProfiles()
 </script>
 
 <template>
-  <div class="agent-panel">
+  <div class="agent-panel" :class="{ 'agent-light': !isDark }">
     <!-- 头部(第一排): 标题 + 状态 + 全局操作 -->
     <div class="agent-header">
       <span class="agent-title">{{ t('agent.panelTitle') }}</span>
-      <n-tag v-if="status.running" size="tiny" type="info" round>{{ t('agent.stepIndicator', { step: status.step, max: status.maxSteps }) }}</n-tag>
       <div class="agent-header-actions">
         <button class="ah-btn" @click="emit('close')"><n-icon :size="17" :component="CloseOutline" /></button>
         <n-tooltip trigger="hover" :delay="300">
@@ -1435,74 +1693,93 @@ refreshProfiles()
 
           <div class="agent-flow">
           <template v-for="block in flowBlocks" :key="block.key">
-            <!-- 用户消息: 圆形头像 + markdown(不显示昵称) -->
+            <!-- 用户消息: 右侧中性气泡,悬停显示复制 -->
             <div v-if="block.type === 'user'" class="msg user">
-              <div class="msg-head">
-                <div class="msg-avatar user-avatar">我</div>
-              </div>
               <div class="msg-body user-body md-body" v-html="cachedMd(block.md)" />
+              <div class="user-actions">
+                <button class="ua-btn" :title="t('common.copy')" @click="copyUserMd(block.md)">
+                  <n-icon :size="13" :component="CopyOutline" />
+                </button>
+              </div>
             </div>
             <!-- 系统消息(中断/上限等) -->
             <div v-else-if="block.type === 'system'" class="agent-ev system">
               <span class="agent-sys">{{ block.md }}</span>
             </div>
-            <!-- AI 回合: 工单结构 = 回合头(元信息) + 深度思考(可折叠) + 执行过程(可折叠) + 结论(常显) -->
+            <!-- AI 回合: 「已工作 X」折叠头 + 过程活动行(可折叠) + 结论(常显) + 文件更改条 + 操作行 -->
             <div v-else class="msg ai" :class="{ 'turn-open': isTurnOpen(block, block.key === latestAiKey) }">
-              <div class="msg-head">
-                <div class="msg-avatar ai-avatar">
-                  <n-icon :size="14" :component="SparklesOutline" />
-                </div>
-                <span class="msg-name">{{ aiLabel }}</span>
-                <span class="turn-meta">
-                  <span v-if="turnMeta(block).active" class="turn-chip turn-chip-active">{{ t('agent.turnActive') }}</span>
-                  <span v-if="turnMeta(block).fails" class="turn-chip turn-chip-fail">{{ t('agent.turnFailsN', { n: turnMeta(block).fails }) }}</span>
-                  <span v-else-if="!turnMeta(block).active && turnMeta(block).ops" class="turn-chip">{{ t('agent.turnDone') }}</span>
-                </span>
+              <button type="button" class="turn-head" @click="toggleTurn(block.key); touchTurn(block.key)">
+                <span v-if="turnMeta(block).active" class="turn-head-live" />
+                <span class="turn-head-time">{{ workedLabel(block) }}</span>
+                <span v-if="turnMeta(block).fails" class="turn-head-fails">{{ t('agent.turnFailsN', { n: turnMeta(block).fails }) }}</span>
+                <n-icon :size="12" :component="ChevronDownOutline" class="turn-head-arrow" :class="{ open: isTurnOpen(block, block.key === latestAiKey) }" />
+              </button>
+              <!-- 执行过程: 活动摘要行 + 行内展开详情 -->
+              <div v-show="isTurnOpen(block, block.key === latestAiKey)" class="turn-proc">
+                <template v-for="act in turnActs(block)" :key="act.key">
+                  <div v-if="act.type === 'text'" class="act-text md-body" v-html="act.html" />
+                  <template v-else>
+                    <button
+                      type="button"
+                      class="act-row" :class="[act.row.kind, { expandable: act.row.kind === 'think' || act.row.segs.length > 0, open: actOpen(act.key) }]"
+                      @click="act.row.kind === 'think' || act.row.segs.length ? toggleAct(act.key) : undefined"
+                    >
+                      <span class="act-ic"><n-icon :size="13" :component="act.row.icon" /></span>
+                      <span class="act-label">{{ act.row.label }}</span>
+                      <span v-if="act.row.detail" class="act-detail-text">{{ act.row.detail }}</span>
+                      <span v-if="act.row.sub" class="act-sub" :title="act.row.sub">{{ act.row.sub }}</span>
+                      <span v-if="act.row.meta" class="act-meta">{{ act.row.meta }}</span>
+                      <span v-if="act.row.ok === null" class="act-spin" />
+                      <span v-else-if="act.row.ok === false" class="act-status fail">✗</span>
+                      <span v-else class="act-status ok">✓</span>
+                    </button>
+                    <!-- 思考行详情: 无背景框的灰调文本,与区域文本左对齐 -->
+                    <div
+                      v-if="act.row.kind === 'think' && actOpen(act.key)"
+                      class="act-detail think-plain md-body" v-html="actThinkHtml(act.row)"
+                    />
+                    <!-- 工具行详情 -->
+                    <div
+                      v-else-if="act.row.kind !== 'think' && act.row.segs.length && actOpen(act.key)"
+                      class="act-detail md-body" v-html="actDetailHtml(act.row)"
+                    />
+                  </template>
+                </template>
               </div>
-              <!-- 深度思考折叠块: 思考中带呼吸点;内容默认折叠,展开为自适应 MD 容器 -->
-              <template v-if="turnThinking(block)">
-                <div class="think-fold-bar" @click="toggleThink(block.key)">
-                  <span class="think-spark">✻</span>
-                  <span class="think-label" :class="{ live: thinkLive(block) }">{{ thinkLive(block) ? t('agent.thinking') : t('agent.deepThink') }}</span>
-                  <span class="think-arrow" :class="{ open: isThinkOpen(block.key) }">▸</span>
-                </div>
-                <div v-show="isThinkOpen(block.key)" class="think-body md-body" v-html="cachedMd(turnThinking(block))" />
-              </template>
-              <!-- 执行过程折叠条(无过程段则不渲染) -->
-              <div
-                v-if="turnSplit(block).proc.length"
-                class="turn-fold-bar"
-                @click="toggleTurn(block.key); touchTurn(block.key)"
-              >
-                <span class="turn-fold-arrow" :class="{ open: isTurnOpen(block, block.key === latestAiKey) }">▸</span>
-                <span class="turn-fold-label">{{ t('agent.turnProcess') }}</span>
-                <span class="turn-fold-meta">{{ t('agent.turnOpsN', { n: turnMeta(block).ops }) }}<template v-if="turnMeta(block).fails"> · {{ t('agent.turnFailsN', { n: turnMeta(block).fails }) }}</template><template v-if="turnMeta(block).durMs > 0"> · {{ fmtDur(turnMeta(block).durMs) }}</template></span>
-              </div>
-              <div v-show="isTurnOpen(block, block.key === latestAiKey)" class="msg-body ai-body md-body turn-proc" v-html="aiProcHtml(block)" />
               <!-- 结论: 最后工具之后的文本,永远完整可读 -->
               <div v-if="turnSplit(block).concl.length" class="msg-body ai-body md-body turn-concl" v-html="aiConclHtml(block)" />
-              <!-- 回合底部元信息: 执行中=流光渐变+加载符;完成=复制+token 消耗;右=AI 生成标识 -->
-              <div class="turn-meta-bar" :class="{ running: turnMeta(block).active }">
-                <div class="turn-meta-left">
-                  <template v-if="turnMeta(block).active">
-                    <span class="tm-spinner" />
-                    <span class="tm-running">{{ t('agent.turnActive') }}<template v-if="turnMeta(block).durMs > 0"> · {{ fmtDur(turnMeta(block).durMs) }}</template></span>
-                  </template>
-                  <template v-else>
-                    <button class="tm-copy-btn" @click="copyTurn(block)">
-                      <n-icon :size="13" :component="CopyOutline" />
-                      <span>{{ t('common.copy') }}</span>
-                    </button>
-                    <span v-if="tokenLabel(block)" class="tm-tokens">{{ tokenLabel(block) }}</span>
-                  </template>
+              <!-- 文件更改汇总(仅展示,可展开文件列表) -->
+              <div v-if="turnFiles(block).length" class="files-bar">
+                <button type="button" class="files-bar-head" @click="toggleFiles(block.key)">
+                  <n-icon :size="12" :component="ChevronForwardOutline" class="files-bar-arrow" :class="{ open: filesOpen(block.key) }" />
+                  <span>{{ t('agent.filesChanged', { n: turnFiles(block).length }) }}</span>
+                </button>
+                <div v-show="filesOpen(block.key)" class="files-bar-list">
+                  <div v-for="fp in turnFiles(block)" :key="fp" class="files-bar-item" :title="fp">
+                    <n-icon :size="12" :component="CreateOutline" class="fb-ic" />
+                    <span class="fb-name">{{ pathBase(fp) }}</span>
+                    <span v-if="pathDir(fp)" class="fb-dir">{{ pathDir(fp) }}</span>
+                  </div>
                 </div>
-                <span class="tm-ai-badge">{{ t('agent.aiGenerated') }}</span>
+              </div>
+              <!-- 回合底部操作行: 仅完成后显示(复制+token+开始时刻);运行中的实时时长由头部呼吸点承担 -->
+              <div v-if="!turnMeta(block).active" class="turn-foot">
+                <button class="tf-btn" :title="t('common.copy')" @click="copyTurn(block)">
+                  <n-icon :size="13" :component="CopyOutline" />
+                </button>
+                <span v-if="tokenLabel(block)" class="tf-tokens">{{ tokenLabel(block) }}</span>
+                <span v-if="turnTime(block)" class="tf-time">{{ turnTime(block) }}</span>
               </div>
             </div>
           </template>
           </div>
         </div>
       </n-scrollbar>
+      <transition name="jump-fade">
+        <button v-show="showJumpBtn" class="agent-jump" :title="t('agent.jumpToBottom')" @click="jumpToBottom">
+          <n-icon :component="ChevronDownOutline" :size="16" />
+        </button>
+      </transition>
     </div>
 
     <!-- 错误提示 -->
@@ -1836,14 +2113,14 @@ refreshProfiles()
 .agent-session-actions { display: flex; flex-direction: row-reverse; align-items: center; flex-shrink: 0; }
 
 /* 历史会话弹窗 */
-.history-empty { padding: 24px; text-align: center; font-size: 12px; color: var(--text-secondary, #6e6e6e); }
+.history-empty { padding: 24px; text-align: center; font-size: 12px; color: var(--icon-color, #6e6e6e); }
 .history-item { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 4px; cursor: pointer; margin: 0 -4px; }
 .history-item:hover { background: var(--hover-bg, rgba(255, 255, 255, 0.06)); }
-.history-item.active { background: rgba(78, 201, 176, 0.12); }
+.history-item.active { background: rgba(0, 120, 212, 0.12); }
 .history-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--border-color, #555); flex-shrink: 0; }
-.history-cur { color: #4ec9b0; flex-shrink: 0; }
+.history-cur { color: var(--primary-color, #0078d4); flex-shrink: 0; }
 .history-name { font-size: 12px; color: var(--text-color, #d4d4d4); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.history-item.active .history-name { color: #4ec9b0; }
+.history-item.active .history-name { color: var(--primary-color, #0078d4); }
 
 /* 待办清单 */
 .agent-todos { margin: 6px 8px 0; border: none; border-radius: 8px; background: var(--hover-bg, rgba(255, 255, 255, 0.045)); flex-shrink: 0; overflow: hidden; }
@@ -1853,32 +2130,34 @@ refreshProfiles()
 .agent-todo-item.done { opacity: 0.45; text-decoration: line-through; }
 .agent-todo-item.in_progress .todo-dot { background: #0078d4; }
 .todo-dot { width: 6px; height: 6px; border-radius: 50%; background: #6e6e6e; flex-shrink: 0; }
-.agent-todo-item.done .todo-dot { background: #4ec9b0; }
+.agent-todo-item.done .todo-dot { background: var(--primary-color, #0078d4); }
 .todo-text { word-break: break-all; }
 
 .agent-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .agent-list { padding: 10px 12px 14px; display: flex; flex-direction: column; gap: 10px; min-height: 100%; }
 .agent-flow { display: flex; flex-direction: column; gap: 12px; }
 .agent-load-more { display: flex; justify-content: center; }
-.agent-empty { padding: 40px 16px; text-align: center; font-size: 12px; color: var(--text-secondary, #6e6e6e); line-height: 1.9; }
+.agent-empty { padding: 40px 16px; text-align: center; font-size: 12px; color: var(--icon-color, #6e6e6e); line-height: 1.9; }
 
 /* 事件 */
 .agent-ev { display: flex; flex-direction: column; }
 .agent-ev.system { align-items: center; }
-.agent-sys { font-size: 11px; color: var(--text-secondary, #6e6e6e); padding: 3px 10px; background: rgba(255, 255, 255, 0.03); border-radius: 999px; }
+.agent-sys { font-size: 11px; color: var(--icon-color, #6e6e6e); padding: 3px 10px; background: rgba(255, 255, 255, 0.03); border-radius: 999px; }
 
 /* 消息: 用户右侧品牌色气泡,AI 左侧无底板(正文直接落在画布上,TRAE Work 风格) */
-.msg { display: flex; flex-direction: column; gap: 6px; max-width: 100%; }
-.msg.user { align-items: flex-end; }
+/* 消息块: 用户右侧中性气泡 / AI 左侧全宽回合 */
+.msg { display: flex; flex-direction: column; gap: 4px; max-width: 100%; }
+.msg.user { align-items: flex-end; position: relative; }
 .msg.ai { align-items: stretch; }
-.msg-head { display: flex; align-items: center; gap: 7px; }
-.msg-avatar { width: 24px; height: 24px; border-radius: 7px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; }
-.user-avatar { background: #2563eb; color: #fff; font-size: 11px; font-weight: 600; }
-.ai-avatar { background: #7c5cff; color: #fff; }
-.msg-name { font-size: 11px; color: var(--text-secondary, #999); font-weight: 500; }
-.msg-body { border-radius: 12px; font-size: 13px; line-height: 1.7; overflow-wrap: break-word; }
-.user-body { background: #2563eb; color: #f0f7ff; padding: 9px 14px; border-radius: 12px 12px 4px 12px; width: fit-content; max-width: 86%; }
+.msg-body { font-size: 13px; line-height: 1.7; overflow-wrap: break-word; }
+.user-body { background: var(--card-bg, #252526); color: var(--text-color, #d4d4d4); padding: 9px 13px; border-radius: 14px 14px 4px 14px; border: 1px solid var(--border-color, #3c3c3c); width: fit-content; max-width: 86%; }
 .ai-body { background: transparent; color: var(--text-color, #d4d4d4); padding: 0; width: 100%; }
+
+/* 用户气泡 hover 复制(悬浮于气泡右下,不占布局) */
+.user-actions { position: absolute; top: calc(100% + 1px); right: 0; display: flex; opacity: 0; transition: opacity 0.15s ease; pointer-events: none; }
+.msg.user:hover .user-actions { opacity: 1; pointer-events: auto; }
+.ua-btn { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border: none; border-radius: 6px; background: transparent; color: var(--icon-color, #888); line-height: 1; cursor: pointer; transition: background 0.15s, color 0.15s; }
+.ua-btn:hover { background: var(--hover-bg, rgba(255, 255, 255, 0.08)); color: var(--text-color, #d4d4d4); }
 
 /* markdown 正文 */
 /* AI/用户消息正文: 强制左对齐(自适应宽度,不居中) */
@@ -1889,80 +2168,97 @@ refreshProfiles()
 .md-body :deep(h1) { font-size: 15px; } .md-body :deep(h2) { font-size: 14px; } .md-body :deep(h3), .md-body :deep(h4), .md-body :deep(h5), .md-body :deep(h6) { font-size: 13px; }
 .md-body :deep(ul), .md-body :deep(ol) { margin: 2px 0 6px; padding-left: 20px; }
 .md-body :deep(li) { margin: 2px 0; }
-.md-body :deep(code) { font-family: Consolas, 'Courier New', monospace; font-size: 11.5px; background: rgba(0, 0, 0, 0.28); padding: 1px 5px; border-radius: 3px; }
-.md-body :deep(pre) { margin: 4px 0; background: rgba(0, 0, 0, 0.35); border-radius: 6px; padding: 8px 10px; overflow-x: auto; }
+.md-body :deep(code) { font-family: Consolas, 'Cascadia Mono', 'Courier New', monospace; font-size: 11.5px; background: rgba(127, 127, 127, 0.18); padding: 1px 5px; border-radius: 4px; }
+.md-body :deep(pre) { margin: 4px 0; background: rgba(127, 127, 127, 0.14); border-radius: 8px; padding: 8px 10px; overflow-x: auto; }
 .md-body :deep(pre code) { background: transparent; padding: 0; font-size: 11.5px; line-height: 1.55; }
-.md-body :deep(blockquote) { margin: 6px 0; padding: 6px 12px; border-radius: 8px; background: rgba(167, 139, 250, 0.08); color: var(--text-secondary, #aaa); }
+.md-body :deep(blockquote) { margin: 6px 0; padding: 6px 12px; border-radius: 8px; background: rgba(127, 127, 127, 0.1); color: var(--icon-color, #aaa); }
 .md-body :deep(table) { border-collapse: collapse; margin: 4px 0; font-size: 11.5px; }
 .md-body :deep(th), .md-body :deep(td) { border: 1px solid var(--border-color, #454545); padding: 3px 8px; text-align: left; }
-.md-body :deep(th) { background: rgba(255, 255, 255, 0.06); font-weight: 600; }
-.md-body :deep(a) { color: #4a9eff; text-decoration: none; }
+.md-body :deep(th) { background: var(--hover-bg, rgba(255, 255, 255, 0.06)); font-weight: 600; }
+.md-body :deep(a) { color: var(--primary-color, #4a9eff); text-decoration: none; }
 .md-body :deep(a:hover) { text-decoration: underline; }
 .md-body :deep(hr) { border: none; border-top: 1px solid var(--border-color, #454545); margin: 8px 0; }
 .md-body :deep(strong) { font-weight: 600; }
-.user-body code { background: rgba(255, 255, 255, 0.16); }
-.user-body a { color: #bfe0ff; }
+.user-body code { background: rgba(127, 127, 127, 0.22); }
+.user-body a { color: var(--primary-color, #4a9eff); }
 
 /* 流式光标(v-html 内,需 :deep) */
-.md-body :deep(.stream-cursor) { display: inline-block; width: 7px; height: 14px; background: #a78bfa; margin-left: 2px; vertical-align: -2px; border-radius: 1.5px; animation: blink 1s step-end infinite; }
+.md-body :deep(.stream-cursor) { display: inline-block; width: 7px; height: 14px; background: var(--primary-color, #0078d4); margin-left: 2px; vertical-align: -2px; border-radius: 1.5px; animation: blink 1s step-end infinite; }
 @keyframes blink { 50% { opacity: 0; } }
 
 /* GFM 任务列表(计划清单): 复选框弱化,状态色区分 */
-.md-body :deep(input[type='checkbox']) { accent-color: #4ade80; width: 12px; height: 12px; vertical-align: -1px; margin-right: 4px; }
+.md-body :deep(input[type='checkbox']) { accent-color: #3fb950; width: 12px; height: 12px; vertical-align: -1px; margin-right: 4px; }
 
-/* 回合结构: 头部元信息 + Worked 式折叠胶囊 + 过程/结论 */
-.turn-meta { display: flex; align-items: center; gap: 5px; margin-left: 6px; flex-wrap: wrap; }
-.turn-chip { font-size: 10px; padding: 1px 8px; border-radius: 999px; background: rgba(255, 255, 255, 0.06); color: var(--text-secondary, #888); font-variant-numeric: tabular-nums; }
-.turn-chip-active { background: rgba(251, 191, 36, 0.14); color: #fbbf24; }
-.turn-chip-fail { background: rgba(248, 113, 113, 0.12); color: #f87171; }
+/* 亮色主题: 半透明黑底改半透明黑弱化,避免脏灰 */
+.agent-light .md-body :deep(code) { background: rgba(0, 0, 0, 0.055); }
+.agent-light .md-body :deep(pre) { background: rgba(0, 0, 0, 0.04); }
+.agent-light .md-body :deep(th) { background: rgba(0, 0, 0, 0.035); }
+.agent-light .user-body code { background: rgba(0, 0, 0, 0.06); }
 
-/* 深度思考折叠条 + 自适应 MD 容器(高度随内容,上限内滚动) */
-.think-fold-bar { display: flex; align-items: center; gap: 6px; width: 100%; box-sizing: border-box; margin-top: 6px; padding: 4px 10px; border-radius: 9px; cursor: pointer; user-select: none; font-size: 11.5px; color: var(--text-secondary, #999); transition: background 0.18s ease, color 0.18s ease; }
-.think-fold-bar:hover { color: var(--text-color, #ddd); background: rgba(124, 92, 255, 0.09); }
-.think-spark { color: #a78bfa; font-size: 12px; flex-shrink: 0; }
-.think-label { font-weight: 500; flex-shrink: 0; }
-/* 思考中: 标签尾部呼吸点 */
-.think-label.live::after { content: ''; display: inline-block; width: 6px; height: 6px; margin-left: 7px; border-radius: 50%; background: #a78bfa; vertical-align: middle; animation: think-breathe 1.1s ease-in-out infinite; }
-@keyframes think-breathe { 0%, 100% { opacity: 0.2; transform: scale(0.8); } 50% { opacity: 1; transform: scale(1); } }
-.think-arrow { margin-left: auto; font-size: 9px; color: #a78bfa; transition: transform 0.18s ease; }
-.think-arrow.open { transform: rotate(90deg); }
-.think-body {
-  width: 100%; box-sizing: border-box;
-  margin-top: 6px;
-  padding: 9px 12px;
-  font-size: 12px;
-  line-height: 1.6;
-  background: rgba(124, 92, 255, 0.06);
-  border: 1px solid var(--border-color, #454545);
-  border-left: 3px solid #7c5cff;
-  border-radius: 8px;
-  /* 高度自适应内容;超过上限后容器内滚动 */
-  max-height: 320px;
-  overflow-y: auto;
-}
-.turn-fold-bar { display: flex; align-items: center; gap: 8px; padding: 5px 11px; margin: 4px 0 6px; width: 100%; box-sizing: border-box; border-radius: 9px; cursor: pointer; user-select: none; font-size: 11px; color: var(--text-secondary, #999); background: rgba(255, 255, 255, 0.05); transition: background 0.18s ease, color 0.18s ease; }
-.turn-fold-bar:hover { color: var(--text-color, #ddd); background: rgba(255, 255, 255, 0.09); }
-.turn-fold-arrow { display: inline-block; font-size: 9px; transition: transform 0.18s ease; color: #a78bfa; }
-.turn-fold-arrow.open { transform: rotate(90deg); }
-.turn-fold-label { color: var(--text-secondary, #aaa); flex-shrink: 0; font-weight: 500; }
-.turn-fold-meta { font-variant-numeric: tabular-nums; opacity: 0.8; }
-.turn-proc { width: 100%; }
+/* 回合头部: 「已工作 X ˅」可折叠,运行中带呼吸点 */
+/* 回合头/活动行/文件条头均为 button: 重置原生外观,保持灰调摘要行观感 */
+.turn-head, .act-row, .files-bar-head { background: none; border: none; font-family: inherit; text-align: left; }
+.turn-head:focus, .act-row:focus, .files-bar-head:focus { outline: none; }
+.turn-head:focus-visible, .act-row:focus-visible, .files-bar-head:focus-visible { outline: 1px solid var(--border-color, #333); outline-offset: 1px; }
+.turn-head { display: inline-flex; align-items: center; gap: 6px; align-self: flex-start; padding: 3px 8px; margin-left: -8px; border-radius: 7px; cursor: pointer; user-select: none; font-size: 11.5px; color: var(--icon-color, #999); transition: background 0.15s ease, color 0.15s ease; }
+.turn-head:hover { background: var(--hover-bg, rgba(255, 255, 255, 0.06)); color: var(--text-color, #d4d4d4); }
+.turn-head-live { width: 6px; height: 6px; border-radius: 50%; background: var(--primary-color, #0078d4); flex-shrink: 0; animation: act-breathe 1.2s ease-in-out infinite; }
+@keyframes act-breathe { 0%, 100% { opacity: 0.25; transform: scale(0.8); } 50% { opacity: 1; transform: scale(1); } }
+.turn-head-time { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.turn-head-fails { color: #e45858; font-size: 11px; white-space: nowrap; }
+.turn-head-arrow { display: inline-block; opacity: 0.7; transition: transform 0.18s ease; flex-shrink: 0; }
+.turn-head-arrow.open { transform: rotate(180deg); }
+
+/* 过程活动行: 单行摘要(图标+标签+摘要+时长/状态),点击展开 markdown 详情 */
+.turn-proc { width: 100%; display: flex; flex-direction: column; margin-top: 2px; }
+.act-text { width: 100%; box-sizing: border-box; padding: 3px 0; font-size: 13px; color: var(--icon-color, #999); }
+.act-row { display: flex; align-items: center; gap: 7px; box-sizing: border-box; width: calc(100% + 6px); margin-left: -6px; min-height: 24px; padding: 2px 8px 2px 6px; border-radius: 7px; font-size: 12px; color: var(--icon-color, #999); user-select: text; transition: background 0.15s ease; }
+.act-row.expandable { cursor: pointer; }
+.act-row.expandable:hover { background: var(--hover-bg, rgba(255, 255, 255, 0.055)); }
+.act-ic { display: inline-flex; align-items: center; justify-content: center; width: 17px; height: 17px; flex-shrink: 0; color: var(--icon-color, #888); }
+.act-label { flex-shrink: 0; font-weight: 500; }
+/* 摘要占满剩余宽度并自动换行,完整展示命令/文件名,不再省略号截断 */
+.act-detail-text { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; word-break: break-word; text-align: left; }
+.act-sub { flex: 1; min-width: 0; font-size: 11px; opacity: 0.75; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.act-meta { margin-left: auto; flex-shrink: 0; font-size: 10.5px; font-variant-numeric: tabular-nums; opacity: 0.7; }
+.act-status { flex-shrink: 0; width: 14px; font-size: 11px; font-weight: 600; text-align: center; }
+.act-status.ok { color: #3fb950; }
+.act-status.fail { color: #e45858; }
+.act-spin { display: inline-block; width: 10px; height: 10px; border-radius: 50%; border: 1.5px solid var(--border-color, #454545); border-top-color: var(--primary-color, #0078d4); animation: act-rotate 0.9s linear infinite; flex-shrink: 0; }
+@keyframes act-rotate { to { transform: rotate(360deg); } }
+.act-detail { width: 100%; box-sizing: border-box; margin: 2px 0 3px 0; padding: 8px 11px; font-size: 12px; line-height: 1.6; background: var(--hover-bg, rgba(255, 255, 255, 0.04)); border: 1px solid var(--border-color, #3c3c3c); border-radius: 8px; max-height: 320px; overflow-y: auto; overflow-wrap: anywhere; }
+/* 展开详情内代码/长串自适应换行,不横向溢出 */
+.act-detail :deep(pre), .act-detail :deep(code) { white-space: pre-wrap; word-break: break-word; overflow-x: hidden; }
+/* 思考详情不带背景框: 纯灰调文本,与区域文本左对齐(不缩进),不限制高度 */
+.act-detail.think-plain { width: 100%; margin: 2px 0 3px 0; padding: 0; background: none; border: none; border-radius: 0; max-height: none; overflow-y: visible; color: var(--icon-color, #999); }
 .turn-concl { width: 100%; margin-top: 4px; }
 
-/* 回合底部元信息栏: 左=复制+token, 右=AI 生成标识(两端对齐) */
-.turn-meta-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--sidebar-shadow, #3a3a3a); }
-.turn-meta-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.tm-copy-btn { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 7px; border: none; border-radius: 5px; background: transparent; color: var(--text-secondary, #888); font-size: 11px; line-height: 1; cursor: pointer; transition: background 0.15s, color 0.15s; flex-shrink: 0; }
-.tm-copy-btn:hover { background: rgba(255, 255, 255, 0.06); color: var(--text-color, #d4d4d4); }
-.tm-tokens { font-size: 10.5px; color: var(--text-secondary, #777); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.tm-ai-badge { font-size: 10.5px; color: var(--text-secondary, #777); flex-shrink: 0; user-select: none; }
+/* 文件更改汇总条: 回合末尾灰底圆角条,可展开文件清单 */
+.files-bar { width: 100%; box-sizing: border-box; margin-top: 8px; border: 1px solid var(--border-color, #3c3c3c); border-radius: 9px; background: var(--card-bg, #252526); overflow: hidden; }
+.files-bar-head { display: flex; align-items: center; gap: 6px; padding: 6px 10px; font-size: 11.5px; font-weight: 500; color: var(--icon-color, #999); cursor: pointer; user-select: none; transition: background 0.15s ease, color 0.15s ease; }
+.files-bar-head:hover { background: var(--hover-bg, rgba(255, 255, 255, 0.05)); color: var(--text-color, #d4d4d4); }
+.files-bar-arrow { display: inline-block; opacity: 0.7; transition: transform 0.18s ease; }
+.files-bar-arrow.open { transform: rotate(90deg); }
+.files-bar-list { display: flex; flex-direction: column; padding: 2px 6px 7px; }
+.files-bar-item { display: flex; align-items: baseline; gap: 6px; min-width: 0; padding: 3px 6px 3px 8px; font-size: 12px; border-radius: 6px; }
+.files-bar-item:hover { background: var(--hover-bg, rgba(255, 255, 255, 0.05)); }
+.fb-ic { align-self: center; color: var(--icon-color, #888); flex-shrink: 0; }
+.fb-name { color: var(--text-color, #d4d4d4); flex-shrink: 0; }
+.fb-dir { color: var(--icon-color, #777); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* 执行中: 流光渐变横扫 + 2s/圈加载符 */
-.turn-meta-bar.running { border-top-color: transparent; padding: 5px 6px 4px; border-radius: 6px; background: linear-gradient(90deg, transparent 0%, rgba(78, 201, 176, 0.10) 25%, rgba(99, 140, 255, 0.13) 50%, rgba(78, 201, 176, 0.10) 75%, transparent 100%); background-size: 200% 100%; animation: tm-shimmer 2.4s linear infinite; }
-@keyframes tm-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
-.tm-spinner { display: inline-block; width: 11px; height: 11px; border-radius: 50%; border: 1.5px solid rgba(255, 255, 255, 0.14); border-top-color: #4ec9b0; animation: tm-rotate 2s linear infinite; flex-shrink: 0; }
-@keyframes tm-rotate { to { transform: rotate(360deg); } }
-.tm-running { font-size: 11px; color: var(--text-secondary, #999); white-space: nowrap; }
+/* 回合底部操作行: 复制 + token 统计 + 时间; 运行中=转圈+实时时长 */
+.turn-foot { display: flex; align-items: center; gap: 6px; width: calc(100% + 6px); margin-left: -6px; min-height: 22px; margin-top: 7px; }
+.tf-btn { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; padding: 0; margin-right: -5px; border: none; border-radius: 6px; background: transparent; color: var(--icon-color, #888); cursor: pointer; transition: background 0.15s, color 0.15s; flex-shrink: 0; }
+.tf-btn:hover { background: var(--hover-bg, rgba(255, 255, 255, 0.07)); color: var(--text-color, #d4d4d4); }
+.tf-tokens { font-size: 10.5px; color: var(--icon-color, #777); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tf-time { font-size: 10.5px; color: var(--icon-color, #777); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* 浮动回底按钮 */
+.agent-body { position: relative; }
+.agent-jump { position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%); z-index: 5; width: 32px; height: 32px; border-radius: 50%; border: 1px solid var(--border-color, #454545); background: var(--toolbar-bg, #2d2d2d); color: var(--icon-color, #aaa); display: flex; align-items: center; justify-content: center; cursor: pointer; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35); transition: background 0.15s, color 0.15s; }
+.agent-jump:hover { background: var(--hover-bg, #3c3c3c); color: var(--text-color, #d4d4d4); }
+.jump-fade-enter-active, .jump-fade-leave-active { transition: opacity 0.18s ease, transform 0.18s ease; }
+.jump-fade-enter-from, .jump-fade-leave-to { opacity: 0; transform: translateX(-50%) translateY(6px); }
 
 /* 错误栏 */
 .agent-error-bar { display: flex; align-items: center; gap: 6px; padding: 4px 10px; background: rgba(228, 88, 88, 0.12); flex-shrink: 0; }
@@ -1976,54 +2272,54 @@ refreshProfiles()
 .approval-icon { color: #e2a03f; flex-shrink: 0; margin-top: 2px; }
 .approval-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .approval-line { display: flex; align-items: center; gap: 6px; }
-.approval-summary { font-size: 12px; color: var(--text-primary, #e8e8e8); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.approval-summary { font-size: 12px; color: var(--text-color, #e8e8e8); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .approval-countdown { font-size: 11px; color: #e2a03f; margin-left: auto; flex-shrink: 0; font-variant-numeric: tabular-nums; }
-.approval-cmd { display: flex; align-items: center; gap: 4px; cursor: pointer; user-select: none; }
-.approval-cmd-text { font-size: 11px; font-family: var(--font-mono, Consolas, monospace); color: var(--text-secondary, #aaa); background: rgba(0,0,0,.25); padding: 2px 6px; border-radius: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
-.approval-chevron { color: var(--text-secondary, #888); flex-shrink: 0; transition: transform .15s; }
+.approval-cmd { display: flex; align-items: center; gap: 4px; cursor: pointer; user-select: text; }
+.approval-cmd-text { font-size: 11px; font-family: Consolas, 'Cascadia Mono', monospace; color: var(--icon-color, #aaa); background: rgba(0,0,0,.25); padding: 2px 6px; border-radius: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+.approval-chevron { color: var(--icon-color, #888); flex-shrink: 0; transition: transform .15s; }
 .approval-chevron.expanded { transform: rotate(180deg); }
 .approval-detail { display: flex; flex-direction: column; gap: 4px; }
 .approval-paths { display: flex; flex-direction: column; gap: 2px; }
-.approval-path { font-size: 11px; font-family: var(--font-mono, Consolas, monospace); color: #7ec5ff; word-break: break-all; }
-.approval-path::before { content: '▸ '; color: var(--text-secondary, #888); }
-.approval-detail-text { font-size: 11px; color: var(--text-secondary, #999); word-break: break-all; }
+.approval-path { font-size: 11px; font-family: Consolas, 'Cascadia Mono', monospace; color: var(--primary-color, #4a9eff); word-break: break-all; }
+.approval-path::before { content: '▸ '; color: var(--icon-color, #888); }
+.approval-detail-text { font-size: 11px; color: var(--icon-color, #999); word-break: break-all; }
 .approval-actions { display: flex; flex-direction: column; gap: 4px; flex-shrink: 0; }
 .pending-icon { color: #e2a03f; flex-shrink: 0; }
 .agent-pending-main { flex: 1; min-width: 0; }
 .agent-pending-text { font-size: 11px; color: var(--text-color, #d4d4d4); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.agent-pending-hint { font-size: 10px; color: var(--text-secondary, #888); margin-top: 1px; }
+.agent-pending-hint { font-size: 10px; color: var(--icon-color, #888); margin-top: 1px; }
 
 /* 组合输入框: 行内 chip 嵌入文本流(contenteditable) */
-.agent-composer { margin: 8px 10px 10px; border-radius: 10px; border: 1px solid var(--sidebar-shadow, #3c3c3c); background: var(--bg-color, #252526); flex-shrink: 0; transition: border-color .15s, box-shadow .15s; overflow: hidden; }
-.agent-composer.focused { border-color: rgba(78, 201, 176, 0.55); box-shadow: 0 0 0 2px rgba(78, 201, 176, 0.12); }
+.agent-composer { margin: 8px 10px 10px; border-radius: 10px; border: 1px solid var(--sidebar-shadow, #3c3c3c); background: var(--body-bg, #252526); flex-shrink: 0; transition: border-color .15s, box-shadow .15s; overflow: hidden; }
+.agent-composer.focused { border-color: rgba(0, 120, 212, 0.55); box-shadow: 0 0 0 2px rgba(0, 120, 212, 0.12); }
 .composer-editor { padding: 10px 10px 12px; min-height: 44px; max-height: 168px; overflow-y: auto; outline: none; color: var(--text-color, #d4d4d4); font-family: inherit; font-size: 12px; line-height: 1.55; text-align: left; word-break: break-word; white-space: pre-wrap; }
-.composer-editor:empty::before { content: attr(data-placeholder); color: var(--text-secondary, #6e6e6e); pointer-events: none; }
+.composer-editor:empty::before { content: attr(data-placeholder); color: var(--icon-color, #6e6e6e); pointer-events: none; }
 .composer-editor.disabled { pointer-events: none; opacity: 0.6; }
 
 /* 行内技能 chip */
-.composer-chip { display: inline-flex; align-items: center; gap: 3px; vertical-align: middle; background: rgba(78, 201, 176, 0.14); border: 1px solid rgba(78, 201, 176, 0.4); border-radius: 10px; padding: 0 4px 0 6px; margin: 0 2px; font-size: 11px; line-height: 18px; height: 20px; user-select: none; }
+.composer-chip { display: inline-flex; align-items: center; gap: 3px; vertical-align: middle; background: rgba(0, 120, 212, 0.14); border: 1px solid rgba(0, 120, 212, 0.4); border-radius: 10px; padding: 0 4px 0 6px; margin: 0 2px; font-size: 11px; line-height: 18px; height: 20px; user-select: none; }
 .composer-chip .chip-ic { font-size: 10px; }
-.composer-chip .chip-name { color: #4ec9b0; white-space: nowrap; }
-.composer-chip .chip-x { cursor: pointer; color: var(--text-secondary, #888); padding: 0 2px; border-radius: 50%; }
+.composer-chip .chip-name { color: var(--primary-color, #0078d4); white-space: nowrap; }
+.composer-chip .chip-x { cursor: pointer; color: var(--icon-color, #888); padding: 0 2px; border-radius: 50%; }
 .composer-chip .chip-x:hover { color: #e45858; background: rgba(228, 88, 88, 0.18); }
 .composer-toolbar { display: flex; align-items: center; gap: 4px; padding: 6px 8px 8px; flex-wrap: wrap; min-height: 42px; }
 .ct-btn { max-width: 150px; }
 /* 按钮调高: naive-ui 将 --n-height 写为内联样式,类选择器覆盖变量无效,必须显式 height */
 .composer-toolbar :deep(.n-button) { height: 30px; padding: 0 8px; }
 .composer-toolbar :deep(.ct-square) { padding: 0; min-width: 30px; }
-.ct-btn.active { color: #4ec9b0; }
+.ct-btn.active { color: var(--primary-color, #0078d4); }
 /* 行高留足下行空间: 修复 g/j/p/y 等字母底部弯钩被 overflow:hidden 裁剪 */
 .ct-btn .ct-label { font-size: 11px; line-height: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ct-spacer { flex: 1; }
 
 /* 上下文用量圆圈按钮(占位) */
-.ctx-ring-btn { display: inline-flex; align-items: center; gap: 5px; height: 30px; padding: 0 7px; border: none; border-radius: 6px; background: transparent; color: var(--text-secondary, #999); cursor: pointer; transition: background 0.15s, color 0.15s; flex-shrink: 0; }
+.ctx-ring-btn { display: inline-flex; align-items: center; gap: 5px; height: 30px; padding: 0 7px; border: none; border-radius: 6px; background: transparent; color: var(--icon-color, #999); cursor: pointer; transition: background 0.15s, color 0.15s; flex-shrink: 0; }
 .ctx-ring-btn:hover { background: rgba(255, 255, 255, 0.06); color: var(--text-color, #d4d4d4); }
 .ctx-ring { display: block; flex-shrink: 0; }
 .ctx-pct { font-size: 11px; line-height: 16px; color: inherit; font-variant-numeric: tabular-nums; }
 
 /* 发送/中断: 圆形图标按钮 */
-.send-btn { width: 28px; height: 28px; padding: 0; display: flex; align-items: center; justify-content: center; border: none; border-radius: 7px; background: #2563eb; color: #fff; cursor: pointer; transition: background 0.15s, opacity 0.15s; flex-shrink: 0; }
+.send-btn { width: 28px; height: 28px; padding: 0; display: flex; align-items: center; justify-content: center; border: none; border-radius: 7px; background: var(--primary-color, #0078d4); color: #fff; cursor: pointer; transition: background 0.15s, opacity 0.15s; flex-shrink: 0; }
 .send-btn:hover { background: #1d4fd8; }
 .send-btn:disabled { opacity: 0.4; cursor: default; }
 .send-btn.stop { background: #e45858; }
@@ -2032,44 +2328,44 @@ refreshProfiles()
 /* 供应商+模型二级选择器(全点击交互) */
 .pm-wrap { position: relative; flex-shrink: 0; }
 /* fixed 定位: 脱离 composer 的 overflow:hidden,弹层可越过输入框边界向上展开 */
-.pm-panel { position: fixed; width: 260px; display: flex; flex-direction: column; background: var(--bg-color, #252526); border: 1px solid var(--sidebar-shadow, #3c3c3c); border-radius: 8px; padding: 4px; z-index: 3000; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4); }
+.pm-panel { position: fixed; width: 260px; display: flex; flex-direction: column; background: var(--body-bg, #252526); border: 1px solid var(--sidebar-shadow, #3c3c3c); border-radius: 8px; padding: 4px; z-index: 3000; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4); }
 .pm-list { flex: 1; min-height: 0; overflow-y: auto; }
-.pm-ic { color: var(--text-secondary, #999); flex-shrink: 0; }
+.pm-ic { color: var(--icon-color, #999); flex-shrink: 0; }
 .pm-provider { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-radius: 6px; cursor: pointer; user-select: none; }
 .pm-provider + .pm-provider { margin-top: 2px; }
 .pm-provider:hover { background: rgba(255, 255, 255, 0.06); }
-.pm-provider.cur .pm-provider-name { color: #4ec9b0; }
+.pm-provider.cur .pm-provider-name { color: var(--primary-color, #0078d4); }
 .pm-provider-name { font-size: 12px; color: var(--text-color, #d4d4d4); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
-.pm-on { font-size: 10px; color: #4ec9b0; background: rgba(78, 201, 176, 0.12); padding: 1px 6px; border-radius: 8px; flex-shrink: 0; }
-.pm-fwd { color: var(--text-secondary, #777); flex-shrink: 0; }
+.pm-on { font-size: 10px; color: var(--primary-color, #0078d4); background: rgba(0, 120, 212, 0.12); padding: 1px 6px; border-radius: 8px; flex-shrink: 0; }
+.pm-fwd { color: var(--icon-color, #777); flex-shrink: 0; }
 .pm-manage { display: flex; align-items: center; gap: 6px; padding: 6px 8px; margin-top: 2px; border-top: 1px solid var(--sidebar-shadow, #2f2f2f); border-radius: 0 0 6px 6px; cursor: pointer; user-select: none; }
 .pm-manage:hover { background: rgba(255, 255, 255, 0.06); }
 .pm-manage-name { font-size: 12px; color: var(--text-color, #d4d4d4); }
 .pm-subhead { display: flex; align-items: center; gap: 4px; padding: 5px 8px; border-bottom: 1px solid var(--sidebar-shadow, #2f2f2f); margin-bottom: 2px; border-radius: 6px 6px 0 0; cursor: pointer; user-select: none; }
 .pm-subhead:hover { background: rgba(255, 255, 255, 0.04); }
-.pm-subhead-name { font-size: 11px; font-weight: 600; color: var(--text-secondary, #bbb); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pm-back { color: var(--text-secondary, #999); flex-shrink: 0; }
+.pm-subhead-name { font-size: 11px; font-weight: 600; color: var(--icon-color, #bbb); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pm-back { color: var(--icon-color, #999); flex-shrink: 0; }
 .pm-model { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 8px; border-radius: 5px; cursor: pointer; user-select: none; }
 .pm-model:hover { background: rgba(255, 255, 255, 0.06); }
-.pm-model.cur { color: #4ec9b0; }
+.pm-model.cur { color: var(--primary-color, #0078d4); }
 .pm-model-name { font-size: 11px; color: var(--text-color, #ccc); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pm-model.cur .pm-model-name { color: #4ec9b0; }
-.pm-check { font-size: 11px; color: #4ec9b0; flex-shrink: 0; }
-.pm-loading { padding: 8px 10px; font-size: 11px; color: var(--text-secondary, #6e6e6e); text-align: left; }
+.pm-model.cur .pm-model-name { color: var(--primary-color, #0078d4); }
+.pm-check { font-size: 11px; color: var(--primary-color, #0078d4); flex-shrink: 0; }
+.pm-loading { padding: 8px 10px; font-size: 11px; color: var(--icon-color, #6e6e6e); text-align: left; }
 .perm-panel { min-width: 230px; max-width: 260px; overflow-y: auto; }
 /* 面板内小按钮不受工具栏 30px 高度影响(如二级页刷新) */
 .pm-panel :deep(.n-button) { height: 22px; padding: 0 6px; }
 .pm-refresh { margin-left: auto; flex-shrink: 0; }
 /* 二级页模型分区: 自定义在前/自动获取在后 */
 .pm-section + .pm-section { margin-top: 4px; }
-.pm-section-title { font-size: 10px; color: var(--text-secondary, #777); padding: 4px 8px 2px; user-select: none; }
+.pm-section-title { font-size: 10px; color: var(--icon-color, #777); padding: 4px 8px 2px; user-select: none; }
 .pm-error { padding: 6px 8px; font-size: 10.5px; color: #e2a03f; line-height: 1.5; word-break: break-all; border-top: 1px solid var(--sidebar-shadow, #2f2f2f); margin-top: 4px; }
 /* 占位面板(加号/上下文): 置于 .pm-panel 之后覆盖宽度 */
 .ph-panel { width: 220px; padding: 10px; gap: 8px; }
 .ph-title { font-size: 12px; font-weight: 600; color: var(--text-color, #d4d4d4); }
-.ph-hint { font-size: 11px; color: var(--text-secondary, #888); line-height: 1.5; }
+.ph-hint { font-size: 11px; color: var(--icon-color, #888); line-height: 1.5; }
 .ctx-stat-row { display: flex; align-items: center; justify-content: space-between; padding: 6px 8px; background: rgba(255, 255, 255, 0.04); border-radius: 6px; }
-.ctx-stat-label { font-size: 11px; color: var(--text-secondary, #999); }
+.ctx-stat-label { font-size: 11px; color: var(--icon-color, #999); }
 .ctx-stat-val { font-size: 11px; color: var(--text-color, #d4d4d4); font-variant-numeric: tabular-nums; }
 /* 按钮态: 自动模式橙黄警示 */
 .ct-btn.warn-mode { color: #e2a03f !important; }
@@ -2077,11 +2373,11 @@ refreshProfiles()
 .perm-opt { display: grid; grid-template-columns: 16px 1fr auto; grid-template-rows: auto auto; column-gap: 8px; align-items: center; padding: 8px 10px; border-radius: 6px; cursor: pointer; user-select: none; text-align: left; }
 .perm-opt + .perm-opt { margin-top: 2px; }
 .perm-opt:hover { background: rgba(255, 255, 255, 0.06); }
-.perm-opt-ic { grid-row: 1; color: var(--text-secondary, #999); }
+.perm-opt-ic { grid-row: 1; color: var(--icon-color, #999); }
 .perm-opt-name { grid-row: 1; font-size: 12px; color: var(--text-color, #d4d4d4); font-weight: 500; }
-.perm-opt-desc { grid-column: 2 / 4; grid-row: 2; font-size: 10.5px; color: var(--text-secondary, #777); line-height: 1.5; margin-top: 2px; }
+.perm-opt-desc { grid-column: 2 / 4; grid-row: 2; font-size: 10.5px; color: var(--icon-color, #777); line-height: 1.5; margin-top: 2px; }
 .perm-opt .pm-check { grid-row: 1; }
-.perm-opt.cur .perm-opt-name, .perm-opt.cur .perm-opt-ic { color: #4ec9b0; }
+.perm-opt.cur .perm-opt-name, .perm-opt.cur .perm-opt-ic { color: var(--primary-color, #0078d4); }
 /* 自动审批: 橙黄色警示 */
 .perm-opt.warn .perm-opt-name, .perm-opt.warn .perm-opt-ic { color: #e2a03f; }
 .perm-opt.warn:hover { background: rgba(226, 160, 63, 0.1); }
@@ -2091,14 +2387,14 @@ refreshProfiles()
 /* 技能选择弹层 */
 .skill-pop { display: flex; flex-direction: column; gap: 2px; }
 .skill-pop-title { font-size: 12px; font-weight: 600; margin-bottom: 2px; }
-.skill-pop-hint { font-size: 10px; color: var(--text-secondary, #888); margin-bottom: 6px; }
+.skill-pop-hint { font-size: 10px; color: var(--icon-color, #888); margin-bottom: 6px; }
 .skill-pop-item { display: flex; gap: 8px; padding: 6px 8px; border-radius: 4px; cursor: pointer; align-items: center; border: 1px solid transparent; }
 .skill-pop-item:hover { background: var(--hover-bg, rgba(255, 255, 255, 0.06)); }
-.skill-pop-item.checked { background: rgba(78, 201, 176, 0.1); border-color: rgba(78, 201, 176, 0.35); }
-.skill-item-icon { color: var(--text-secondary, #888); flex-shrink: 0; }
-.skill-pop-item.checked .skill-item-icon { color: #4ec9b0; }
+.skill-pop-item.checked { background: rgba(0, 120, 212, 0.1); border-color: rgba(0, 120, 212, 0.35); }
+.skill-item-icon { color: var(--icon-color, #888); flex-shrink: 0; }
+.skill-pop-item.checked .skill-item-icon { color: var(--primary-color, #0078d4); }
 .skill-info { min-width: 0; flex: 1; }
 .skill-name { font-size: 12px; color: var(--text-color, #d4d4d4); }
-.skill-desc { font-size: 10px; color: var(--text-secondary, #888); margin-top: 1px; }
-.skill-on { font-size: 10px; color: #4ec9b0; flex-shrink: 0; }
+.skill-desc { font-size: 10px; color: var(--icon-color, #888); margin-top: 1px; }
+.skill-on { font-size: 10px; color: var(--primary-color, #0078d4); flex-shrink: 0; }
 </style>

@@ -15,13 +15,6 @@
     -webkit-text-size-adjust: 100%;
 }
 
-* {
-    user-select: none;
-    -webkit-user-select: none;
-    -moz-user-select: none;
-    -ms-user-select: none;
-}
-
 @font-face {
     font-family: "Inter";
     font-style: normal;
@@ -43,17 +36,6 @@ a {
 
 a:hover {
     color: #535bf2;
-}
-
-button {
-    width: 60px;
-    height: 30px;
-    line-height: 30px;
-    border-radius: 3px;
-    border: none;
-    margin: 0 0 0 20px;
-    padding: 0 8px;
-    cursor: pointer;
 }
 
 .result {

@@ -406,6 +406,7 @@ onMounted(async () => {
             tab.status = info.status === 'error' ? 'error' : 'idle'
             closeSftpPanelsOf(info.id)
             if (info.message) tab.terminal?.write(`\r\n\x1b[31m${info.message}\x1b[0m\r\n`)
+            tab.terminal?.write('\x1b[90m' + t('tabPane.enterToReconnect') + '\x1b[0m\r\n')
           }
           return
         }
