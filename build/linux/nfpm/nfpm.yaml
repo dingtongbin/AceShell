@@ -3,26 +3,26 @@
 #
 # The lines below are called `modelines`. See `:help modeline`
 
-name: "AceShell.exe"
+name: "AceShell"
 arch: ${GOARCH}
 platform: "linux"
-version: "0.1.0"
+version: "0.2.2"
 section: "default"
 priority: "extra"
 maintainer: ${GIT_COMMITTER_NAME} <${GIT_COMMITTER_EMAIL}>
-description: "A AceShell application"
-vendor: "My Company"
+description: "跨平台网络终端管理工具"
+vendor: "dingtongbin"
 homepage: "https://wails.io"
 license: "MIT"
 release: "1"
 
 contents:
-  - src: "./bin/AceShell.exe"
-    dst: "/usr/local/bin/AceShell.exe"
+  - src: "./bin/AceShell"
+    dst: "/usr/local/bin/AceShell"
   - src: "./build/appicon.png"
-    dst: "/usr/share/icons/hicolor/128x128/apps/AceShell.exe.png"
-  - src: "./build/linux/AceShell.exe.desktop"
-    dst: "/usr/share/applications/AceShell.exe.desktop"
+    dst: "/usr/share/icons/hicolor/128x128/apps/AceShell.png"
+  - src: "./build/linux/AceShell.desktop"
+    dst: "/usr/share/applications/AceShell.desktop"
 
 # Default dependencies for the GTK4 + WebKitGTK 6.0 stack (Ubuntu 24.04+ / Debian 13+)
 depends:
@@ -50,7 +50,7 @@ scripts:
   # preremove: "./build/linux/nfpm/scripts/preremove.sh"
   # postremove: "./build/linux/nfpm/scripts/postremove.sh"
 
-# If you build your app with -tags gtk3 (legacy WebKit2GTK 4.1 stack �?supported through v3.0.x, removed in v3.1),
+# If you build your app with -tags gtk3 (legacy WebKit2GTK 4.1 stack — supported through v3.0.x, removed in v3.1),
 # replace the depends/overrides above with these:
 #
 # depends:

@@ -1,10 +1,10 @@
 {
 	"fixed": {
-		"file_version": "0.2.1"
+		"file_version": "0.2.2"
 	},
 	"info": {
 		"0000": {
-			"ProductVersion": "0.2.1",
+			"ProductVersion": "0.2.2",
 			"CompanyName": "dingtongbin",
 			"FileDescription": "跨平台网络终端管理工具",
 			"LegalCopyright": "(c) 2026, dingtongbin",

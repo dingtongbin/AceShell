@@ -1,13 +1,13 @@
 [Desktop Entry]
 Version=1.0
-Name=My Product
-Comment=A AceShell application
+Name=AceShell
+Comment=跨平台网络终端管理工具
 # The Exec line includes %u to pass the URL to the application
-Exec=/usr/local/bin/AceShell.exe %u
+Exec=/usr/local/bin/AceShell %u
 Terminal=false
 Type=Application
-Icon=AceShell.exe
+Icon=AceShell
 Categories=Utility;
-StartupWMClass=AceShell.exe
+StartupWMClass=AceShell
 
  
