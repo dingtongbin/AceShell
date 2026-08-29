@@ -212,14 +212,13 @@ export function createXterm(
 // 左键选中即复制:基础交互(§16.4),独立于个性化开关。
 // 复制通道固定走后端 ClipboardService(Go 系统级剪贴板,syscall 直写,
 // 不依赖 WebView2 的 clipboard API 权限),结果经 onClipboardFeedback 反馈。
-// 监听在 document 级 mouseup:拖动可能结束在终端边界之外,元素级监听会漏掉;
-// 事件冒泡最晚触发,此时 xterm 已完成选区更新,单击(无选区)不会误复制。
 // 复制成功后保留选区(不主动清除),用户可继续观察或再次操作。
 const cleanupFns: (() => void)[] = []
 if (cfg.copyOnSelect) {
-  const onDocumentMouseUp = (e: MouseEvent) => {
-    if (e.button !== 0) return
-    if (!termEl?.contains(e.target as Node)) return
+  // 以"左键按下发生在终端内"为选中意图信号:拖动常在终端外松开
+  // (工具栏/侧栏/分屏分隔条),按松开位置过滤会漏掉这些合法选区复制
+  let mouseDownInside = false
+  const copySelectionToClipboard = () => {
     let sel = ''
     try {
       sel = terminal.getSelection()
@@ -239,9 +238,42 @@ if (cfg.copyOnSelect) {
         handlers.onClipboardFeedback?.('copy-fail', '复制失败: ' + ((err as any)?.message || err))
       })
   }
+  const onTermMouseDown = (e: MouseEvent) => {
+    if (e.button === 0) mouseDownInside = true
+  }
+  const onDocumentMouseUp = (e: MouseEvent) => {
+    const down = mouseDownInside
+    mouseDownInside = false
+    if (e.button !== 0) return
+    if (!down && !termEl?.contains(e.target as Node)) return
+    copySelectionToClipboard()
+  }
+  termEl?.addEventListener('mousedown', onTermMouseDown)
   document.addEventListener('mouseup', onDocumentMouseUp)
+  cleanupFns.push(() => termEl?.removeEventListener('mousedown', onTermMouseDown))
   cleanupFns.push(() => document.removeEventListener('mouseup', onDocumentMouseUp))
 }
+
+// 键盘复制: Ctrl+Shift+C / Ctrl+Insert 复制选区(Ctrl+C 保持 ^C 中断语义,不参与复制)。
+// 返回 false 拦截按键不送达 pty。
+terminal.attachCustomKeyEventHandler(ev => {
+  if (ev.type !== 'keydown' || !terminal.hasSelection()) return true
+  const key = ev.key.toLowerCase()
+  const isCopyChord = (ev.ctrlKey && ev.shiftKey && key === 'c') || (ev.ctrlKey && key === 'insert')
+  if (!isCopyChord) return true
+  let sel = ''
+  try {
+    sel = terminal.getSelection()
+  } catch {}
+  if (!sel) return true
+  ClipboardCopy(sel)
+    .then(err => {
+      if (err) handlers.onClipboardFeedback?.('copy-fail', '复制失败: ' + err)
+      else handlers.onClipboardFeedback?.('copy-ok', '已复制选中内容')
+    })
+    .catch(err => handlers.onClipboardFeedback?.('copy-fail', '复制失败: ' + ((err as any)?.message || err)))
+  return false
+})
 
 // 右键粘贴:无条件粘贴系统剪贴板内容(需求 §16.4,不因残留选区走复制分支)。
 // 剪贴板读取固定走后端 ClipboardService,不依赖 WebView2 的 clipboard-read 权限。

@@ -28,7 +28,6 @@ import type { FileEditorApi } from './FileEditor.vue'
 import McpSettingsPanel from './McpSettingsPanel.vue'
 import AgentChatPanel from './AgentChatPanel.vue'
 import AgentSettingsDialog from './AgentSettingsDialog.vue'
-import WelcomeDialog from './WelcomeDialog.vue'
 import { useMcpBridge } from '../composables/useMcpBridge'
 import { useAgentBridge } from '../composables/useAgentBridge'
 
@@ -62,7 +61,7 @@ const emit = defineEmits<{
 // 左侧面板两态:资源管理器 / 关闭(MCP 设置已弹窗化,不再占用侧栏)
 const leftPanel = ref<'resource' | 'none'>('resource')
 // 右侧智能体聊天面板(独立于左侧面板,独立开关,可最大化铺满)
-const showAgentPanel = ref(false)
+const showAgentPanel = ref(false) // 实际默认随配置(后端默认开启助手入口,面板默认收纳)
 const agentPanelWidth = ref(300)
 const agentMaximized = ref(false)
 // MCP 设置弹窗(独立于智能体设置弹窗)
@@ -263,9 +262,6 @@ async function loadConfig() {
     agentPanelWidth.value = cfg.view?.agentPanelWidth ?? 300
     sessionWidth.value = cfg.view?.sessionWidth ?? 220
     applyAssistant(!!(cfg.view?.showAssistant))
-    // 首次使用引导: 仅在明确读到 onboarded === false(全新安装)时弹出;
-    // 字段缺失/读取异常一律视为已引导,宁可少弹不误弹
-    showOnboarding.value = cfg.view?.onboarded === false
   } catch {}
 }
 
@@ -287,14 +283,6 @@ function applyAssistant(on: boolean) {
       pushPanelLayout()
     }
   }
-}
-
-// 首次使用引导向导显隐(WelcomeDialog)
-const showOnboarding = ref(false)
-
-function onOnboardingDone(assistant: boolean) {
-  // 向导完成后按用户选择联动界面(开启则展示智能助手入口并激活视图)
-  applyAssistant(assistant)
 }
 
 // 面板布局持久化: 前端只上报最新值,Go 侧周期写盘(1s)+窗口关闭必写,保护磁盘
@@ -1013,7 +1001,6 @@ onBeforeUnmount(() => {
       />
       <!-- 智能体设置弹窗(独立于主设置) -->
       <AgentSettingsDialog v-model:show="showAgentSettings" />
-      <WelcomeDialog v-model:show="showOnboarding" @done="onOnboardingDone" />
         </div>
       <div class="global-status-bar">
         <span v-if="globalStatus.text" class="gs-left">{{ globalStatus.text }}</span>

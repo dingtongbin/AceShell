@@ -162,7 +162,7 @@ func TestAgentConfig_WebSearchDefaultOn(t *testing.T) {
 func TestAgentConfig_LegacyFileKeepsWebSearchOn(t *testing.T) {
 	dir := withTestDataDir(t)
 	// 模拟旧版 agent.toml: 不含 webSearch 键(升级用户的真实场景)
-	legacy := "[agent]\nenabled = true\npermMode = \"manual\"\nmaxSteps = 24\n"
+	legacy := "[agent]\nenabled = true\npermMode = \"manual\"\n"
 	if err := os.WriteFile(filepath.Join(dir, "agent.toml"), []byte(legacy), 0600); err != nil {
 		t.Fatal(err)
 	}

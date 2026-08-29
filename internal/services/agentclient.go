@@ -9,6 +9,7 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -93,6 +94,7 @@ type chatUsage struct {
 // chatResult 一次完整对话返回(流式增量累积后)。
 type chatResult struct {
 	Content   string
+	Reasoning string // 思考内容(网关 reasoning_content;未返回则为空)
 	ToolCalls []agentToolCall
 	Usage     chatUsage
 }
@@ -161,6 +163,7 @@ func (c *agentClient) Chat(ctx context.Context, req chatRequest, onDelta func(de
 	defer stream.Close()
 
 	var content strings.Builder
+	var reasoning strings.Builder
 	var usage chatUsage
 	toolAcc := make(map[int64]*agentToolCall)
 	for stream.Next() {
@@ -178,6 +181,13 @@ func (c *agentClient) Chat(ctx context.Context, req chatRequest, onDelta func(de
 		}
 		for _, choice := range chunk.Choices {
 			d := choice.Delta
+			// 思考内容: 网关以 reasoning_content 扩展字段下发(SDK 未建模,经 ExtraFields 原样保留)
+			if f, ok := d.JSON.ExtraFields["reasoning_content"]; ok {
+				var piece string
+				if raw := f.Raw(); raw != "" && raw != "null" && json.Unmarshal([]byte(raw), &piece) == nil && piece != "" {
+					reasoning.WriteString(piece)
+				}
+			}
 			if d.Content != "" {
 				content.WriteString(d.Content)
 				if onDelta != nil {
@@ -227,7 +237,7 @@ func (c *agentClient) Chat(ctx context.Context, req chatRequest, onDelta func(de
 		}
 		toolCalls = append(toolCalls, *tc)
 	}
-	return &chatResult{Content: content.String(), ToolCalls: toolCalls, Usage: usage}, nil
+	return &chatResult{Content: content.String(), Reasoning: reasoning.String(), ToolCalls: toolCalls, Usage: usage}, nil
 }
 
 // ListModels 拉取可用模型 ID 列表(下拉选择用;单页即可)。

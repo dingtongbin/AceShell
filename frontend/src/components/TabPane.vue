@@ -327,6 +327,10 @@ function createTerminal(container: HTMLElement, targetId: string, protocol: stri
       mcpNotifyUserInput()
       if (isConnectedFor(targetId)) {
         sendToTab(targetId, protocol, d)
+      } else if (d === '\r') {
+        // 断开状态下按回车 = 重连(保留终端历史)
+        const tab = findTabById(targetId)
+        if (tab && (tab.status === 'idle' || tab.status === 'error')) reconnectTab(tab)
       }
     },
     onPaste: (text: string) => {
@@ -596,6 +600,7 @@ function closeSftpPanelsOf(connID: string) {
 function disconnectSession(tab: Tab) {
   disconnectTab(tab)
   tab.terminal?.write('\r\n\x1b[33m' + t('tabPane.disconnected') + '\x1b[0m\r\n')
+  tab.terminal?.write('\x1b[90m' + t('tabPane.enterToReconnect') + '\x1b[0m\r\n')
 }
 
 async function reconnectTab(tab: Tab) {
@@ -603,14 +608,13 @@ async function reconnectTab(tab: Tab) {
   if (tab.status === 'connected' || tab.status === 'connecting') {
     disconnectTab(tab)
   }
-  disposeTerminal(tab)
-  tab.terminal = null
-  tab.fitAddon = null
+  // 保留现有 xterm 实例: 屏幕历史原样保留,只重连数据通道(initTerminal 对已有实例直接复用)
+  const term = initTerminal(tab)
+  if (!term) tab.logBuffer = '' // 实例不存在(标签页未挂载)时才清空回放缓冲
   tab.status = 'connecting'
-  tab.logBuffer = ''
+  term?.write('\r\n\x1b[90m── ' + t('tabPane.reconnecting') + ' ──\x1b[0m\r\n')
 
   if (tab.protocol === 'serial') {
-    initTerminal(tab)
     await nextTick()
     try {
       await SerialConnect(tab.id, tab.host, tab.port, tab.dataBits ?? 8, tab.stopBits ?? '1', tab.parity ?? 'none')
@@ -624,7 +628,6 @@ async function reconnectTab(tab: Tab) {
 
   let meta: any
   try { meta = JSON.parse(await LoadSession(tab.sessionPath)) } catch { return }
-  const term = initTerminal(tab)
 
   await nextTick()
 

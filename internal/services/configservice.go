@@ -84,7 +84,6 @@ type AgentProfile struct {
 type AgentConfig struct {
 	Enabled           bool   `toml:"enabled" json:"enabled"`
 	PermMode          string `toml:"permMode" json:"permMode"`                 // plan / manual / auto(全局)
-	MaxSteps          int    `toml:"maxSteps" json:"maxSteps"`                 // 单轮工具调用上限
 	HistoryWindow     int    `toml:"historyWindow" json:"historyWindow"`       // 前端渲染窗口(分页大小)
 	ContextMaxEvents  int    `toml:"contextMaxEvents" json:"contextMaxEvents"` // 上下文截断上限
 	WebSearch         bool   `toml:"webSearch" json:"webSearch"`               // 联网搜索工具开关(默认开启,AI 视情况调用)
@@ -127,9 +126,6 @@ type ViewConfig struct {
 	SessionWidth int `toml:"sessionWidth" json:"sessionWidth"`
 	// 智能助手总开关(视图菜单): 关闭时隐藏顶栏 MCP 按钮/资源管理器收纳按钮/AI 面板按钮。
 	ShowAssistant bool `toml:"showAssistant" json:"showAssistant"`
-	// 首次使用引导: false = 待引导(前端弹欢迎向导);完成后置 true 不再弹。
-	// 缺失/读取异常时前端按已引导处理(宁可不弹不误弹)。
-	Onboarded bool `toml:"onboarded" json:"onboarded"`
 }
 
 type SectionState struct {
@@ -242,10 +238,8 @@ func (c *ConfigService) Init() {
 			ShowAgentPanel:  false,
 			AgentPanelWidth: 300,
 			SessionWidth:    220,
-			// 智能助手总开关默认关闭(视图菜单可开启)
-			ShowAssistant: false,
-			// 全新安装默认待引导(首次启动弹欢迎向导);完成后置 true
-			Onboarded: false,
+			// 智能助手(测试功能)默认开启,视图菜单可手动关闭
+			ShowAssistant: true,
 		},
 		Sections: SectionsConfig{
 			Session: SectionState{Expanded: true, Size: 0},
@@ -289,10 +283,9 @@ func (c *ConfigService) Init() {
 			TerminalReadMaxBytes: 32768,
 		},
 		Agent: AgentConfig{
-			Enabled:          false,
+			Enabled:          true,
 			ApiMode:          "chat",
 			PermMode:         "manual",
-			MaxSteps:         24,
 			HistoryWindow:    200,
 			ContextMaxEvents: 400,
 			WebSearch:        true, // 联网搜索默认开启
@@ -591,22 +584,6 @@ func (c *ConfigService) SetShowAssistant(show bool) string {
 	c.config.View.ShowAssistant = show
 	c.save()
 	return c.configJSONLocked()
-}
-
-// SetOnboarded 标记首次使用引导已完成并持久化(之后不再弹欢迎向导)。
-func (c *ConfigService) SetOnboarded(done bool) string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.config.View.Onboarded = done
-	c.save()
-	return c.configJSONLocked()
-}
-
-// Onboarded 返回引导完成状态(供诊断;前端经 GetConfig 读取)。
-func (c *ConfigService) IsOnboarded() bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.config.View.Onboarded
 }
 
 // SetShowHelp 设置帮助按钮与帮助弹窗可见性并持久化。
@@ -1302,18 +1279,12 @@ func (c *ConfigService) AgentProfilesGet() string {
 	return c.agentProfilesViewLocked()
 }
 
-// SetAgentBehavior 保存全局行为参数(权限模式/步数/窗口)。
-func (c *ConfigService) SetAgentBehavior(permMode string, maxSteps int, historyWindow int, contextMaxEvents int) string {
+// SetAgentBehavior 保存全局行为参数(权限模式/窗口)。
+func (c *ConfigService) SetAgentBehavior(permMode string, historyWindow int, contextMaxEvents int) string {
 	switch permMode {
 	case "plan", "manual", "auto":
 	default:
 		permMode = "manual"
-	}
-	if maxSteps < 1 {
-		maxSteps = 24
-	}
-	if maxSteps > 100 {
-		maxSteps = 100
 	}
 	if historyWindow < 20 {
 		historyWindow = 200
@@ -1324,7 +1295,6 @@ func (c *ConfigService) SetAgentBehavior(permMode string, maxSteps int, historyW
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.config.Agent.PermMode = permMode
-	c.config.Agent.MaxSteps = maxSteps
 	c.config.Agent.HistoryWindow = historyWindow
 	c.config.Agent.ContextMaxEvents = contextMaxEvents
 	c.save()

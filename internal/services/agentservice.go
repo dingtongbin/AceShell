@@ -194,7 +194,6 @@ func (s *AgentService) statusMap() map[string]any {
 	return map[string]any{
 		"enabled":          acfg.Enabled,
 		"permMode":         normalizeAgentPerm(acfg.PermMode),
-		"maxSteps":         acfg.MaxSteps,
 		"running":          running != "",
 		"sessionId":        running,
 		"step":             step,
@@ -651,7 +650,8 @@ func (s *AgentService) runTurn(ctx context.Context, sessionID string) {
 
 	// 本回合累计 token 消耗(所有 LLM 调用求和): 缓存未命中输入/缓存命中输入/输出
 	var turnIn, turnCached, turnOut int64
-	for step := 1; step <= acfg.MaxSteps; step++ {
+	// 无步数上限: 模型持续执行直到任务完成或用户中断
+	for step := 1; ; step++ {
 		s.mu.Lock()
 		s.step = step
 		s.mu.Unlock()
@@ -700,7 +700,7 @@ func (s *AgentService) runTurn(ctx context.Context, sessionID string) {
 
 		if len(res.ToolCalls) == 0 {
 			// 最终回答(Kind=message;携带回合累计 token 用量)
-			s.appendEvent(sessionID, AgentEvent{Role: "assistant", Kind: "message", Content: res.Content,
+			s.appendEvent(sessionID, AgentEvent{Role: "assistant", Kind: "message", Content: res.Content, Reasoning: res.Reasoning,
 				TokensIn: turnIn, TokensCached: turnCached, TokensOut: turnOut})
 			return
 		}
@@ -710,6 +710,7 @@ func (s *AgentService) runTurn(ctx context.Context, sessionID string) {
 			Role:      "assistant",
 			Kind:      "tool_call",
 			Content:   res.Content,
+			Reasoning: res.Reasoning,
 			ToolCalls: res.ToolCalls,
 		})
 		for _, call := range res.ToolCalls {
@@ -722,13 +723,6 @@ func (s *AgentService) runTurn(ctx context.Context, sessionID string) {
 			s.appendEvent(sessionID, ev)
 		}
 	}
-	// 步数上限终止: 并入 AI 回合(错误段),携带回合累计 token 用量
-	s.appendEvent(sessionID, AgentEvent{
-		Role:    "assistant",
-		Kind:    "error",
-		Content: fmt.Sprintf("已达单轮最大步数上限(%d 步)。可继续发送消息延续任务。", acfg.MaxSteps),
-		TokensIn: turnIn, TokensCached: turnCached, TokensOut: turnOut,
-	})
 }
 
 // agentExecuteTool 执行单个工具调用并生成结果事件。

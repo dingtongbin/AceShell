@@ -42,6 +42,7 @@ type AgentEvent struct {
 	Role       string          `json:"role"`                 // user / assistant / tool / system
 	Kind       string          `json:"kind"`                 // message / tool_call / tool_result / error
 	Content    string          `json:"content,omitempty"`    // 文本内容(消息正文/工具结果/错误信息)
+	Reasoning  string          `json:"reasoning,omitempty"`  // 模型思考内容(reasoning_content,assistant 轮次)
 	ToolName   string          `json:"toolName,omitempty"`   // 工具名(tool_result 用)
 	ToolArgs   string          `json:"toolArgs,omitempty"`   // 工具参数 JSON 预览
 	ToolCallID string          `json:"toolCallId,omitempty"` // 关联的调用 ID

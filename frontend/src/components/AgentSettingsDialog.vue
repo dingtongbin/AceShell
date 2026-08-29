@@ -234,7 +234,6 @@ async function handleTest() {
 const behavior = ref({
   enabled: false,
   permMode: 'manual',
-  maxSteps: 24,
   historyWindow: 200,
   contextMaxEvents: 400,
 })
@@ -383,7 +382,6 @@ watch(show, async open => {
       behavior.value = {
         enabled: !!cfg.enabled,
         permMode: String(cfg.permMode || 'manual'),
-        maxSteps: Number(cfg.maxSteps) || 24,
         historyWindow: Number(cfg.historyWindow) || 200,
         contextMaxEvents: Number(cfg.contextMaxEvents) || 400,
       }
@@ -447,7 +445,7 @@ async function handleSave() {
     if (errProfiles) return
     // 2. 行为参数
     const rawBehavior = await SetAgentBehavior(
-      behavior.value.permMode, behavior.value.maxSteps,
+      behavior.value.permMode,
       behavior.value.historyWindow, behavior.value.contextMaxEvents,
     )
     const errBehavior = rawBehavior ? JSON.parse(rawBehavior) : null
@@ -568,13 +566,6 @@ async function handleSave() {
                 : t('agentSettings.densDetailedDesc') }}
             </div>
             <div class="cfg-row" style="margin-top: 14px">
-              <div class="cfg-main">
-                <div class="cfg-label">{{ t('agentSettings.maxSteps') }}</div>
-                <div class="cfg-desc">{{ t('agentSettings.maxStepsDesc') }}</div>
-              </div>
-              <n-input-number v-model:value="behavior.maxSteps" size="small" :min="1" :max="100" style="width: 110px; flex-shrink: 0" />
-            </div>
-            <div class="cfg-row">
               <div class="cfg-main">
                 <div class="cfg-label">{{ t('agentSettings.historyWindow') }}</div>
                 <div class="cfg-desc">{{ t('agentSettings.historyWindowDesc') }}</div>

@@ -13,8 +13,6 @@ import {
   MoonOutline,
   SunnyOutline,
   FolderOpenOutline,
-  InformationCircleOutline,
-  BookOutline,
   CheckmarkOutline,
   CopyOutline,
   ClipboardOutline,
@@ -77,7 +75,7 @@ const viewCfg = reactive({
   cursorBlink: true,
   autoSave: true,
   closeNoConfirm: false,
-  showAssistant: false,
+  showAssistant: true,
 })
 
 async function loadViewCfg() {
@@ -92,7 +90,7 @@ async function loadViewCfg() {
     viewCfg.cursorBlink = cfg.terminal?.cursorBlink ?? true
     viewCfg.autoSave = cfg.fileEditing?.autoSave ?? true
     viewCfg.closeNoConfirm = cfg.view?.closeConfirm === false
-    viewCfg.showAssistant = cfg.view?.showAssistant ?? false
+    viewCfg.showAssistant = cfg.view?.showAssistant ?? true
   } catch {}
 }
 
@@ -241,12 +239,10 @@ const menus = computed<MenuEntry[]>(() => [
     ],
   },
   {
+    // 帮助: 顶级按钮直接打开帮助窗口,无下拉项(items 置空,模板按 key 特判)
     key: 'help',
     label: t('mainMenu.help'),
-    items: [
-      { key: 'about', label: t('mainMenu.about'), icon: InformationCircleOutline },
-      { key: 'view-docs', label: t('mainMenu.viewDocs'), icon: BookOutline },
-    ],
+    items: [],
   },
 ])
 
@@ -304,6 +300,12 @@ function onMenuEnter(key: string) {
   if (menuOpen.value && activeMenu.value !== key) activeMenu.value = key
 }
 
+// 帮助顶级按钮: 直接打开帮助窗口,并收起可能展开的下拉
+function openHelpDirect() {
+  activeMenu.value = null
+  emit('about')
+}
+
 function closeMenu() {
   activeMenu.value = null
 }
@@ -341,8 +343,6 @@ function handleSelect(key: string) {
     case 'v-assistant':
       toggleViewItem(key)
       break
-    case 'about': emit('about'); break
-    case 'view-docs': emit('view-docs'); break
     default: return
   }
   closeMenu()
@@ -437,28 +437,36 @@ onBeforeUnmount(() => {
     <!-- 左段:菜单区(不可拖拽) -->
     <div class="tmb-menus">
       <div v-for="m in menus" :key="m.key" class="tmb-menu-entry">
+        <!-- 帮助: 无下拉,点击直接弹帮助窗口 -->
         <div
+          v-if="m.key === 'help'"
           class="tmb-menu-btn"
-          :class="{ active: activeMenu === m.key }"
-          @click.stop="toggleMenu(m.key)"
-          @mouseenter="onMenuEnter(m.key)"
+          @click.stop="openHelpDirect"
         >{{ m.label }}</div>
-        <!-- 下拉面板:锚定在按钮正下方 -->
-        <div v-if="menuOpen && activeMenu === m.key" class="tmb-dropdown">
+        <template v-else>
           <div
-            v-for="it in m.items"
-            :key="it.key"
-            class="tmb-menu-item"
-            :class="{ divider: it.divider, disabled: it.disabled }"
-            @click="it.divider || it.disabled ? null : handleSelect(it.key)"
-          >
-            <template v-if="!it.divider">
-              <span class="tmi-icon"><n-icon v-if="it.icon" :size="15" :component="it.icon" /></span>
-              <span class="tmi-label">{{ it.label }}</span>
-              <span class="tmi-check"><n-icon v-if="it.checked" :size="14" :component="CheckmarkOutline" /></span>
-            </template>
+            class="tmb-menu-btn"
+            :class="{ active: activeMenu === m.key }"
+            @click.stop="toggleMenu(m.key)"
+            @mouseenter="onMenuEnter(m.key)"
+          >{{ m.label }}</div>
+          <!-- 下拉面板:锚定在按钮正下方 -->
+          <div v-if="menuOpen && activeMenu === m.key" class="tmb-dropdown">
+            <div
+              v-for="it in m.items"
+              :key="it.key"
+              class="tmb-menu-item"
+              :class="{ divider: it.divider, disabled: it.disabled }"
+              @click="it.divider || it.disabled ? null : handleSelect(it.key)"
+            >
+              <template v-if="!it.divider">
+                <span class="tmi-icon"><n-icon v-if="it.icon" :size="15" :component="it.icon" /></span>
+                <span class="tmi-label">{{ it.label }}</span>
+                <span class="tmi-check"><n-icon v-if="it.checked" :size="14" :component="CheckmarkOutline" /></span>
+              </template>
+            </div>
           </div>
-        </div>
+        </template>
       </div>
     </div>
 
@@ -480,7 +488,7 @@ onBeforeUnmount(() => {
         <template #trigger>
           <button class="tmb-panel-btn" :class="{ active: showSession }" @click="emit('toggle-session')">
             <!-- VSCode layout-sidebar-left:圆角方框 + 左侧实心竖条(主侧边栏) -->
-            <svg width="24" height="24" viewBox="0 0 16 16">
+            <svg width="16" height="16" viewBox="0 0 16 16">
               <rect x="0.75" y="0.75" width="14.5" height="14.5" rx="2.25" fill="none" stroke="currentColor" stroke-width="1.1" />
               <rect x="2.7" y="2.7" width="3.4" height="10.6" rx="0.8" fill="currentColor" />
             </svg>
@@ -492,7 +500,7 @@ onBeforeUnmount(() => {
         <template #trigger>
           <button class="tmb-panel-btn" :class="{ active: showAgent }" @click="emit('toggle-agent')">
             <!-- VSCode layout-sidebar-right:圆角方框 + 右侧实心竖条(次侧边栏,AI 聊天) -->
-            <svg width="24" height="24" viewBox="0 0 16 16">
+            <svg width="16" height="16" viewBox="0 0 16 16">
               <rect x="0.75" y="0.75" width="14.5" height="14.5" rx="2.25" fill="none" stroke="currentColor" stroke-width="1.1" />
               <rect x="9.9" y="2.7" width="3.4" height="10.6" rx="0.8" fill="currentColor" />
             </svg>
@@ -755,6 +763,8 @@ onBeforeUnmount(() => {
 
 .wc-btn {
   width: 44px;
+  height: 30px;
+  align-self: center;
   display: flex;
   align-items: center;
   justify-content: center;
