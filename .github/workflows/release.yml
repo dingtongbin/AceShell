@@ -137,5 +137,4 @@ jobs:
             artifacts/AceShell-windows-amd64.exe
             artifacts/AceShell-linux-amd64
             artifacts/AceShell-macos-arm64
-            artifacts/AceShell-windows-amd64.msix
           generate_release_notes: true
