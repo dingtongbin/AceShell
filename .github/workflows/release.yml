@@ -83,7 +83,9 @@ jobs:
         run: |
           $version = "${{ github.event.inputs.version }}"
           if (-not $version) { $version = $env:GITHUB_REF_NAME -replace '^v', '' }
-          if (-not $version) { $version = '0.1.0' }
+          # 兜底: 从 version.go(唯一版本源)解析
+          if (-not $version) { $version = ([regex]::Match((Get-Content internal/services/version.go), 'AppVersion = "([^"]+)"')).Groups[1].Value }
+          if (-not $version) { throw "无法确定 MSIX 版本号" }
           Write-Host "MSIX version: $version"
           powershell -NoProfile -ExecutionPolicy Bypass -File build\windows\msix\build-msix.ps1 -Version $version
 

@@ -79,7 +79,11 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          powershell -NoProfile -ExecutionPolicy Bypass -File build\windows\msix\build-msix.ps1 -Version 0.1.0
+          # 版本唯一来源: internal/services/version.go 的 AppVersion
+          $version = ([regex]::Match((Get-Content internal/services/version.go), 'AppVersion = "([^"]+)"')).Groups[1].Value
+          if (-not $version) { throw "无法从 version.go 解析版本号" }
+          Write-Host "MSIX version: $version"
+          powershell -NoProfile -ExecutionPolicy Bypass -File build\windows\msix\build-msix.ps1 -Version $version
 
       - name: Stage MSIX (模拟 release)
         if: runner.os == 'Windows'
