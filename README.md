@@ -18,6 +18,7 @@ AceShell 是一个跨平台（Windows / macOS / Linux）网络终端管理工具
 - **外观**：深色 / 浅色 / 跟随系统主题、面板透明度、壁纸、终端个性化（字体/颜色/光标/背景）
 - **状态栏**：协议与登录用户、地址端口、文件类型、编码、光标行列
 
+
 ## 存储目录
 
 应用数据存储在**平台应用数据目录**（不依赖可执行文件位置）：
@@ -56,19 +57,12 @@ wails3 dev
 打标签自动触发 GitHub Actions 构建三平台产物并创建 Release：
 
 ```bash
-git tag v0.2.0
+git tag v0.2.3
 git push --tags
 ```
 
 CI 产物：Windows / Linux / macOS 二进制 + 未签名 MSIX（`AceShell-<版本>.msix`，供微软商店提交，商店侧自动重签）。
 
-本地生成 MSIX：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File build\windows\msix\build-msix.ps1 -Version 0.2.0
-```
-
-> 上架微软商店前，需将 `build/windows/msix/app_manifest.xml` 中的 `Publisher` 与包名替换为商店后台分配的标识。
 
 ## 测试
 

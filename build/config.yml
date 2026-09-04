@@ -11,7 +11,7 @@ info:
   description: "跨平台网络终端管理工具" # The application description
   copyright: "(c) 2026, dingtongbin" # Copyright text
   comments: "AceShell - SSH/Telnet/串口/SFTP/RDP 一体化终端管理工具" # Comments
-  version: "0.2.2" # The application version
+  version: "0.2.3" # The application version
   # cfBundleIconName: "appicon" # The macOS icon name in Assets.car icon bundles (optional)
   #                               # Should match the name of your .icon file without the extension
   #                               # If not set and Assets.car exists, defaults to "appicon"
