@@ -6,10 +6,13 @@ import { DesktopOutline } from '@vicons/ionicons5'
 import { GetConfig } from '../../bindings/changeme/internal/services/configservice.js'
 import { GetRdpConnection } from '../../bindings/changeme/internal/services/rdpservice.js'
 import { ReleaseRdpConnection } from '../../bindings/changeme/internal/services/rdpservice.js'
+import { GetVncConnection } from '../../bindings/changeme/internal/services/vncservice.js'
+import { ReleaseVncConnection } from '../../bindings/changeme/internal/services/vncservice.js'
 import { applyTermCfg, normalizeTermConfig, resetTermComposition, type TermConfig } from '../composables/useXterm'
 import TabPane from './TabPane.vue'
 import SplitPane from './SplitPane.vue'
 import RemoteDesktopTab from './RemoteDesktopTab.vue'
+import VncTab from './VncTab.vue'
 import type { LayoutNode, SplitNode } from './tabTypes'
 import type { Pane, PaneCtx, TabPaneApi, SplitDir, Tab, ActiveTabState } from './tabTypes'
 import { useI18n } from 'vue-i18n'
@@ -105,6 +108,44 @@ async function openRdp(meta: { sessionPath: string; name: string; host: string; 
     // 无法用同一 token 重连 WS)。
     onClose: async () => {
       if (conn.authToken) ReleaseRdpConnection(conn.authToken).catch(() => {})
+      return true
+    },
+  })
+}
+
+// 打开 VNC 图形会话:同一 (host:port) 只允许一个标签页,已存在则定位激活到其所在 pane。
+// 未打开时获取桥接连接信息(生成一次性 token),在焦点 pane 新建 kind='vnc' 组件标签页。
+async function openVnc(meta: { sessionPath: string; name: string; host: string; port: number }) {
+  const key = `${meta.host}:${meta.port}`
+  for (const p of panes.value) {
+    const t = p.tabs.find(tab => tab.kind === 'vnc' && (tab.componentProps as any)?.vncKey === key)
+    if (t) {
+      setFocus(p.id)
+      paneApis.get(p.id)?.activateTab(t.id)
+      return
+    }
+  }
+  let conn: any
+  try {
+    conn = JSON.parse(await GetVncConnection(meta.sessionPath))
+  } catch (e: any) {
+    message.error(t('tabManager.getVncConnFailed', { err: e?.message || e }))
+    return
+  }
+  focusApi()?.openComponentTab({
+    title: `VNC - ${meta.name || conn.host}`,
+    kind: 'vnc',
+    component: VncTab,
+    props: { conn, vncKey: key },
+    icon: DesktopOutline,
+    color: '#4ec9b0',
+    status: 'connecting',
+    sessionPath: meta.sessionPath,
+    protocol: 'vnc',
+    host: meta.host,
+    port: meta.port,
+    onClose: async () => {
+      if (conn.authToken) ReleaseVncConnection(conn.authToken).catch(() => {})
       return true
     },
   })
@@ -355,6 +396,7 @@ provide<PaneCtx>('pane-ctx', {
     },
     onFocus: (paneId) => setFocus(paneId),
     openRdp,
+    openVnc,
     onStatus,
     onActiveTabState,
     registerPane: (paneId, api) => {
@@ -427,7 +469,7 @@ onBeforeUnmount(() => {
   }
 })
 
-defineExpose({ openSession, openSerial, openSftp, openScriptDialog, exportLog, clearScrollback, clearScreen, getActiveSessionPath, openComponentTab, updateComponentTab, closeTabById, activateFileTab, reportCursor, copySelection, pasteClipboard, openRdp, listTabs, mcpTerminalSend, mcpCloseTab })
+defineExpose({ openSession, openSerial, openSftp, openScriptDialog, exportLog, clearScrollback, clearScreen, getActiveSessionPath, openComponentTab, updateComponentTab, closeTabById, activateFileTab, reportCursor, copySelection, pasteClipboard, openRdp, openVnc, listTabs, mcpTerminalSend, mcpCloseTab })
 </script>
 
 <template>

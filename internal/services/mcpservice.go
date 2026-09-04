@@ -803,7 +803,7 @@ func (s *McpService) toolOpenSession(ctx context.Context, opts execOpts, session
 		return "", err
 	}
 	switch meta["protocol"] {
-	case "rdp", "http", "sftp":
+	case "rdp", "vnc", "http", "sftp":
 		return "", fmt.Errorf("MCP 仅支持终端类会话(SSH/Telnet/串口),不支持 %v", meta["protocol"])
 	}
 	return s.execRouted(ctx, opts.prio, "open_session", map[string]any{
