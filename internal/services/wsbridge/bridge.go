@@ -61,6 +61,9 @@ func handleBridge(w http.ResponseWriter, r *http.Request, tokenCheck func(string
 	if err != nil {
 		return
 	}
+	// 普通透传(VNC 等):客户端上行主要是输入事件与剪贴板文本,
+	// 取消默认 32KB 读取上限,避免大段粘贴文本被拒。
+	ws.SetReadLimit(-1)
 	tcp, err := net.DialTimeout("tcp", boundTarget, 10*time.Second)
 	if err != nil {
 		_ = ws.Close(websocket.StatusInternalError, "dial failed")

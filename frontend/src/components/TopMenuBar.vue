@@ -609,6 +609,11 @@ onBeforeUnmount(() => {
   text-align: left;
 }
 
+/* 浅色模式:柔化下拉面板阴影 */
+html:not(.dark) .tmb-dropdown {
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15);
+}
+
 @keyframes tmb-drop {
   from { opacity: 0; transform: translateY(-4px); }
   to { opacity: 1; transform: translateY(0); }
@@ -630,7 +635,7 @@ onBeforeUnmount(() => {
 }
 
 .tmb-menu-item:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--hover-bg, rgba(255, 255, 255, 0.08));
 }
 
 .tmb-menu-item.disabled {

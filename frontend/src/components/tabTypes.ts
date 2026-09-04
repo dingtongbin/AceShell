@@ -5,7 +5,8 @@ import type { FitAddon } from '@xterm/addon-fit'
 export interface Tab {
   id: string
   title: string
-  kind: 'terminal' | 'component'
+  // terminal=xterm 终端;component=通用组件(文件编辑/SFTP 等);vnc=noVNC 图形会话
+  kind: 'terminal' | 'component' | 'vnc'
   sessionPath: string
   protocol: string
   host: string
@@ -53,6 +54,13 @@ export interface ComponentTabOptions {
   status?: 'idle' | 'connecting' | 'connected' | 'error'
   dirty?: boolean
   onClose?: () => boolean | Promise<boolean>
+  // 标签页类型:默认 component;vnc 为 VNC 图形会话专用类型
+  kind?: 'component' | 'vnc'
+  // 会话归属(VNC 图形会话携带,供状态栏/会话定位使用)
+  sessionPath?: string
+  protocol?: string
+  host?: string
+  port?: number
 }
 
 export interface ComponentTabPatch {
@@ -114,6 +122,7 @@ export interface PaneActions {
   onSplitAt: (tabId: string, targetPaneId: string, dir: SplitDir) => void
   onFocus: (paneId: string) => void
   openRdp: (meta: { sessionPath: string; name: string; host: string; port: number }) => void
+  openVnc: (meta: { sessionPath: string; name: string; host: string; port: number }) => void
   onStatus: (paneId: string, text: string, row: number, col: number, encoding: string, hasTab: boolean) => void
   onActiveTabState: (paneId: string, state: ActiveTabState) => void
   registerPane: (paneId: string, api: TabPaneApi) => () => void

@@ -104,7 +104,7 @@ const newFolderParent = ref('')
 // Session dialog
 const showSessionDialog = ref(false)
 const isEditMode = ref(false)
-const selectedProtocol = ref<'ssh' | 'sftp' | 'telnet' | 'serial' | 'http' | 'rdp' | 'shell'>('ssh')
+const selectedProtocol = ref<'ssh' | 'sftp' | 'telnet' | 'serial' | 'http' | 'rdp' | 'vnc' | 'shell'>('ssh')
 
 // Common fields
 const sessName = ref('')
@@ -154,6 +154,12 @@ const rdpUser = ref('')
 const rdpPassword = ref('')
 const rdpTestServers = ref<{ label: string; value: string }[]>([])
 const rdpTestSel = ref('')
+
+// VNC
+const vncHost = ref('')
+const vncPort = ref(5900)
+const vncUser = ref('')
+const vncPassword = ref('')
 
 async function loadRdpTestServers() {
   try {
@@ -437,6 +443,12 @@ function validateRdp(): string | null {
   return null
 }
 
+function validateVnc(): string | null {
+  if (!vncHost.value.trim()) return t('shellPanel.vncHostRequired')
+  if (vncPort.value < 1 || vncPort.value > 65535) return t('shellPanel.vncPortRange')
+  return null
+}
+
 function validateShell(): string | null {
   return null
 }
@@ -452,6 +464,7 @@ function validateCurrent(): string | null {
     case 'serial': return validateSerial()
     case 'http': return validateHttp()
     case 'rdp': return validateRdp()
+    case 'vnc': return validateVnc()
     case 'shell': return validateShell()
     default: return t('shellPanel.unknownProtocol')
   }
@@ -540,6 +553,10 @@ function buildRdpToml(name: string): string {
   return `name = "${escapeToml(name)}"\nhost = "${escapeToml(rdpHost.value.trim())}"\nport = ${rdpPort.value}\nusername = "${escapeToml(rdpUser.value)}"\npassword = "${escapeToml(rdpPassword.value)}"\nprotocol = "rdp"\nnotes = ""\ncreated = "${escapeToml(sessCreated.value || nowStr())}"\nupdated = "${escapeToml(nowStr())}"\n`
 }
 
+function buildVncToml(name: string): string {
+  return `name = "${escapeToml(name)}"\nhost = "${escapeToml(vncHost.value.trim())}"\nport = ${vncPort.value}\nusername = "${escapeToml(vncUser.value)}"\npassword = "${escapeToml(vncPassword.value)}"\nprotocol = "vnc"\nnotes = ""\ncreated = "${escapeToml(sessCreated.value || nowStr())}"\nupdated = "${escapeToml(nowStr())}"\n`
+}
+
 function buildShellToml(name: string): string {
   const shellRef = escapeToml(localShell.value)
   return `name = "${escapeToml(name)}"\nhost = "${shellRef}"\nport = 0\nprotocol = "shell"\nnotes = ""\ncreated = "${escapeToml(sessCreated.value || nowStr())}"\nupdated = "${escapeToml(nowStr())}"\n`
@@ -553,6 +570,7 @@ function buildToml(name: string): string {
     case 'serial': return buildSerialToml(name)
     case 'http': return buildHttpToml(name)
     case 'rdp': return buildRdpToml(name)
+    case 'vnc': return buildVncToml(name)
     case 'shell': return buildShellToml(name)
     default: return ''
   }
@@ -669,13 +687,14 @@ function resetTelnetFields() { telnetHost.value = ''; telnetPort.value = 23; tel
 function resetSerialFields() { serialDevice.value = ''; serialBaud.value = 9600; serialDataBits.value = 8; serialStopBits.value = '1'; serialParity.value = 'none' }
 function resetHttpFields() { httpUrl.value = ''; httpBrowser.value = '' }
 function resetRdpFields() { rdpHost.value = ''; rdpPort.value = 3389; rdpUser.value = ''; rdpPassword.value = ''; rdpTestSel.value = '' }
+function resetVncFields() { vncHost.value = ''; vncPort.value = 5900; vncUser.value = ''; vncPassword.value = '' }
 function resetShellFields() { localShell.value = ''; localShells.value = [] }
 function resetAllFields() {
   sessName.value = ''; sessCreated.value = ''; sessUpdated.value = ''; sessFolder.value = ''; sessPath.value = ''
-  resetSshFields(); resetTelnetFields(); resetSerialFields(); resetHttpFields(); resetRdpFields(); resetShellFields()
+  resetSshFields(); resetTelnetFields(); resetSerialFields(); resetHttpFields(); resetRdpFields(); resetVncFields(); resetShellFields()
 }
 
-function openNewSession(folderPath: string, protocol: 'ssh' | 'sftp' | 'telnet' | 'serial' | 'http' | 'rdp' | 'shell' = 'ssh') {
+function openNewSession(folderPath: string, protocol: 'ssh' | 'sftp' | 'telnet' | 'serial' | 'http' | 'rdp' | 'vnc' | 'shell' = 'ssh') {
   resetAllFields()
   selectedProtocol.value = protocol
   sessFolder.value = folderPath
@@ -708,7 +727,7 @@ async function openEditSession(path: string) {
     sessFolder.value = path.substring(0, path.lastIndexOf('/'))
     sessCreated.value = meta.created || ''
     sessUpdated.value = meta.updated || ''
-    selectedProtocol.value = meta.protocol === 'serial' ? 'serial' : (meta.protocol === 'telnet' ? 'telnet' : (meta.protocol === 'sftp' ? 'sftp' : (meta.protocol === 'http' ? 'http' : (meta.protocol === 'rdp' ? 'rdp' : (meta.protocol === 'shell' ? 'shell' : 'ssh')))))
+    selectedProtocol.value = meta.protocol === 'serial' ? 'serial' : (meta.protocol === 'telnet' ? 'telnet' : (meta.protocol === 'sftp' ? 'sftp' : (meta.protocol === 'http' ? 'http' : (meta.protocol === 'rdp' ? 'rdp' : (meta.protocol === 'vnc' ? 'vnc' : (meta.protocol === 'shell' ? 'shell' : 'ssh'))))))
     switch (selectedProtocol.value) {
       case 'ssh':
       case 'sftp':
@@ -744,6 +763,12 @@ async function openEditSession(path: string) {
         rdpUser.value = meta.username || ''
         rdpPassword.value = meta.password || ''
         loadRdpTestServers()
+        break
+      case 'vnc':
+        vncHost.value = meta.host || ''
+        vncPort.value = meta.port || 5900
+        vncUser.value = meta.username || ''
+        vncPassword.value = meta.password || ''
         break
       case 'shell':
         localShell.value = meta.host || ''
@@ -1045,6 +1070,10 @@ onBeforeUnmount(() => {
               <span class="type-name">RDP</span>
               <span class="type-desc">{{ t('shellPanel.rdpDesc') }}</span>
             </div>
+            <div class="type-item" :class="{ active: selectedProtocol === 'vnc' }" @click="selectedProtocol = 'vnc'">
+              <span class="type-name">VNC</span>
+              <span class="type-desc">{{ t('shellPanel.vncDesc') }}</span>
+            </div>
             <div class="type-item" :class="{ active: selectedProtocol === 'shell' }" @click="selectedProtocol = 'shell'; refreshShells()">
               <span class="type-name">{{ t('shellPanel.shellType') }}</span>
               <span class="type-desc">{{ t('shellPanel.shellDesc') }}</span>
@@ -1119,6 +1148,13 @@ onBeforeUnmount(() => {
                 <label class="form-label">{{ t('shellPanel.testServer') }}</label>
                 <n-select v-model:value="rdpTestSel" :options="rdpTestServers" :placeholder="t('shellPanel.testServerPlaceholder')" filterable clearable style="width: 100%" @update:value="applyRdpTestServer" />
               </div>
+            </template>
+            <template v-else-if="selectedProtocol === 'vnc'">
+              <div class="form-group"><label class="form-label">{{ t('shellPanel.ipAddress') }} <span class="required">*</span></label><n-input v-model:value="vncHost" :placeholder="t('shellPanel.ipOrDomain')" /></div>
+              <div class="form-group"><label class="form-label">{{ t('common.port') }}</label><n-input-number v-model:value="vncPort" :min="1" :max="65535" style="width: 100%" /></div>
+              <div class="form-group"><label class="form-label">{{ t('common.username') }}</label><n-input v-model:value="vncUser" :placeholder="t('shellPanel.vncUserPlaceholder')" /></div>
+              <div class="form-group"><label class="form-label">{{ t('common.password') }}</label><n-input v-model:value="vncPassword" type="password" show-password-on="click" :placeholder="t('shellPanel.loginPassword')" /></div>
+              <div class="http-hint">{{ t('shellPanel.vncHint') }}</div>
             </template>
             <template v-else-if="selectedProtocol === 'shell'">
               <div class="form-group">

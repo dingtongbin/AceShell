@@ -54,7 +54,7 @@ const pane = props.pane
 const paneInstanceId = ++paneInstanceSeq
 const ctx = inject<PaneCtx>('pane-ctx')
 const actions: PaneActions = ctx?.actions ?? {
-  onSplit: () => {}, onMoveTab: () => {}, onSplitAt: () => {}, onFocus: () => {}, onStatus: () => {}, onActiveTabState: () => {}, registerPane: () => () => {}, paneExists: () => true, openRdp: () => {},
+  onSplit: () => {}, onMoveTab: () => {}, onSplitAt: () => {}, onFocus: () => {}, onStatus: () => {}, onActiveTabState: () => {}, registerPane: () => () => {}, paneExists: () => true, openRdp: () => {}, openVnc: () => {},
 }
 
 const message = useMessage()
@@ -189,6 +189,11 @@ async function openSession(sessionPath: string): Promise<string> {
     actions.openRdp({ sessionPath, name: meta.name || meta.host, host: meta.host, port: meta.port })
     return ''
   }
+  // VNC 会话:图形标签页(kind='vnc'),按 (host:port) 去重,已存在则定位激活
+  if ((meta.protocol || 'telnet') === 'vnc') {
+    actions.openVnc({ sessionPath, name: meta.name || meta.host, host: meta.host, port: meta.port })
+    return ''
+  }
   const tabId = sessionPath + '@' + Date.now() + '-' + Math.random().toString(36).slice(2, 8)
   const tabData: Tab = { id: tabId, sessionPath, title: meta.name || sessionPath, protocol: meta.protocol || 'telnet', host: meta.host, port: meta.port, username: meta.username || '', status: 'connecting', terminal: null, fitAddon: null, logBuffer: '', kind: 'terminal' }
   pane.tabs.push(tabData); pane.activeTabId = tabId
@@ -224,11 +229,11 @@ function openComponentTab(opts: ComponentTabOptions): string {
   const tabData: Tab = {
     id: tabId,
     title: opts.title,
-    kind: 'component',
-    sessionPath: '',
-    protocol: '',
-    host: '',
-    port: 0,
+    kind: opts.kind ?? 'component',
+    sessionPath: opts.sessionPath ?? '',
+    protocol: opts.protocol ?? '',
+    host: opts.host ?? '',
+    port: opts.port ?? 0,
     status: opts.status ?? 'idle',
     terminal: null,
     fitAddon: null,
@@ -247,7 +252,7 @@ function openComponentTab(opts: ComponentTabOptions): string {
 
 function updateComponentTab(tabId: string, patch: ComponentTabPatch) {
   const tab = pane.tabs.find(t => t.id === tabId)
-  if (!tab || tab.kind !== 'component') return
+  if (!tab || (tab.kind !== 'component' && tab.kind !== 'vnc')) return
   if (patch.title !== undefined) tab.title = patch.title
   if (patch.props !== undefined) tab.componentProps = patch.props
   if (patch.status !== undefined) tab.status = patch.status
@@ -449,7 +454,7 @@ function openTabContextMenu(e: MouseEvent, tab: Tab) {
 
 function getTabContextMenu(tab: Tab): DropdownOption[] {
   const items: DropdownOption[] = []
-  if (tab.kind === 'component') {
+  if (tab.kind === 'component' || tab.kind === 'vnc') {
     items.push({ label: t('tabPane.closeTab'), key: 'close', icon: () => h(NIcon, { size: 14 }, { default: () => h(CloseOutline) }) })
     return items
   }
@@ -513,7 +518,7 @@ function cancelClose() { showCloseConfirm.value = false; confirmTab.value = null
 
 async function doCloseTab(tab: Tab) {
   const idx = pane.tabs.findIndex(t => t.id === tab.id); if (idx === -1) return
-  if (tab.kind === 'component') {
+  if (tab.kind === 'component' || tab.kind === 'vnc') {
     const ok = await tab.onClose?.()
     if (ok === false) return
     const cur = pane.tabs.findIndex(t => t.id === tab.id); if (cur === -1) return
@@ -540,7 +545,7 @@ async function doCloseTab(tab: Tab) {
 }
 
 async function handleCloseTab(tab: Tab) {
-  if (tab.kind === 'component') { doCloseTab(tab); return }
+  if (tab.kind === 'component' || tab.kind === 'vnc') { doCloseTab(tab); return }
   // 会话级"关闭不确认"优先
   if (tab.sessionPath) {
     try {
@@ -999,6 +1004,11 @@ function getStatusLeft(): string {
     const fp = (tab.componentProps as any)?.fileName
     return fp ? getFileTypeLabel(fp) : ''
   }
+  // VNC 图形会话:已连接显示地址,未连接显示未连接
+  if (tab.kind === 'vnc') {
+    if (tab.status === 'connected') return `VNC:${tab.host || ''}:${tab.port || ''}`
+    return t('tabPane.notConnected')
+  }
   return ''
 }
 
@@ -1296,7 +1306,7 @@ const dropZoneLabel = computed(() => {
           <div class="term-area" @mousedown="onTermAreaMousedown" @dragover="onTermAreaDragOver" @dragleave="onTermAreaDragLeave" @drop="onTermAreaDrop">
             <div v-if="pane.tabs.length === 0 && showWelcomePaneId !== pane.id" class="term-placeholder"><n-empty :description="t('tabPane.selectSessionHint')" size="small" /></div>
             <template v-for="tab in pane.tabs" :key="tab.id">
-              <div v-if="tab.kind === 'component'" class="term-container" :class="{ visible: pane.activeTabId === tab.id }">
+              <div v-if="tab.kind === 'component' || tab.kind === 'vnc'" class="term-container" :class="{ visible: pane.activeTabId === tab.id }">
                 <div class="tab-content-host">
                   <component :is="tab.component" v-bind="tab.componentProps || {}" :active="pane.activeTabId === tab.id" />
                 </div>

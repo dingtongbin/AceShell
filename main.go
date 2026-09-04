@@ -60,6 +60,7 @@ type services struct {
 	clipboard    *appservices.ClipboardService
 	version      *appservices.VersionService
 	rdp          *appservices.RdpService
+	vnc          *appservices.VncService
 	mcp          *appservices.McpService
 	agent        *appservices.AgentService
 }
@@ -72,7 +73,7 @@ func main() {
 	}
 
 	svc := initServices()
-	setupCleanup(func() { svc.rdp.Stop() })
+	setupCleanup(func() { svc.rdp.Stop(); svc.vnc.Stop() })
 
 	app := createApp(svc)
 	wireServices(svc, app)
@@ -83,9 +84,10 @@ func main() {
 	}
 	svc.mcp.Stop()
 	svc.rdp.Stop()
+	svc.vnc.Stop()
 }
 
-// setupCleanup 注册退出清理，确保子进程被终止、RDP 桥被关闭。
+// setupCleanup 注册退出清理，确保子进程被终止、图形会话桥(RDP/VNC)被关闭。
 func setupCleanup(onExit func()) {
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
@@ -119,6 +121,7 @@ func initServices() *services {
 		clipboard:    &appservices.ClipboardService{},
 		version:      &appservices.VersionService{},
 		rdp:          &appservices.RdpService{},
+		vnc:          &appservices.VncService{},
 	}
 
 	svc.config.Init()
@@ -151,6 +154,7 @@ func createApp(svc *services) *application.App {
 			application.NewService(svc.clipboard),
 			application.NewService(svc.version),
 		application.NewService(svc.rdp),
+		application.NewService(svc.vnc),
 		application.NewService(svc.mcp),
 		application.NewService(svc.agent),
 	},
@@ -191,6 +195,12 @@ func wireServices(svc *services, app *application.App) {
 		fmt.Printf("RDP bridge start failed: %v\n", err)
 	}
 	svc.rdp.SetSessionFiles(svc.sessionFile)
+
+	// VNC 图形会话桥:同一 wsbridge 普通透传路径(仅 127.0.0.1)
+	if _, err := svc.vnc.Start(); err != nil {
+		fmt.Printf("VNC bridge start failed: %v\n", err)
+	}
+	svc.vnc.SetSessionFiles(svc.sessionFile)
 
 	// MCP 服务:注入应用实例供事件推送;配置了随应用启动则自动拉起
 	svc.mcp.SetApp(app)
