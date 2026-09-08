@@ -326,13 +326,15 @@ function toggleSerial() {
 // ==================== Resize ====================
 
 // 资源管理器面板(右侧边框拖宽)
+let resizeOffset = 0
 function startResize(e: PointerEvent) {
   isResizing.value = true
+  resizeOffset = e.clientX - sessionWidth.value
   ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
 }
 function onResize(e: PointerEvent) {
   if (!isResizing.value) return
-  const w = e.clientX
+  const w = e.clientX - resizeOffset
   if (w < 60) {
     leftPanel.value = 'none'
     sessionWidth.value = 0
@@ -1274,6 +1276,7 @@ onBeforeUnmount(() => {
   flex-direction: column;
   overflow: hidden;
   flex-shrink: 0;
+  margin-right: 3px;
 }
 
 .tab-area {
@@ -1302,7 +1305,7 @@ onBeforeUnmount(() => {
   position: absolute;
   top: 0;
   bottom: 0;
-  width: 1px;
+  width: 5px;
   cursor: col-resize;
   background: transparent;
   flex-shrink: 0;
