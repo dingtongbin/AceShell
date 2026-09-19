@@ -246,6 +246,9 @@ func serveHostVueShim(w http.ResponseWriter, r *http.Request, shim string) {
 		shim = fallbackHostVueShim
 	}
 	w.Header().Set("Cache-Control", "no-store")
+	// 显式指定 MIME: Windows 上按扩展名推断会查注册表, 结果随机器漂移,
+	// 而 import map 指向的是 ES 模块, 浏览器要求 JS MIME 类型才肯加载。
+	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 	http.ServeContent(w, r, "vue.js", time.Time{}, strings.NewReader(shim))
 }
 
@@ -437,6 +440,13 @@ func serveAssetFile(w http.ResponseWriter, r *http.Request, root string) {
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
+	// 同上: 插件 entry.js 是 ES 模块, MIME 不随注册表漂移。
+	switch strings.ToLower(path.Ext(full)) {
+	case ".js", ".mjs":
+		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+	case ".css":
+		w.Header().Set("Content-Type", "text/css; charset=utf-8")
+	}
 	http.ServeFile(w, r, full)
 }
 
