@@ -1,10 +1,14 @@
-import { ref, computed, watch } from 'vue'
+import { ref, computed } from 'vue'
 import { darkTheme, lightTheme } from 'naive-ui'
 import type { GlobalThemeOverrides } from 'naive-ui'
+import { buildCssVars, darkOverrides, lightOverrides, DEFAULT_ACCENT } from './tokens'
 
 type ThemeMode = 'dark' | 'light' | 'auto'
 
 const themeMode = ref<ThemeMode>('dark')
+
+/** 自定义强调色(外观页可改;所有主色族由此派生)。 */
+const accent = ref<string>(DEFAULT_ACCENT)
 
 const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
 const systemPrefersDark = ref(mediaQuery.matches)
@@ -19,135 +23,6 @@ const isDark = computed(() => {
   }
   return themeMode.value === 'dark'
 })
-
-const lightThemeOverrides: GlobalThemeOverrides = {
-  common: {
-    primaryColor: '#005a9e',
-    primaryColorHover: '#0078d4',
-    primaryColorPressed: '#004078',
-    primaryColorSuppl: '#005a9e',
-    bodyColor: '#f7f7f7',
-    cardColor: '#ffffff',
-    modalColor: '#ffffff',
-    tableColor: '#ffffff',
-    inputColor: '#ffffff',
-    inputColorDisabled: '#f5f5f5',
-    actionColor: '#f7f7f7',
-    hoverColor: 'rgba(0,0,0,0.03)',
-    borderColor: '#e0e0e0',
-    dividerColor: '#e0e0e0',
-    textColor1: '#1a1a1a',
-    textColor2: '#333333',
-    textColor3: '#888888',
-    fontSize: '13px',
-    fontSizeSmall: '12px',
-    fontSizeTiny: '11px',
-    fontSizeMedium: '13px',
-    fontSizeLarge: '15px',
-  },
-  Button: {
-    textColor: '#333',
-    textColorHover: '#333',
-    textColorPrimary: '#fff',
-    border: '1px solid #d0d0d0',
-    borderHover: '1px solid #005a9e',
-    color: '#ffffff',
-    colorHover: '#f5f5f5',
-    colorPrimary: '#005a9e',
-    colorPrimaryHover: '#0078d4',
-    colorPrimaryPressed: '#004078',
-    rippleColor: '#005a9e',
-    borderRadius: '3px',
-  },
-  Input: {
-        color: '#ffffff',
-        colorFocus: '#ffffff',
-        border: '1px solid #d0d0d0',
-        borderFocus: '1px solid #005a9e',
-        textColor: '#1a1a1a',
-        placeholderColor: '#aaa',
-        borderRadius: '3px',
-  },
-  Select: {
-        menuColor: '#ffffff',
-        color: '#ffffff',
-        border: '1px solid #d0d0d0',
-        borderFocus: '1px solid #005a9e',
-      },
-  Switch: {
-        railColor: '#d0d0d0',
-        railColorActive: '#005a9e',
-      },
-  Checkbox: {
-        color: '#ffffff',
-        checkMarkColor: '#fff',
-        border: '1px solid #d0d0d0',
-      },
-  Tag: {
-        color: '#f0f0f0',
-        textColor: '#333',
-        border: '1px solid #d0d0d0',
-      },
-  Modal: {
-        color: '#ffffff',
-        textColor: '#1a1a1a',
-      },
-  Dialog: {
-        color: '#ffffff',
-        textColor: '#1a1a1a',
-      },
-  Card: {
-        color: '#ffffff',
-        borderColor: '#e8e8e8',
-      },
-  Table: {
-        tdColor: '#ffffff',
-        thColor: '#fafafa',
-        tdColorStriped: '#f7f7f7',
-        borderColor: '#e8e8e8',
-        thTextColor: '#1a1a1a',
-        tdTextColor: '#1a1a1a',
-      },
-  Dropdown: {
-        menuColor: '#ffffff',
-        optionTextColor: '#1a1a1a',
-        optionTextColorHover: '#1a1a1a',
-        optionColorHover: 'rgba(0,0,0,0.03)',
-      },
-  Empty: {
-        textColor: '#888',
-      },
-  Message: {
-        color: '#ffffff',
-        textColor: '#1a1a1a',
-      },
-  Notification: {
-        color: '#ffffff',
-        textColor: '#1a1a1a',
-      },
-  Tooltip: {
-        color: '#555',
-        textColor: '#fff',
-      },
-  Progress: {
-        railColor: '#e8e8e8',
-      },
-  Slider: {
-        railColor: '#e8e8e8',
-      },
-  DataTable: {
-        tdColor: '#ffffff',
-        thColor: '#fafafa',
-        borderColor: '#e8e8e8',
-        thTextColor: '#1a1a1a',
-        tdTextColor: '#1a1a1a',
-      },
-  Tree: {
-        nodeTextColor: '#1a1a1a',
-        nodeTextColorActive: '#1a1a1a',
-        arrowColor: '#888',
-      },
-}
 
 export function useTheme() {
   function initTheme(mode: string) {
@@ -174,17 +49,42 @@ export function useTheme() {
     themeMode.value = dark ? 'dark' : 'light'
   }
 
+  /** 设置自定义强调色(外观页调用;overrides 与 CSS 变量随之刷新)。 */
+  function setAccent(color: string) {
+    if (/^#[0-9a-fA-F]{6}$/.test(color)) {
+      accent.value = color.toLowerCase()
+    }
+  }
+
   const theme = computed(() => isDark.value ? darkTheme : lightTheme)
-  const themeOverrides = computed(() => isDark.value ? undefined : lightThemeOverrides)
+  // 深浅两套均有品牌色覆盖(此前深色无覆盖 → 组件库回落绿色默认主色,蓝绿割裂根源)
+  const themeOverrides = computed<GlobalThemeOverrides>(() =>
+    isDark.value ? darkOverrides(accent.value) : lightOverrides(accent.value))
 
   return {
     isDark,
     themeMode,
     theme,
     themeOverrides,
+    accent,
     toggleTheme,
     setTheme,
     setThemeMode,
     initTheme,
+    setAccent,
   }
+}
+
+/**
+ * 应用全局 CSS 变量到 documentElement(App.vue watchEffect 调用)。
+ * a 为面板不透明度(0.3~1)。
+ */
+export function applyThemeVars(isDark: boolean, opacity: number, accentColor: string) {
+  const d = document.documentElement.style
+  const a = Math.min(100, Math.max(30, opacity)) / 100
+  const vars = buildCssVars(isDark, a, accentColor)
+  for (const [k, v] of Object.entries(vars)) {
+    d.setProperty(k, v)
+  }
+  document.body.style.backgroundColor = isDark ? `rgba(38,38,38,${a})` : '#f7f7f7'
 }

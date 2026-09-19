@@ -64,5 +64,5 @@ function startResize(e: MouseEvent) {
 .split-divider { flex-shrink: 0; background: var(--border-color); position: relative; z-index: 5; transition: background 0.15s; }
 .split-divider.h { width: 4px; cursor: col-resize; }
 .split-divider.v { height: 4px; cursor: row-resize; }
-.split-divider:hover, .split-divider:active { background: #0078d4; }
+.split-divider:hover, .split-divider:active { background: var(--primary-color); }
 </style>

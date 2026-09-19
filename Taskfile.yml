@@ -16,9 +16,18 @@ includes:
 
 tasks:
   build:
-    summary: Builds the application
+    summary: Builds the application (先构建捆绑插件载荷再编译主程序)
+    deps:
+      - plugins:build
     cmds:
       - task: "{{OS}}:build"
+
+  plugins:build:
+    summary: 构建捆绑插件并填充 pluginbundle 载荷(发版前执行; 产物不入库)
+    cmds:
+      - powershell -ExecutionPolicy Bypass -File pluginsdk/ping/build.ps1
+      - cmd: echo "pluginbundle 载荷已更新, 重新执行 wails3 task build 使其嵌入主程序"
+        silent: true
 
   package:
     summary: Packages a production build of the application

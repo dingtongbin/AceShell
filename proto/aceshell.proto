@@ -1,0 +1,149 @@
+// AceShell 插件协议 v1 —— 跨语言契约 (Go / 其他语言经 gRPC 实现)
+//
+// 双向服务:
+//   - AcePlugin  : 插件进程实现, 宿主调用 (钩子: 生命周期/侧栏显隐/标签页事件/通用 Rpc)
+//   - HostService: 宿主进程实现, 插件调用 (能力: 开/关标签页/改标题/Toast/会话清单)
+//
+// 非宿主侧鉴权: 插件调用 HostService 时须携带 metadata "x-aceshell-token"
+// (Start 时由宿主下发的一次性随机令牌)。
+//
+// 重新生成 (仅协议变更时):
+//   go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.12
+//   go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
+//   go install github.com/bufbuild/buf/cmd/buf@latest
+//   buf generate proto
+syntax = "proto3";
+
+package aceshell.plugin.v1;
+
+option go_package = "changeme/pluginsdk/proto;pluginv1";
+
+// ==================== 宿主 → 插件 ====================
+
+service AcePlugin {
+  // 返回插件元数据 (侧栏视图注册清单等)。宿主在握手后立即调用。
+  rpc Info(InfoRequest) returns (PluginInfo);
+  // 生命周期开始。HostContext 携带宿主版本、插件私有数据目录与 HostService 端点/令牌。
+  rpc Start(StartRequest) returns (StartResponse);
+  // 生命周期结束。宿主退出/插件被禁用/更新前调用, 插件应尽快收尾。
+  rpc Shutdown(ShutdownRequest) returns (ShutdownResponse);
+  // 侧栏面板可见性变化 (首次显示/隐藏都会通知)。
+  rpc OnViewVisible(ViewVisibleRequest) returns (ViewVisibleResponse);
+  rpc OnViewHidden(ViewHiddenRequest) returns (ViewHiddenResponse);
+  // 标签页事件: opened(宿主已创建) / activated(被激活) / closed(用户关闭)。
+  rpc OnTabEvent(TabEvent) returns (TabEventResponse);
+  // 通用业务通道: 插件前端 (经宿主转发) 与宿主扩展能力都走这里, JSON 进出。
+  rpc Rpc(RpcRequest) returns (RpcResponse);
+}
+
+message InfoRequest {}
+
+message PluginInfo {
+  string id = 1;            // 插件唯一 ID (须与安装目录名一致), [a-z0-9-]
+  string display_name = 2;  // 显示名
+  string version = 3;
+  string icon = 4;          // 侧栏图标: SVG 文本或 dataURI (image/svg+xml / image/png)
+  string accent_color = 5;  // 可选主题色 (CSS color), 用于标签页着色等
+  repeated ViewInfo views = 6;
+}
+
+message ViewInfo {
+  string id = 1;           // 视图 ID (插件内唯一)
+  string title = 2;        // 侧栏 tooltip 与面板标题
+  string icon = 3;         // SVG 文本或 dataURI
+  string component_id = 4; // 插件前端 entry.js 导出 components 中的键
+}
+
+message StartRequest {
+  string host_version = 1;
+  string data_dir = 2;      // 插件私有数据目录 (宿主保证存在)
+  string host_endpoint = 3; // HostService gRPC 端点, 127.0.0.1:port
+  string token = 4;         // 调用 HostService 时放入 metadata "x-aceshell-token"
+}
+
+message StartResponse {}
+
+message ShutdownRequest {}
+message ShutdownResponse {}
+
+message ViewVisibleRequest {
+  string view_id = 1;
+}
+message ViewVisibleResponse {}
+
+message ViewHiddenRequest {
+  string view_id = 1;
+}
+message ViewHiddenResponse {}
+
+message TabEvent {
+  string tab_key = 1;
+  string kind = 2; // "opened" | "activated" | "closed"
+}
+message TabEventResponse {}
+
+message RpcRequest {
+  string method = 1;
+  string args_json = 2;
+}
+message RpcResponse {
+  string result_json = 1; // 成功时为 JSON 结果 (无内容填 "{}")
+  string error = 2;       // 失败时非空
+}
+
+// ==================== 插件 → 宿主 ====================
+
+service HostService {
+  // 打开标签页 (tabKey 幂等: 已存在则激活并返回现有 ID)。
+  // 组件 componentId 必须是插件前端 entry.js 导出 components 中的键。
+  rpc OpenTab(OpenTabRequest) returns (OpenTabResponse);
+  // 按 tabKey 关闭标签页。返回是否找到并已请求关闭。
+  rpc CloseTab(CloseTabRequest) returns (CloseTabResponse);
+  rpc SetTabTitle(SetTabTitleRequest) returns (SetTabTitleResponse);
+  // 宿主内 Toast 提示。level: info | warning | error | success
+  rpc ShowToast(ShowToastRequest) returns (ShowToastResponse);
+  // 只读会话摘要 (与资源管理器一致), JSON 数组。
+  rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
+  // 插件推送 UI 事件(流式结果/状态变化等)。宿主以 "plugin-event" 事件
+  // 转发到前端并按插件分发(前端 ctx.onEvent 订阅)。payload 为任意 JSON。
+  rpc EmitUIEvent(EmitUIEventRequest) returns (EmitUIEventResponse);
+}
+
+message OpenTabRequest {
+  TabSpec spec = 1;
+}
+message OpenTabResponse {
+  string tab_id = 1; // 确定性 ID: plugin://<插件ID>/<tabKey>
+}
+message TabSpec {
+  string tab_key = 1;      // 插件内唯一键, 幂等去重依据
+  string title = 2;
+  string component_id = 3;
+  string props_json = 4;   // 传给组件的 props (JSON 对象)
+  string icon = 5;         // 可选, SVG 文本或 dataURI
+  string color = 6;        // 可选, CSS color
+}
+message CloseTabRequest {
+  string tab_key = 1;
+}
+message CloseTabResponse {
+  bool closed = 1;
+}
+message SetTabTitleRequest {
+  string tab_key = 1;
+  string title = 2;
+}
+message SetTabTitleResponse {}
+message ShowToastRequest {
+  string message = 1;
+  string level = 2;
+}
+message ShowToastResponse {}
+message ListSessionsRequest {}
+message ListSessionsResponse {
+  string sessions_json = 1;
+}
+message EmitUIEventRequest {
+  string payload_json = 1;
+}
+message EmitUIEventResponse {}

@@ -1,6 +1,6 @@
 package services
 
-// MCP 审计记录与智能体会话的 PDF 导出(调用方式均为同步绑定方法,
+// MCP 审计记录的 PDF 导出(调用方式均为同步绑定方法,
 // 由前端按钮触发;保存对话框取消不视为错误)。
 
 import (
@@ -14,10 +14,7 @@ import (
 )
 
 const (
-	pdfAuditMaxEntries  = 10000 // 审计导出条数上限(防极端量卡死)
-	pdfSessionMaxEvents = 20000 // 会话导出事件上限
-	pdfToolArgsMax      = 400   // 工具参数进入 PDF 的字符上限
-	pdfToolResultMax    = 1200  // 工具结果进入 PDF 的字符上限
+	pdfAuditMaxEntries = 10000 // 审计导出条数上限(防极端量卡死)
 )
 
 // pdfResultJSON 统一返回 {"ok":..,"path":..,"error":..}。
@@ -261,161 +258,4 @@ func itoa(n int) string {
 		buf[i] = '-'
 	}
 	return string(buf[i:])
-}
-
-// ExportSessionPdf 导出智能体会话全部事件为 PDF。
-func (s *AgentService) ExportSessionPdf(sessionID string, lang string) string {
-	if sessionID == "" {
-		return pdfResultJSON("", errPDFEmpty(pdfT(lang, "会话", "session")))
-	}
-	events, err := s.store.AllEvents(sessionID)
-	if err != nil {
-		return pdfResultJSON("", err)
-	}
-	if len(events) == 0 {
-		return pdfResultJSON("", errPDFEmpty(pdfT(lang, "会话事件", "session events")))
-	}
-	var meta *AgentSessionMeta
-	for _, m := range s.store.List() {
-		if m.ID == sessionID {
-			mm := m
-			meta = &mm
-			break
-		}
-	}
-	title := pdfT(lang, "智能体会话", "Agent Session")
-	if meta != nil && meta.Title != "" {
-		title = pdfT(lang, "智能体会话: ", "Agent Session: ") + meta.Title
-	}
-	subtitle := ""
-	if meta != nil {
-		subtitle = pdfT(lang, "创建 ", "Created ") + pdfShortTime(meta.CreatedAt) + " · " + pdfT(lang, "更新 ", "Updated ") + pdfShortTime(meta.UpdatedAt) + " · "
-	}
-	subtitle += pdfT(lang, "共 ", "") + itoa(len(events)) + pdfT(lang, " 条事件", " events")
-
-	doc, err := newPdfDoc(title, subtitle)
-	if err != nil {
-		return pdfResultJSON("", err)
-	}
-	w := doc.pageW - 2*pdfMargin
-
-	for _, ev := range events {
-		if doc.err != nil {
-			break
-		}
-		// 角色标签行
-		role, roleColor := pdfRoleText(ev.Role, ev.Kind, lang)
-		doc.ensureSpace(pdfLineH*2 + 2)
-		doc.pdf.SetFontSize(7)
-		doc.chip(role, roleColor)
-		doc.pdf.SetFontSize(7.5)
-		doc.pdf.SetTextColor(pdfColorMuted[0], pdfColorMuted[1], pdfColorMuted[2])
-		doc.pdf.CellFormat(24, 4.2, pdfShortTime(ev.TS), "", 1, "R", false, 0, "")
-		if doc.pdf.Err() {
-			doc.err = fmt.Errorf("PDF 生成失败")
-			break
-		}
-
-		switch ev.Kind {
-		case "tool_call":
-			for _, tc := range ev.ToolCalls {
-				doc.multiText("["+pdfT(lang, "调用", "call")+"] "+tc.Name, w, 8.5, pdfColorText)
-				if args := truncateUtf8(tc.Arguments, pdfToolArgsMax); args != "" {
-					doc.multiText(args, w, 7.5, pdfColorMuted)
-				}
-			}
-		case "tool_result":
-			status := "✓ " + pdfT(lang, "成功", "OK")
-			statusColor := pdfColorGreen
-			if !ev.Ok {
-				status = "✗ " + pdfT(lang, "失败", "Failed")
-				statusColor = pdfColorRed
-			}
-			doc.pdf.SetFontSize(8.5)
-			doc.pdf.SetTextColor(statusColor[0], statusColor[1], statusColor[2])
-			doc.pdf.SetX(pdfMargin)
-			doc.pdf.CellFormat(0, pdfLineH, ev.ToolName+"  "+status, "", 1, "L", false, 0, "")
-			if content := truncateUtf8(ev.Content, pdfToolResultMax); content != "" {
-				doc.multiText(content, w, 7.5, pdfColorMuted)
-			}
-		case "error":
-			doc.multiText(truncateUtf8(ev.Content, pdfToolResultMax), w, 8.5, pdfColorRed)
-		default: // message
-			if ev.Content != "" {
-				doc.multiText(truncateUtf8(ev.Content, 4000), w, 9, pdfColorText)
-			}
-			// todo 更新事件附带最新待办
-			if len(ev.Todos) > 0 {
-				var b strings.Builder
-				b.WriteString(pdfT(lang, "当前待办: ", "Todos: "))
-				for i, td := range ev.Todos {
-					if i > 0 {
-						b.WriteString(" / ")
-					}
-					switch td.Status {
-					case "done":
-						b.WriteString("[√]")
-					case "in_progress":
-						b.WriteString("[→]")
-					default:
-						b.WriteString("[ ]")
-					}
-					b.WriteString(td.Content)
-				}
-				doc.multiText(truncateUtf8(b.String(), 800), w, 7.5, pdfColorMuted)
-			}
-		}
-		doc.setY(doc.y() + 1.8)
-	}
-
-	name := "agent-session"
-	if meta != nil && meta.Title != "" {
-		name += "-" + sanitizeFilename(meta.Title)
-	}
-	path, saved, err := doc.saveViaDialog(s.app, name+".pdf")
-	if err != nil {
-		return pdfResultJSON("", err)
-	}
-	if !saved {
-		return pdfResultJSON("", nil)
-	}
-	return pdfResultJSON(path, nil)
-}
-
-// pdfRoleText 事件角色标签与颜色(按语言)。
-func pdfRoleText(role, kind, lang string) (string, [3]int) {
-	switch role {
-	case "user":
-		return pdfT(lang, "用户", "User"), pdfColorAccent
-	case "assistant":
-		return pdfT(lang, "助手", "Assistant"), pdfColorGreen
-	case "tool":
-		return pdfT(lang, "工具", "Tool"), pdfColorOrange
-	default:
-		if kind == "error" {
-			return pdfT(lang, "错误", "Error"), pdfColorRed
-		}
-		return pdfT(lang, "系统", "System"), pdfColorGray
-	}
-}
-
-// sanitizeFilename 文件名安全化(保留中文)。
-func sanitizeFilename(name string) string {
-	var b strings.Builder
-	for _, r := range name {
-		switch r {
-		case '\\', '/', ':', '*', '?', '"', '<', '>', '|', '\n', '\r', '\t':
-			b.WriteRune('-')
-		default:
-			b.WriteRune(r)
-		}
-	}
-	out := strings.TrimSpace(b.String())
-	if len([]rune(out)) > 40 {
-		out = string([]rune(out)[:40])
-	}
-	if out == "" {
-		out = "session"
-	}
-	return out
 }

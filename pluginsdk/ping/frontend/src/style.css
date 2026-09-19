@@ -1,0 +1,80 @@
+/* Ping 插件样式(手动前缀防污染; 颜色一律用宿主 CSS 变量以跟随主题) */
+.aceshell-plugin-ping {
+  padding: 12px;
+  font-size: 13px;
+  color: var(--text-color);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  height: 100%;
+  box-sizing: border-box;
+}
+.aceshell-plugin-ping .pp-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.aceshell-plugin-ping .pp-input {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  padding: 0 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-color);
+  font-size: 12px;
+  outline: none;
+}
+.aceshell-plugin-ping .pp-input:focus {
+  border-color: var(--primary-color);
+}
+.aceshell-plugin-ping .pp-btn {
+  height: 28px;
+  padding: 0 14px;
+  border: none;
+  border-radius: 6px;
+  background: var(--primary-color);
+  color: #fff;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.aceshell-plugin-ping .pp-btn.stop {
+  background: var(--danger-color);
+}
+.aceshell-plugin-ping .pp-stats {
+  display: flex;
+  gap: 12px;
+  font-size: 11px;
+  color: var(--icon-color);
+  flex-wrap: wrap;
+}
+.aceshell-plugin-ping .pp-stats b {
+  color: var(--text-color);
+  font-weight: 600;
+}
+.aceshell-plugin-ping .pp-log {
+  flex: 1;
+  min-height: 80px;
+  overflow: auto;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: rgba(128, 128, 128, 0.08);
+  font-size: 11px;
+  line-height: 1.7;
+  font-family: Consolas, monospace;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.aceshell-plugin-ping .pp-rowline {
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+}
+.aceshell-plugin-ping .pp-ok { color: var(--success-color); }
+.aceshell-plugin-ping .pp-loss { color: var(--danger-color); }
+.aceshell-plugin-ping .pp-hint {
+  font-size: 11px;
+  color: var(--icon-color);
+}

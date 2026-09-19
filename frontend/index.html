@@ -5,6 +5,16 @@
     <link rel="icon" type="image/svg+xml" href="/wails.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="stylesheet" href="/style.css" />
+    <!-- 插件共享依赖契约: 插件产物对下列依赖一律 external(见 pluginsdk/vite-preset.mjs),
+         浏览器经此 import map 解析到宿主提供的唯一实例。严禁插件自打捆绑(双实例会导致
+         渲染/响应式全面失效); 违背契约的裸导入会得到 "Failed to resolve module specifier" 响亮报错。 -->
+    <script type="importmap">
+      {
+        "imports": {
+          "vue": "/plugins/_host/vue.js"
+        }
+      }
+    </script>
     <title>Wails + Vue + TS</title>
   </head>
   <body>

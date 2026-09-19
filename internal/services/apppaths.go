@@ -7,10 +7,12 @@ import (
 )
 
 const (
-	configFileName = "config.toml"
-	dbFileName     = "aceshell.db"
-	autoLogDirName = "autolog"
-	scriptsDirName = "script"
+	configFileName   = "config.toml"
+	dbFileName       = "aceshell.db"
+	autoLogDirName   = "autolog"
+	scriptsDirName   = "script"
+	pluginsDirName   = "plugins"
+	pluginDataPrefix = "plugin-data"
 )
 
 // dataDir 当前生效的应用数据目录(默认平台应用数据目录,测试可重定向)。
@@ -67,11 +69,6 @@ func McpConfigFile() string {
 	return filepath.Join(filepath.Dir(configFile), "mcp.toml")
 }
 
-// AgentConfigFile 返回智能体独立配置文件路径(与主配置同目录)。
-func AgentConfigFile() string {
-	return filepath.Join(filepath.Dir(configFile), "agent.toml")
-}
-
 // DBFilePath 返回本地数据库文件路径。
 func DBFilePath() string {
 	return filepath.Join(dataDir, dbFileName)
@@ -90,4 +87,14 @@ func AutoLogDir() string {
 // ScriptsDir 返回脚本目录。
 func ScriptsDir() string {
 	return filepath.Join(dataDir, scriptsDirName)
+}
+
+// PluginsDir 返回插件安装根目录 (每个插件一个子目录)。
+func PluginsDir() string {
+	return filepath.Join(dataDir, pluginsDirName)
+}
+
+// PluginDataDir 返回指定插件的私有数据目录。
+func PluginDataDir(pluginID string) string {
+	return filepath.Join(dataDir, pluginDataPrefix, filepath.Base(pluginID))
 }

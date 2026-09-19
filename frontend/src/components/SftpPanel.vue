@@ -608,7 +608,7 @@ onMounted(async () => {
             @dragstart="(e: DragEvent) => onDragStart(e, 'local', f)"
             @contextmenu="(e: MouseEvent) => openContextMenu(e, 'local', f)"
             @dblclick="f.isDir ? openLocal(f) : doUploadFile(f)">
-            <n-icon :size="14" :component="f.isDir ? FolderOutline : DocumentOutline" :style="{ color: f.isDir ? '#4ec9b0' : '#888' }" />
+            <n-icon :size="14" :component="f.isDir ? FolderOutline : DocumentOutline" :style="{ color: f.isDir ? 'var(--proto-ssh)' : 'var(--proto-default)' }" />
             <span class="fname">{{ f.name }}</span>
             <span class="fsize">{{ f.isDir ? '' : formatSize(f.size) }}</span>
             <span class="fact">
@@ -636,7 +636,7 @@ onMounted(async () => {
             @dragstart="(e: DragEvent) => onDragStart(e, 'remote', f)"
             @contextmenu="(e: MouseEvent) => openContextMenu(e, 'remote', f)"
             @dblclick="isEditable(f.name) ? (f.isDir ? openRemote(f) : openEditor(f)) : (f.isDir ? openRemote(f) : openPreview(f, 'remote'))">
-            <n-icon :size="14" :component="f.isDir ? FolderOutline : DocumentOutline" :style="{ color: f.isDir ? '#4ec9b0' : '#888' }" />
+            <n-icon :size="14" :component="f.isDir ? FolderOutline : DocumentOutline" :style="{ color: f.isDir ? 'var(--proto-ssh)' : 'var(--proto-default)' }" />
             <span class="fname">{{ f.name }}</span>
             <span class="fsize">{{ f.isDir ? '' : formatSize(f.size) }}</span>
             <span class="fact">
@@ -663,7 +663,7 @@ onMounted(async () => {
         <div v-if="!transfers.length" class="tbar-empty">{{ t('sftpPanel.noTransfer') }}</div>
         <div v-for="tr in transfers" :key="tr.id" class="trow">
           <span class="tname">{{ tr.direction }} {{ tr.name }}</span>
-          <n-progress :percentage="tr.percent" :height="4" :show-text="false" style="flex:1;margin:0 6px" :color="tr.status === 'error' ? '#e45858' : tr.status === 'cancelled' ? '#f0a030' : '#4ec9b0'" />
+          <n-progress :percentage="tr.percent" :height="4" :show-text="false" style="flex:1;margin:0 6px" :color="tr.status === 'error' ? 'var(--danger-color)' : tr.status === 'cancelled' ? 'var(--warning-color)' : 'var(--proto-ssh)'" />
           <span class="tspeed">{{ tr.speed }}</span>
           <span class="tstatus" :class="'t-' + tr.status">{{ tr.status === 'done' ? '✓' : tr.status === 'error' ? '✗' : tr.status === 'cancelled' ? '⊘' : '' }}</span>
           <n-button v-if="tr.status === 'transferring'" size="tiny" quaternary @click="cancelTransfer(tr.id)" :title="t('common.cancel')"><n-icon :size="12" :component="TrashOutline" /></n-button>
@@ -760,7 +760,7 @@ onMounted(async () => {
   font-size: 12px; color: var(--text-color); cursor: pointer; transition: background .1s;
 }
 .file-row:hover { background: var(--hover-bg) }
-.file-row.dir { color: #4ec9b0 }
+.file-row.dir { color: var(--primary-color) }
 .fname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex-shrink: 1 }
 .fsize { margin-left: auto; color: var(--icon-color); font-size: 11px; flex-shrink: 0; margin-right: 2px }
 .fact { display: flex; gap: 1px; opacity: 0; transition: opacity .15s; flex-shrink: 0 }
@@ -772,7 +772,7 @@ onMounted(async () => {
   display: flex; align-items: center; justify-content: center;
   background: var(--border-color); transition: background .15s;
 }
-.h-handle:hover { background: #0078d4 }
+.h-handle:hover { background: var(--primary-color) }
 .h-handle-line { width: 1px; height: 32px; background: rgba(128,128,128,.2); border-radius: 1px }
 
 /* 垂直分割手柄 */
@@ -781,7 +781,7 @@ onMounted(async () => {
   display: flex; align-items: center; justify-content: center;
   background: var(--border-color); transition: background .15s;
 }
-.v-handle:hover { background: #0078d4 }
+.v-handle:hover { background: var(--primary-color) }
 .v-handle-line { height: 1px; width: 32px; background: rgba(128,128,128,.2); border-radius: 1px }
 
 /* 传输列表 */
@@ -800,9 +800,9 @@ onMounted(async () => {
 .tname { flex-shrink: 0; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
 .tspeed { flex-shrink: 0; width: 56px; text-align: right; font-size: 10px; color: var(--icon-color) }
 .tstatus { width: 16px; text-align: center; flex-shrink: 0; font-size: 11px }
-.t-done { color: #4ec9b0 }
-.t-error { color: #e45858 }
-.t-cancelled { color: #f0a030 }
+.t-done { color: var(--primary-color) }
+.t-error { color: var(--danger-color) }
+.t-cancelled { color: var(--warning-color) }
 
 /* 编辑器 */
 .editor-meta {
@@ -810,7 +810,7 @@ onMounted(async () => {
   margin-bottom: 8px; padding: 4px 8px; background: var(--sidebar-bg); border-radius: 4px;
 }
 .editor-path { font-size: 11px; color: var(--icon-color); overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
-.editor-lang { font-size: 10px; color: #4ec9b0; flex-shrink: 0; margin-left: 8px; text-transform: uppercase }
+.editor-lang { font-size: 10px; color: var(--primary-color); flex-shrink: 0; margin-left: 8px; text-transform: uppercase }
 .editor-wrap {
   position: relative; height: 460px; overflow: hidden; display: flex;
   background: var(--body-bg); border-radius: 4px; border: 1px solid var(--border-color);

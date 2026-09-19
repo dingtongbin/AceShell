@@ -255,18 +255,18 @@ onUnmounted(async () => {
 <style scoped>
 .file-editor {
   width: 100%; height: 100%; display: flex; flex-direction: column; overflow: hidden;
-  background: var(--term-bg, #101010);
+  background: var(--term-bg);
 }
-.fe-loading { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--icon-color, #888); font-size: 13px }
+.fe-loading { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--icon-color); font-size: 13px }
 .fe-wrap {
   flex: 1; min-height: 0; display: flex; overflow: hidden;
-  background: var(--term-bg, #101010);
+  background: var(--term-bg);
 }
 .fe-lines {
   flex-shrink: 0; width: 44px; overflow: hidden; padding: 8px 6px 8px 0; text-align: right;
   font-family: 'Cascadia Code', 'Fira Code', Consolas, 'Courier New', monospace;
   font-size: 13px; line-height: 1.55; white-space: pre;
-  color: var(--icon-color, #6e6e6e); background: var(--term-bg, #101010);
+  color: var(--icon-color); background: var(--term-bg);
   user-select: none;
 }
 .fe-body { position: relative; flex: 1; min-width: 0; overflow: hidden; }
@@ -278,8 +278,8 @@ onUnmounted(async () => {
   text-align: left;
 }
 .fe-area {
-  color: transparent; caret-color: var(--text-color, #d4d4d4); background: transparent;
+  color: transparent; caret-color: var(--text-color); background: transparent;
   resize: none; border: none; outline: none; z-index: 2;
 }
-.fe-hl { z-index: 1; pointer-events: none; color: var(--text-color, #d4d4d4); margin: 0; overflow: hidden }
+.fe-hl { z-index: 1; pointer-events: none; color: var(--text-color); margin: 0; overflow: hidden }
 </style>

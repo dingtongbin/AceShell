@@ -168,8 +168,8 @@ const verticalWidth = ref(props.verticalWidth)
 let isResizingVertical = false
 
 function gIcon(p: string) { switch (p) { case 'serial': return RadioOutline; case 'shell': return TerminalOutline; default: return TerminalOutline } }
-function gColor(p: string) { switch (p) { case 'ssh': return '#4ec9b0'; case 'telnet': return '#569cd6'; case 'serial': return '#c586c0'; case 'shell': return '#dcdcaa'; default: return '#6e9fc7' } }
-function gStatus(s: string) { switch (s) { case 'connected': return '#4ec9b0'; case 'connecting': return '#f2c97d'; case 'error': return '#e45858'; default: return '#555' } }
+function gColor(p: string) { switch (p) { case 'ssh': return 'var(--proto-ssh)'; case 'telnet': return 'var(--proto-telnet)'; case 'serial': return 'var(--primary-color)'; case 'shell': return 'var(--proto-shell)'; default: return 'var(--proto-default)' } }
+function gStatus(s: string) { switch (s) { case 'connected': return 'var(--proto-ssh)'; case 'connecting': return 'var(--warning-color)'; case 'error': return 'var(--danger-color)'; default: return 'var(--proto-default)' } }
 
 async function openSession(sessionPath: string): Promise<string> {
   let meta: any
@@ -679,7 +679,7 @@ const cursorRow = ref(0)
 const cursorCol = ref(0)
 let cursorTimer: ReturnType<typeof setInterval> | null = null
 
-const activeTab = computed(() => pane.tabs.find(t => t.id === pane.activeTabId))
+const activeTab = computed(() => pane?.tabs.find(t => t.id === pane?.activeTabId) ?? null)
 
 function clearScrollback(tab?: Tab) {
   const t = tab ?? activeTab.value
@@ -876,7 +876,8 @@ function ensureActiveVisible() {
   })
 }
 
-watch(() => pane.activeTabId, (id) => {
+watch(() => pane?.activeTabId, (id) => {
+  if (!pane) return
   ensureActiveVisible()
   actions.onFocus(pane.id)
   nextTick(() => {
@@ -896,7 +897,7 @@ watch(() => pane.activeTabId, (id) => {
 }, { immediate: true })
 
 onMounted(() => {
-  paneTabRegistry.set(pane.id, { tabs: pane.tabs, instanceId: paneInstanceId })
+  if (pane) paneTabRegistry.set(pane.id, { tabs: pane.tabs, instanceId: paneInstanceId })
   window.addEventListener('resize', handleResize)
   cursorTimer = setInterval(trackCursor, 200)
   loadGlobalCloseConfirm()
@@ -1029,7 +1030,8 @@ function reportCursor(row: number, col: number) {
   cursorCol.value = col
 }
 
-watch([() => pane.activeTabId, cursorRow, cursorCol], () => {
+watch([() => pane?.activeTabId, cursorRow, cursorCol], () => {
+  if (!pane) return
   actions.onStatus(pane.id, getStatusLeft(), cursorRow.value, cursorCol.value, getStatusEncoding(), !!pane.activeTabId)
 })
 
@@ -1039,7 +1041,7 @@ const activeTabState = computed<ActiveTabState>(() => {
   if (!t) return { hasTab: false, isTerminal: false, protocol: '', connected: false }
   return { hasTab: true, isTerminal: t.kind === 'terminal', protocol: t.protocol, connected: t.status === 'connected' }
 })
-watch(activeTabState, (s) => { actions.onActiveTabState(pane.id, s) }, { immediate: true })
+watch(activeTabState, (s) => { if (pane) actions.onActiveTabState(pane.id, s) }, { immediate: true })
 
 // 打开 SFTP 面板标签页：复用既有 SSH 连接。disconnectSshOnClose 为 true 时关闭标签页同时断开其 SSH 连接
 function openSftpPanel(connID: string, title: string, disconnectSshOnClose = false) {
@@ -1048,7 +1050,7 @@ function openSftpPanel(connID: string, title: string, disconnectSshOnClose = fal
     component: SftpPanel,
     props: { sessionID: connID, tabId: 'sftp-panel-' + Date.now() },
     icon: FolderOpenOutline,
-    color: '#4ec9b0',
+    color: 'var(--primary-color)',
     status: 'connected',
     onClose: (): boolean => {
       SftpDisconnect(connID).catch(() => {})
@@ -1229,7 +1231,8 @@ const dropZoneLabel = computed(() => {
             @contextmenu="(e: MouseEvent) => openTabContextMenu(e, tab)">
             <span v-if="tab.kind === 'terminal'" class="tab-status" :style="{ background: gStatus(tab.status) }"></span>
             <span v-if="tab.kind === 'component'" class="tab-file-state" :class="{ dirty: tab.dirty }"></span>
-            <n-icon :size="13" :component="tab.icon ?? gIcon(tab.protocol)" :style="{ color: tab.color ?? gColor(tab.protocol) }" />
+            <img v-if="tab.iconUrl" class="tab-icon-img" :src="tab.iconUrl" alt="" />
+            <n-icon v-else :size="13" :component="tab.icon ?? gIcon(tab.protocol)" :style="{ color: tab.color ?? gColor(tab.protocol) }" />
             <span class="tab-title">{{ tab.title }}</span>
             <n-icon :size="12" :component="CloseOutline" class="tab-close" @click.stop="handleCloseTab(tab)" />
           </div>
@@ -1269,7 +1272,8 @@ const dropZoneLabel = computed(() => {
                 @contextmenu="(e: MouseEvent) => openTabContextMenu(e, tab)">
                 <span v-if="tab.kind === 'terminal'" class="tab-status" :style="{ background: gStatus(tab.status) }"></span>
                 <span v-if="tab.kind === 'component'" class="tab-file-state" :class="{ dirty: tab.dirty }"></span>
-                <n-icon :size="13" :component="tab.icon ?? gIcon(tab.protocol)" :style="{ color: tab.color ?? gColor(tab.protocol) }" />
+                <img v-if="tab.iconUrl" class="tab-icon-img" :src="tab.iconUrl" alt="" />
+                <n-icon v-else :size="13" :component="tab.icon ?? gIcon(tab.protocol)" :style="{ color: tab.color ?? gColor(tab.protocol) }" />
                 <span class="tab-title">{{ tab.title }}</span>
                 <n-icon :size="14" :component="CloseOutline" class="tab-close" @click.stop="handleCloseTab(tab)" />
               </div>
@@ -1361,7 +1365,7 @@ const dropZoneLabel = computed(() => {
     <input ref="scriptFileInputRef" type="file" accept=".txt,.sh,.bat,.ps1,.py" style="display:none" @change="onScriptFileChange" />
 
     <n-modal v-model:show="showBrowserFail" :title="t('tabPane.browserFailTitle')" preset="dialog" :show-icon="false" style="width: 520px" :mask-closable="false">
-      <div style="line-height: 1.7; color: var(--text-color, #d4d4d4)">
+      <div style="line-height: 1.7; color: var(--text-color)">
 <div>{{ t('tabPane.browserFailMsg') }}</div>
         <div style="word-break: break-all; margin: 6px 0">{{ browserFailUrl }}</div>
 <div>{{ t('tabPane.browserFailHint') }}</div>
@@ -1423,13 +1427,13 @@ const dropZoneLabel = computed(() => {
 .v-tab-item { display: flex; align-items: center; gap: 6px; padding: 6px 3px; font-size: 12px; color: var(--icon-color); cursor: pointer; white-space: nowrap; transition: background 0.1s, color 0.1s; position: relative; background: var(--tab-inactive-bg); }
 .v-tab-item:hover { background: var(--tab-inactive-bg); filter: brightness(1.12); color: var(--icon-hover); }
 .v-tab-item.active { background: var(--tab-active-bg); color: var(--text-color); border: 1px solid var(--border-color); }
-:global(html.dark) .v-tab-item.active { background: #161616; border: none; border-radius: 2px; }
+:global(html.dark) .v-tab-item.active { background: var(--tab-active-bg); border: none; border-radius: 2px; }
 .v-tab-item .tab-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .v-tab-item .tab-close { opacity: 0; flex-shrink: 0; border-radius: 3px; width: 16px; height: 16px; padding: 0; display: flex; align-items: center; justify-content: center; transition: opacity 0.1s, background 0.1s; }
 .v-tab-item:hover .tab-close { opacity: 0.6; }
 .v-tab-item .tab-close:hover { opacity: 1 !important; background: var(--close-hover-bg); }
 .v-tabs-resize-handle { position: absolute; top: 0; right: -2px; bottom: 0; width: 4px; cursor: col-resize; z-index: 5; }
-.v-tabs-resize-handle:hover, .v-tabs-resize-handle:active { background: #0078d4; }
+.v-tabs-resize-handle:hover, .v-tabs-resize-handle:active { background: var(--primary-color); }
 
 /* main area */
 .main-area { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
@@ -1442,7 +1446,7 @@ const dropZoneLabel = computed(() => {
 .paste-confirm-body { display: flex; gap: 10px; align-items: stretch; }
 .paste-confirm-actions { display: flex; flex-direction: column; gap: 8px; padding-top: 2px; }
 .paste-confirm-editor-wrap { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
-.paste-confirm-hint { font-size: 11px; color: var(--text-color, #d4d4d4); opacity: 0.65; }
+.paste-confirm-hint { font-size: 11px; color: var(--text-color); opacity: 0.65; }
 .paste-confirm-editor { height: 260px; overflow: hidden; border: 1px solid #3c3c3c; border-radius: 4px; }
 :deep(.paste-confirm-modal .n-modal-header) { font-size: 13px; }
 :deep(.paste-confirm-editor .cm-editor) { height: 100%; }
@@ -1462,13 +1466,14 @@ const dropZoneLabel = computed(() => {
 .tab-item { display: flex; align-items: center; gap: 5px; padding: 0 3px; font-size: 12px; color: var(--icon-color); cursor: pointer; white-space: nowrap; transition: background 0.1s, color 0.1s; flex-shrink: 0; position: relative; background: var(--tab-inactive-bg); }
 .tab-item:hover { background: var(--tab-inactive-bg); filter: brightness(1.12); color: var(--icon-hover); }
 .tab-item.active { background: var(--tab-active-bg); color: var(--text-color); border: 1px solid var(--border-color); border-bottom: none; }
-:global(html.dark) .tab-item.active { background: #161616; border: none; border-radius: 2px 2px 0 0; }
+:global(html.dark) .tab-item.active { background: var(--tab-active-bg); border: none; border-radius: 2px 2px 0 0; }
 .tab-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .tab-status { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
-.tab-file-state { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; background: #4ec9b0; }
-.tab-file-state.dirty { background: #f2c97d; }
+.tab-file-state { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; background: var(--proto-ssh); }
+.tab-file-state.dirty { background: var(--warning-color); }
 .tab-file-state::after { content: '✓'; display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; font-size: 8px; font-weight: 700; color: #0d0d0d; }
 .tab-file-state.dirty::after { content: ''; }
+.tab-icon-img { width: 13px; height: 13px; flex-shrink: 0; object-fit: contain; pointer-events: none; }
 .tab-close { opacity: 0; margin-left: 2px; border-radius: 3px; width: 16px; height: 16px; padding: 0; display: flex; align-items: center; justify-content: center; transition: opacity 0.1s, background 0.1s; }
 .tab-item:hover .tab-close { opacity: 0.6; }
 .tab-close:hover { opacity: 1 !important; background: var(--close-hover-bg); }
@@ -1478,21 +1483,21 @@ const dropZoneLabel = computed(() => {
 .tab-menu-btn:hover .tab-menu-icon { color: var(--icon-hover); }
 
 /* welcome */
-.welcome-overlay { position: absolute; inset: 0; z-index: 10; display: flex; align-items: center; justify-content: center; background: var(--term-bg, #0a0a0a); user-select: none; }
-.welcome-logo { width: 48px; height: 48px; display: flex; align-items: center; justify-content: center; border-radius: 10px; background: rgba(0, 120, 212, 0.12); color: #0078d4; margin: 0 auto 12px auto; }
+.welcome-overlay { position: absolute; inset: 0; z-index: 10; display: flex; align-items: center; justify-content: center; background: var(--term-bg); user-select: none; }
+.welcome-logo { width: 48px; height: 48px; display: flex; align-items: center; justify-content: center; border-radius: 10px; background: rgba(0, 120, 212, 0.12); color: var(--primary-color); margin: 0 auto 12px auto; }
 .welcome-content h2 { font-size: 22px; font-weight: 300; margin: 0 0 4px 0; text-align: center; }
-.welcome-desc { font-size: 13px; color: var(--text-color, #888); opacity: 0.7; margin: 0 0 32px 0; text-align: center; }
+.welcome-desc { font-size: 13px; color: var(--text-color); opacity: 0.7; margin: 0 0 32px 0; text-align: center; }
 .welcome-shortcuts { display: flex; flex-direction: column; gap: 6px; min-width: 280px; }
 .shortcut-item { display: flex; align-items: center; gap: 10px; padding: 8px 14px; border-radius: 4px; cursor: pointer; transition: background 0.15s; font-size: 13px; }
 .shortcut-item:hover { background: var(--hover-bg, rgba(255,255,255,0.06)); }
-.shortcut-icon { color: #0078d4; flex-shrink: 0; }
-.shortcut-key { display: inline-block; background: var(--hover-bg, #333); padding: 2px 8px; border-radius: 3px; font-size: 11px; font-family: Consolas, monospace; color: #0078d4; min-width: 50px; text-align: center; }
+.shortcut-icon { color: var(--primary-color); flex-shrink: 0; }
+.shortcut-key { display: inline-block; background: var(--hover-bg); padding: 2px 8px; border-radius: 3px; font-size: 11px; font-family: Consolas, monospace; color: var(--primary-color); min-width: 50px; text-align: center; }
 
 /* terminal */
 .term-sheet { flex: 1; min-height: 40px; display: flex; flex-direction: column; position: relative; overflow: hidden; }
 
 .term-wrapper { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.term-area { flex: 1; min-height: 0; position: relative; background: var(--term-bg, #000); }
+.term-area { flex: 1; min-height: 0; position: relative; background: var(--term-bg); }
 .term-placeholder { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; }
 .term-container { position: absolute; top: 3px; left: 0; right: 0; bottom: 3px; visibility: hidden; opacity: 0; }
 .term-container.visible { visibility: visible; opacity: 1; }
@@ -1500,9 +1505,9 @@ const dropZoneLabel = computed(() => {
 
 /* drop overlay (split) */
 .drop-overlay { position: absolute; z-index: 9; display: flex; align-items: center; justify-content: center; pointer-events: none; box-sizing: border-box; animation: drop-zone-pulse 1s ease-in-out infinite; }
-.drop-overlay.merge { top: 0; left: 0; width: 50%; height: 50%; background: rgba(0, 140, 255, 0.38); border: 3px solid #4fc3ff; box-shadow: inset 0 0 28px rgba(79, 195, 255, 0.55); }
-.drop-overlay.split-h { top: 0; right: 0; width: 50%; height: 50%; background: rgba(0, 140, 255, 0.38); border: 3px solid #4fc3ff; box-shadow: inset 0 0 28px rgba(79, 195, 255, 0.55); }
-.drop-overlay.split-v { bottom: 0; left: 0; width: 100%; height: 50%; background: rgba(0, 140, 255, 0.38); border: 3px solid #4fc3ff; box-shadow: inset 0 0 28px rgba(79, 195, 255, 0.55); }
+.drop-overlay.merge { top: 0; left: 0; width: 50%; height: 50%; background: rgba(0, 140, 255, 0.38); border: 3px solid var(--info-color); box-shadow: inset 0 0 28px rgba(79, 195, 255, 0.55); }
+.drop-overlay.split-h { top: 0; right: 0; width: 50%; height: 50%; background: rgba(0, 140, 255, 0.38); border: 3px solid var(--info-color); box-shadow: inset 0 0 28px rgba(79, 195, 255, 0.55); }
+.drop-overlay.split-v { bottom: 0; left: 0; width: 100%; height: 50%; background: rgba(0, 140, 255, 0.38); border: 3px solid var(--info-color); box-shadow: inset 0 0 28px rgba(79, 195, 255, 0.55); }
 @keyframes drop-zone-pulse { 0%, 100% { filter: brightness(1); } 50% { filter: brightness(1.25); } }
 .drop-zone-label { background: rgba(0, 60, 120, 0.92); color: #fff; padding: 4px 14px; border-radius: 6px; font-size: 13px; font-weight: 600; border: 1px solid #4fc3ff; pointer-events: none; box-shadow: 0 2px 10px rgba(0, 0, 0, 0.55); white-space: nowrap; }
 
@@ -1510,7 +1515,7 @@ const dropZoneLabel = computed(() => {
 .script-dialog-body { display: flex; gap: 10px; align-items: stretch; }
 .script-dialog-actions { display: flex; flex-direction: column; gap: 8px; padding-top: 2px; }
 .script-dialog-editor-wrap { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
-.script-dialog-hint { font-size: 11px; color: var(--text-color, #d4d4d4); opacity: 0.65; }
+.script-dialog-hint { font-size: 11px; color: var(--text-color); opacity: 0.65; }
 .script-dialog-editor { height: 260px; overflow: hidden; border: 1px solid #3c3c3c; border-radius: 4px; }
 :deep(.script-dialog-modal .n-modal-header) { font-size: 13px; }
 :deep(.script-dialog-editor .cm-editor) { height: 100%; }
@@ -1525,7 +1530,7 @@ const dropZoneLabel = computed(() => {
 /* 标签条插入指示:标签间隙处的明亮插入线 + 文字提示 */
 .tab-insert-mark { position: relative; flex-shrink: 0; width: 3px; height: 100%; background: transparent; }
 .tab-insert-mark.v { width: 100%; height: 3px; }
-.tab-insert-mark.active { background: #4fc3ff; box-shadow: 0 0 10px 2px rgba(79, 195, 255, 0.9); }
+.tab-insert-mark.active { background: var(--info-color); box-shadow: 0 0 10px 2px rgba(79, 195, 255, 0.9); }
 .tab-insert-label { display: none; position: absolute; top: calc(100% + 6px); left: 50%; transform: translateX(-50%); background: rgba(0, 80, 160, 0.95); color: #fff; font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 5px; white-space: nowrap; border: 1px solid #4fc3ff; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5); z-index: 20; }
 .tab-insert-mark.v .tab-insert-label { top: 50%; left: calc(100% + 8px); transform: translateY(-50%); }
 .tab-insert-mark.active .tab-insert-label { display: block; }

@@ -50,7 +50,7 @@ function handleCancel() {
       </div>
     </div>
     <div v-else-if="status === 'mismatch'" style="margin-bottom: 16px;">
-      <p style="color: #e45858; margin-bottom: 12px;">{{ t('fingerprintDialog.mismatchWarn') }}</p>
+      <p style="color: var(--danger-color); margin-bottom: 12px;">{{ t('fingerprintDialog.mismatchWarn') }}</p>
       <p style="margin-bottom: 8px;">{{ t('fingerprintDialog.serverFingerprint', { host }) }}</p>
       <n-input type="textarea" :value="fingerprint" readonly :rows="3" style="font-family: Consolas, monospace; font-size: 12px;" />
     </div>

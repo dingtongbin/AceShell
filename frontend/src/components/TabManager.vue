@@ -9,6 +9,8 @@ import { ReleaseRdpConnection } from '../../bindings/changeme/internal/services/
 import { GetVncConnection } from '../../bindings/changeme/internal/services/vncservice.js'
 import { ReleaseVncConnection } from '../../bindings/changeme/internal/services/vncservice.js'
 import { applyTermCfg, normalizeTermConfig, resetTermComposition, type TermConfig } from '../composables/useXterm'
+import { loadPluginComponent, getPluginCtx } from '../composables/usePluginBridge'
+import { PluginNotifyTabEvent } from '../../bindings/changeme/internal/services/pluginservice.js'
 import TabPane from './TabPane.vue'
 import SplitPane from './SplitPane.vue'
 import RemoteDesktopTab from './RemoteDesktopTab.vue'
@@ -34,6 +36,12 @@ const isVertical = computed(() => props.tabOrientation === 'vertical')
 const panes = ref<Pane[]>([])
 const layout = ref<LayoutNode>({ type: 'pane', paneId: '' })
 const paneApis = new Map<string, TabPaneApi>()
+// 必须在 setup 期(首渲染前)创建主 pane: 模板经 findPane(layout.paneId) 取 pane 传给
+// TabPane, 若拖到 onMounted 才创建, 首帧会以 pane=undefined 挂载 TabPane —— 其 setup
+// 作用域的 watcher/computed 立即解引用崩溃; 生产构建中 Vue 把错误吞进 console.error,
+// 调度器被毒化, 后续任意 flush(如打开设置弹窗)再次扫到即整轮中止, 表现为
+// "弹窗内容消失、遮罩残留"。
+ensureMainPane()
 
 const termCfg = ref<TermConfig | null>(null)
 
@@ -102,7 +110,7 @@ async function openRdp(meta: { sessionPath: string; name: string; host: string; 
     component: RemoteDesktopTab,
     props: { conn, rdpKey: key },
     icon: DesktopOutline,
-    color: '#c586c0',
+    color: 'var(--primary-color)',
     status: 'connecting',
     // 标签页真正关闭时释放桥接 token(组件销毁时释放会导致跨 pane 拖动重建后
     // 无法用同一 token 重连 WS)。
@@ -138,7 +146,7 @@ async function openVnc(meta: { sessionPath: string; name: string; host: string; 
     component: VncTab,
     props: { conn, vncKey: key },
     icon: DesktopOutline,
-    color: '#4ec9b0',
+    color: 'var(--primary-color)',
     status: 'connecting',
     sessionPath: meta.sessionPath,
     protocol: 'vnc',
@@ -238,6 +246,10 @@ const showWelcomePaneId = computed(() => {
   return p.tabs.length === 0 ? p.id : null
 })
 
+// 布局叶子对应的 pane; 不存在时不渲染 TabPane(防御: 禁止以 undefined 挂载)
+const activeLayoutPane = computed<Pane | null>(() =>
+  layout.value.type === 'pane' ? findPane(layout.value.paneId) ?? null : null)
+
 function focusPane(): Pane {
   const f = panes.value.find(p => p.focused)
   if (f) return f
@@ -262,6 +274,64 @@ function updateComponentTab(tabId: string, patch: Parameters<TabPaneApi['updateC
 function closeTabById(tabId: string) { focusApi()?.closeTabById(tabId) }
 function copySelection() { return focusApi()?.copySelection() }
 function pasteClipboard() { return focusApi()?.pasteClipboard() }
+
+// ==================== 插件标签页 ====================
+
+// 打开插件标签页: tabKey 幂等(已存在则激活), 组件经插件桥缓存动态加载。
+// 标签页类型 = 插件名(protocol); 生命周期经 PluginNotifyTabEvent 回传插件。
+async function openPluginTab(payload: {
+  pluginID: string; tabId: string; tabKey: string; title: string;
+  componentId: string; props?: Record<string, any>; icon?: string; color?: string;
+}) {
+  for (const p of panes.value) {
+    const t = p.tabs.find(tab => (tab.componentProps as any)?.tabKey === payload.tabKey && (tab.componentProps as any)?.pluginID === payload.pluginID)
+    if (t) {
+      setFocus(p.id)
+      paneApis.get(p.id)?.activateTab(t.id)
+      PluginNotifyTabEvent(payload.pluginID, payload.tabKey, 'activated').catch(() => {})
+      return
+    }
+  }
+  const comp = await loadPluginComponent(payload.pluginID, payload.componentId)
+  if (!comp) {
+    message.error(t('plugins.loadFailed'))
+    return
+  }
+  const tabId = focusApi()?.openComponentTab({
+    title: payload.title,
+    kind: 'component',
+    component: comp,
+    props: { ...(payload.props || {}), pluginID: payload.pluginID, tabKey: payload.tabKey, ctx: getPluginCtx(payload.pluginID) },
+    iconUrl: payload.icon,
+    color: payload.color,
+    protocol: payload.pluginID,
+    onClose: async () => {
+      PluginNotifyTabEvent(payload.pluginID, payload.tabKey, 'closed').catch(() => {})
+      return true
+    },
+  })
+  if (tabId) PluginNotifyTabEvent(payload.pluginID, payload.tabKey, 'opened').catch(() => {})
+}
+
+// closePluginTab 插件侧请求关闭(插件经 HostService.CloseTab)。
+function closePluginTab(pluginID: string, tabKey: string) {
+  closeTabById(`plugin://${pluginID}/${tabKey}`)
+}
+
+// closePluginTabsOf 关闭某插件的全部标签页(插件停用/卸载后主界面不再保留其内容)。
+function closePluginTabsOf(pluginID: string) {
+  for (const p of panes.value) {
+    for (const t of [...p.tabs]) {
+      if (t.protocol === pluginID) paneApis.get(p.id)?.closeTabById(t.id)
+    }
+  }
+}
+
+// setPluginTabTitle 插件侧请求改标题(HostService.SetTabTitle)。
+function setPluginTabTitle(pluginID: string, tabKey: string, title: string) {
+  if (!title) return
+  updateComponentTab(`plugin://${pluginID}/${tabKey}`, { title })
+}
 
 // ==================== MCP 桥接 API ====================
 
@@ -419,7 +489,6 @@ let offOutput: (() => void) | null = null
 let offStatus: (() => void) | null = null
 
 onMounted(async () => {
-  ensureMainPane()
   await reloadTermConfig()
   window.addEventListener('config-changed', reloadTermConfig)
 
@@ -469,13 +538,13 @@ onBeforeUnmount(() => {
   }
 })
 
-defineExpose({ openSession, openSerial, openSftp, openScriptDialog, exportLog, clearScrollback, clearScreen, getActiveSessionPath, openComponentTab, updateComponentTab, closeTabById, activateFileTab, reportCursor, copySelection, pasteClipboard, openRdp, openVnc, listTabs, mcpTerminalSend, mcpCloseTab })
+defineExpose({ openSession, openSerial, openSftp, openScriptDialog, exportLog, clearScrollback, clearScreen, getActiveSessionPath, openComponentTab, updateComponentTab, closeTabById, activateFileTab, reportCursor, copySelection, pasteClipboard, openRdp, openVnc, listTabs, mcpTerminalSend, mcpCloseTab, openPluginTab, closePluginTab, closePluginTabsOf, setPluginTabTitle })
 </script>
 
 <template>
   <div class="tab-manager" :class="{ 'vertical-tabs': isVertical }">
-    <template v-if="layout.type === 'pane'">
-      <TabPane :key="layout.paneId" :pane="findPane(layout.paneId)!" :show-toolbar="pass.showToolbar"
+    <template v-if="layout.type === 'pane' && activeLayoutPane">
+      <TabPane :key="layout.paneId" :pane="activeLayoutPane" :show-toolbar="pass.showToolbar"
         :is-vertical="pass.isVertical" :vertical-width="pass.verticalWidth" :term-cfg="pass.termCfg" :show-welcome-pane-id="pass.showWelcomePaneId"
         @new-ssh="emit('new-ssh')" @new-telnet="emit('new-telnet')" @new-serial="emit('new-serial')" />
     </template>
