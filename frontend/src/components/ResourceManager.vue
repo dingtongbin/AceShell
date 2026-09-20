@@ -120,16 +120,16 @@ onMounted(loadState)
 </template>
 
 <style scoped>
-.resource-manager { height: 100%; display: flex; flex-direction: column; background: var(--sidebar-bg, #181818); overflow: hidden; }
-.resource-header { height: 35px; display: flex; align-items: center; padding: 0 8px 0 12px; border-bottom: 1px solid var(--sidebar-shadow, #3c3c3c); flex-shrink: 0; }
-.resource-title { font-size: 11px; font-weight: 600; color: var(--text-color, #d4d4d4); text-transform: uppercase; letter-spacing: 0.8px; }
+.resource-manager { height: 100%; display: flex; flex-direction: column; background: var(--sidebar-bg); overflow: hidden; }
+.resource-header { height: 35px; display: flex; align-items: center; padding: 0 8px 0 12px; border-bottom: 1px solid var(--sidebar-shadow); flex-shrink: 0; }
+.resource-title { font-size: 11px; font-weight: 600; color: var(--text-color); text-transform: uppercase; letter-spacing: 0.8px; }
 .resource-close { margin-left: auto; display: flex; align-items: center; }
-.resource-tabs { display: flex; height: 30px; min-height: 30px; border-bottom: 1px solid var(--sidebar-shadow, #3c3c3c); flex-shrink: 0; }
-.rm-tab { flex: 1; display: flex; align-items: center; justify-content: center; gap: 4px; font-size: 12px; color: var(--icon-color, #6e6e6e); cursor: pointer; transition: background 0.15s, color 0.15s; user-select: none; }
-.rm-tab:hover { color: var(--icon-hover, #c5c5c5); background: var(--hover-bg); }
-.rm-tab.active { color: var(--active-color, #ffffff); background: var(--tab-active-bg, #0d0d0d); border-bottom: 2px solid #0078d4; }
+.resource-tabs { display: flex; height: 30px; min-height: 30px; border-bottom: 1px solid var(--sidebar-shadow); flex-shrink: 0; }
+.rm-tab { flex: 1; display: flex; align-items: center; justify-content: center; gap: 4px; font-size: 12px; color: var(--icon-color); cursor: pointer; transition: background 0.15s, color 0.15s; user-select: none; }
+.rm-tab:hover { color: var(--icon-hover); background: var(--hover-bg); }
+.rm-tab.active { color: var(--active-color); background: var(--tab-active-bg); border-bottom: 2px solid #0078d4; }
 .resource-body { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
 .rm-pane { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
-.section-wrapper { flex-shrink: 0; display: flex; flex-direction: column; border-top: 1px solid var(--sidebar-shadow, #3c3c3c); }
+.section-wrapper { flex-shrink: 0; display: flex; flex-direction: column; border-top: 1px solid var(--sidebar-shadow); }
 .section-content { max-height: 200px; overflow: hidden; }
 </style>

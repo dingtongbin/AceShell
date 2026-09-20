@@ -193,14 +193,14 @@ watch(() => props.show, (val) => { if (val) { password.value = ''; pwError.value
       </div>
       <div class="export-right">
         <div class="form-group">
-          <label class="form-label">{{ t('exportDialog.passwordLabel') }} <span style="color:#e88070">*</span>{{ t('exportDialog.passwordHint') }}</label>
+          <label class="form-label">{{ t('exportDialog.passwordLabel') }} <span style="color:var(--danger-color)">*</span>{{ t('exportDialog.passwordHint') }}</label>
           <n-input v-model:value="password" type="password" show-password-on="click" :placeholder="t('exportDialog.passwordPlaceholder')" />
         </div>
         <div class="right-hint">
-          <span v-if="pwError" style="color:#e45858;font-size:12px">{{ pwError }}</span>
-          <span v-else-if="pwStrength && pwStrength !== 'ok'" style="color:#dca54c;font-size:12px">{{ pwStrength }}</span>
-          <span v-else-if="pwStrength === 'ok'" style="color:#4ec9b0;font-size:12px">{{ t('exportDialog.strengthOk') }}</span>
-          <span v-else style="color:var(--icon-color,#888);font-size:12px">{{ t('exportDialog.strengthHint') }}</span>
+          <span v-if="pwError" style="color:var(--danger-color);font-size:12px">{{ pwError }}</span>
+          <span v-else-if="pwStrength && pwStrength !== 'ok'" style="color:var(--warning-color);font-size:12px">{{ pwStrength }}</span>
+          <span v-else-if="pwStrength === 'ok'" style="color:var(--success-color);font-size:12px">{{ t('exportDialog.strengthOk') }}</span>
+          <span v-else style="color:var(--icon-color);font-size:12px">{{ t('exportDialog.strengthHint') }}</span>
         </div>
         <div class="right-actions">
           <n-button @click="emit('update:show',false)">{{ t('common.cancel') }}</n-button>
@@ -214,22 +214,22 @@ watch(() => props.show, (val) => { if (val) { password.value = ''; pwError.value
 <style scoped>
 .export-body { display: flex; gap: 16px; min-height: 340px; }
 .export-left {
-  flex: 1; min-width: 0; border: 1px solid var(--border-color, #3c3c3c);
-  border-radius: 6px; background: var(--card-bg, #1e1e1e); overflow: hidden;
+  flex: 1; min-width: 0; border: 1px solid var(--border-color);
+  border-radius: 6px; background: var(--card-bg); overflow: hidden;
 }
-.export-left-title { font-size: 12px; color: var(--icon-color, #888); padding: 6px 10px; border-bottom: 1px solid var(--border-color, #3c3c3c); }
+.export-left-title { font-size: 12px; color: var(--icon-color); padding: 6px 10px; border-bottom: 1px solid var(--border-color); }
 .tree { padding: 4px 0; }
 .tree-row { display:flex;align-items:center;gap:4px;height:26px;cursor:pointer;padding:0 4px;user-select:none }
 .tree-row:hover { background:rgba(255,255,255,0.03) }
 .chevron { width: 14px; display: inline-flex; flex-shrink: 0; }
-.tree-name { font-size:13px;color:var(--text-color,#d4d4d4);overflow:hidden;text-overflow:ellipsis;white-space:nowrap }
+.tree-name { font-size:13px;color:var(--text-color);overflow:hidden;text-overflow:ellipsis;white-space:nowrap }
 .rotated { transform:rotate(90deg) }
 /* h() 渲染的 NIcon 不注入 scopeId,需用 :deep 匹配其内部 svg */
 :deep(.rotated) { transform: rotate(90deg); }
 :deep(.chevron-arrow) { transition: transform 0.15s ease; }
 .export-right { width: 260px; flex-shrink: 0; display: flex; flex-direction: column; }
 .form-group { margin-top: 0; }
-.form-label { display:block;font-size:13px;margin-bottom:6px;color:var(--text-color,#d4d4d4) }
+.form-label { display:block;font-size:13px;margin-bottom:6px;color:var(--text-color) }
 .right-hint { flex: 1; min-height: 18px; margin-top: 10px; }
 .right-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
 </style>

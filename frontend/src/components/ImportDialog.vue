@@ -378,7 +378,7 @@ function confirmClose() {
             <span class="drop-text">{{ t('importDialog.pickHint') }}</span>
           </template>
           <template v-else>
-            <n-icon :size="18" :component="DocumentLockOutline" style="color:#4ec9b0" />
+            <n-icon :size="18" :component="DocumentLockOutline" style="color:var(--primary-color)" />
             <span class="file-name">{{ fileName }}</span>
           </template>
         </div>
@@ -502,22 +502,22 @@ function confirmClose() {
 <style scoped>
 .import-head { display: flex; gap: 16px; }
 .head-col { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
-.head-col-title { font-size: 13px; color: var(--text-color, #d4d4d4); }
+.head-col-title { font-size: 13px; color: var(--text-color); }
 .head-col-title-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .head-right .head-col-title-row { flex: 1; }
 .file-drop-zone {
   display: flex; align-items: center; justify-content: center; gap: 8px;
-  height: 40px; border: 2px dashed var(--border-color, #3c3c3c);
+  height: 40px; border: 2px dashed var(--border-color);
   border-radius: 6px; cursor: pointer; transition: border-color .15s, background .15s;
   overflow: hidden; padding: 0 8px;
 }
-.file-drop-zone:hover { border-color: #4ec9b0; background: rgba(78,201,176,0.04); }
-.file-drop-zone.has-file { border-style: solid; border-color: #4ec9b0; }
-.drop-text { font-size: 12px; color: var(--icon-color, #888); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.file-name { font-size: 13px; color: var(--text-color, #d4d4d4); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-drop-zone:hover { border-color: var(--primary-color); background: rgba(78,201,176,0.04); }
+.file-drop-zone.has-file { border-style: solid; border-color: var(--primary-color); }
+.drop-text { font-size: 12px; color: var(--icon-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.file-name { font-size: 13px; color: var(--text-color); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tree-panes { display: flex; gap: 12px; margin-top: 10px; }
-.tree-pane { flex: 1; min-width: 0; border: 1px solid var(--border-color, #3c3c3c); border-radius: 6px; background: var(--card-bg, #1e1e1e); overflow: hidden; }
-.tree-pane-title { font-size: 12px; color: var(--icon-color, #888); padding: 6px 10px; border-bottom: 1px solid var(--border-color, #3c3c3c); }
+.tree-pane { flex: 1; min-width: 0; border: 1px solid var(--border-color); border-radius: 6px; background: var(--card-bg); overflow: hidden; }
+.tree-pane-title { font-size: 12px; color: var(--icon-color); padding: 6px 10px; border-bottom: 1px solid var(--border-color); }
 .tree { padding: 4px 0; }
 .tree-row { display: flex; align-items: center; gap: 4px; height: 26px; cursor: pointer; padding: 0 4px; user-select: none; }
 .tree-row:hover { background: rgba(255, 255, 255, 0.03); }
@@ -526,18 +526,18 @@ function confirmClose() {
 .chevron.empty { visibility: hidden; }
 .rotated { transform: rotate(90deg); }
 .chevron-arrow { transition: transform 0.15s ease; }
-.tree-name { font-size: 13px; color: var(--text-color, #d4d4d4); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tree-name.file { color: var(--icon-color, #9a9a9a); }
-.key-badge { margin-left: 6px; flex-shrink: 0; font-size: 11px; color: #4ec9b0; border: 1px solid rgba(78, 201, 176, 0.4); border-radius: 3px; padding: 0 4px; }
-.tree-tip { padding: 10px; text-align: center; color: var(--icon-color, #888); font-size: 12px; }
-.tree-tip.error { color: #e45858; }
-.key-tip { margin-top: 8px; font-size: 12px; color: #4ec9b0; }
+.tree-name { font-size: 13px; color: var(--text-color); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tree-name.file { color: var(--icon-color); }
+.key-badge { margin-left: 6px; flex-shrink: 0; font-size: 11px; color: var(--primary-color); border: 1px solid rgba(78, 201, 176, 0.4); border-radius: 3px; padding: 0 4px; }
+.tree-tip { padding: 10px; text-align: center; color: var(--icon-color); font-size: 12px; }
+.tree-tip.error { color: var(--danger-color); }
+.key-tip { margin-top: 8px; font-size: 12px; color: var(--primary-color); }
 .bottom-hint { min-height: 18px; margin-top: 8px; font-size: 12px; }
-.hint-error { color: #e45858; }
-.hint-warn { color: #dca54c; }
-.hint-ok { color: #4ec9b0; }
-.hint-muted { color: var(--icon-color, #888); }
+.hint-error { color: var(--danger-color); }
+.hint-warn { color: var(--warning-color); }
+.hint-ok { color: var(--primary-color); }
+.hint-muted { color: var(--icon-color); }
 .bottom-row { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
-.confirm-target { font-size: 13px; color: var(--text-color, #d4d4d4); margin-bottom: 8px; }
-.confirm-tree-title { font-size: 12px; color: var(--icon-color, #888); margin-bottom: 4px; }
+.confirm-target { font-size: 13px; color: var(--text-color); margin-bottom: 8px; }
+.confirm-tree-title { font-size: 12px; color: var(--icon-color); margin-bottom: 4px; }
 </style>

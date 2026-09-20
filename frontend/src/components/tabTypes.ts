@@ -24,6 +24,8 @@ export interface Tab {
   onClose?: () => boolean | Promise<boolean>
   dirty?: boolean
   icon?: Component
+  /** dataURI 图标(插件标签页用, 优先于 icon 渲染) */
+  iconUrl?: string
   color?: string
   terminalRebuild?: boolean
   terminalCleanup?: () => void
@@ -50,6 +52,8 @@ export interface ComponentTabOptions {
   component: Component
   props?: Record<string, any>
   icon?: Component
+  /** dataURI 图标(插件标签页用, 优先于 icon 渲染) */
+  iconUrl?: string
   color?: string
   status?: 'idle' | 'connecting' | 'connected' | 'error'
   dirty?: boolean

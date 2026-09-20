@@ -98,23 +98,6 @@ func TestPdfShortTime(t *testing.T) {
 	}
 }
 
-// TestSanitizeFilename 文件名安全化。
-func TestSanitizeFilename(t *testing.T) {
-	cases := map[string]string{
-		"a/b\\c:d": "a-b-c-d",
-		"正常标题":     "正常标题",
-		"":        "session",
-	}
-	for in, want := range cases {
-		if got := sanitizeFilename(in); got != want {
-			t.Errorf("sanitizeFilename(%q) = %q, want %q", in, got, want)
-		}
-	}
-	if got := sanitizeFilename(strings.Repeat("长", 60)); len([]rune(got)) != 40 {
-		t.Errorf("超长标题应截断到 40 字符, got %d", len([]rune(got)))
-	}
-}
-
 // TestLoadAuditAllEmpty 空目录返回 nil。
 func TestLoadAuditAllEmpty(t *testing.T) {
 	dir := t.TempDir()

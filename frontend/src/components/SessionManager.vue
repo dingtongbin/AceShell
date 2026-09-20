@@ -197,7 +197,7 @@ function getProtocolIcon(protocol?: string) {
   switch (protocol) { case 'ssh': return TerminalOutline; case 'telnet': return TerminalOutline; case 'serial': return RadioOutline; case 'rdp': return DesktopOutline; default: return TerminalOutline }
 }
 function getProtocolColor(protocol?: string) {
-  switch (protocol) { case 'ssh': return '#4ec9b0'; case 'telnet': return '#569cd6'; case 'serial': return '#c586c0'; case 'rdp': return '#c586c0'; case 'shell': return '#dcdcaa'; default: return '#6e9fc7' }
+  switch (protocol) { case 'ssh': return 'var(--proto-ssh)'; case 'telnet': return 'var(--proto-telnet)'; case 'serial': return 'var(--primary-color)'; case 'rdp': return 'var(--primary-color)'; case 'shell': return 'var(--proto-shell)'; default: return 'var(--proto-default)' }
 }
 
 function getContextMenuOptions(node: TreeNode): DropdownOption[] {
@@ -536,7 +536,7 @@ defineExpose({ renameSelected, deleteSelected })
     <n-modal v-model:show="showDeleteConfirm" :title="t('sessionManager.deleteConfirmTitle')" preset="dialog" :show-icon="false" style="width: 420px" :closable="false" :mask-closable="false">
       <div style="font-size:14px">
         <p>{{ t('sessionManager.deleteConfirmMsg', { name: deleteTarget?.name }) }}</p>
-        <p v-if="deleteTarget?.isDir" style="margin-top:8px;color:#e45858;font-size:12px">{{ t('sessionManager.deleteFolderWarn') }}</p>
+        <p v-if="deleteTarget?.isDir" style="margin-top:8px;color:var(--danger-color);font-size:12px">{{ t('sessionManager.deleteFolderWarn') }}</p>
       </div>
       <template #action>
         <n-button @click="cancelDelete">{{ t('common.cancel') }}</n-button>
@@ -548,7 +548,7 @@ defineExpose({ renameSelected, deleteSelected })
 
 <style scoped>
 .session-manager { width: 100%; height: 100%; display: flex; flex-direction: column; overflow: hidden; }
-.session-title { font-size: 11px; font-weight: 600; color: var(--text-color, #d4d4d4); text-transform: uppercase; letter-spacing: 0.8px; }
+.session-title { font-size: 11px; font-weight: 600; color: var(--text-color); text-transform: uppercase; letter-spacing: 0.8px; }
 .header-actions { display: flex; gap: 2px; }
 .session-search-input { flex-shrink: 0; width: 98%; align-self: center; }
 .session-search-input :deep(.n-input) { border-radius: 0; }
@@ -567,7 +567,7 @@ defineExpose({ renameSelected, deleteSelected })
 .tree-icon { flex-shrink: 0; width: 16px; text-align: center; }
 .arrow-icon { color: #888; transition: transform 0.15s ease; }
 .rotated { transform: rotate(90deg); }
-.node-name { flex: 1; min-width: 0; font-size: 13px; color: var(--text-color, #d4d4d4); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: left; }
+.node-name { flex: 1; min-width: 0; font-size: 13px; color: var(--text-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: left; }
 .node-more { flex-shrink: 0; opacity: 0; color: #888; transition: opacity 0.15s; cursor: pointer; margin-right: 4px; }
 .tree-node:hover .node-more { opacity: 0.6; }
 .node-more:hover { opacity: 1 !important; }

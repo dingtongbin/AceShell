@@ -3,13 +3,13 @@ import { ref, provide, onMounted, watchEffect, watch, computed } from 'vue'
 import { NConfigProvider, NMessageProvider, NDialogProvider, zhCN, enUS } from 'naive-ui'
 import ShellPanel from './components/ShellPanel.vue'
 import SettingsDialog from './components/SettingsDialog.vue'
-import { useTheme } from './stores/theme'
+import { useTheme, applyThemeVars } from './stores/theme'
 import { GetConfig, GetWallpaperData } from '../bindings/changeme/internal/services/configservice.js'
 import { ApplyTitleBarTheme } from '../bindings/changeme/internal/services/windowservice.js'
 import { warmupRdpRuntime } from './composables/useRdp'
 import i18n, { setLocale, currentLocale } from './i18n'
 
-const { isDark, theme, themeOverrides, initTheme } = useTheme()
+const { isDark, theme, themeOverrides, accent, initTheme, setAccent } = useTheme()
 const showSettings = ref(false)
 const panelOpacity = ref(100)
 const wallpaper = ref('')
@@ -47,6 +47,9 @@ onMounted(async () => {
   try {
     const cfg = JSON.parse(await GetConfig())
     initTheme(cfg.view?.theme ?? 'dark')
+    if (cfg.view?.accentColor && /^#[0-9a-fA-F]{6}$/.test(cfg.view.accentColor)) {
+      setAccent(cfg.view.accentColor)
+    }
     panelOpacity.value = cfg.view?.panelOpacity ?? 100
     wallpaper.value = cfg.view?.wallpaper || ''
     setLocale(cfg.language ?? 'zh-CN')
@@ -62,6 +65,9 @@ onMounted(async () => {
 async function onConfigChanged() {
   try {
     const cfg = JSON.parse(await GetConfig())
+    if (cfg.view?.accentColor && /^#[0-9a-fA-F]{6}$/.test(cfg.view.accentColor)) {
+      setAccent(cfg.view.accentColor)
+    }
     panelOpacity.value = cfg.view?.panelOpacity ?? 100
     wallpaper.value = cfg.view?.wallpaper || ''
     setLocale(cfg.language ?? 'zh-CN')
@@ -76,48 +82,10 @@ watch(isDark, (dark) => {
   ApplyTitleBarTheme(dark).catch(() => {})
 })
 
+// 全局令牌应用: 深浅表面层 + 强调色派生 + 语义色(单一来源 stores/tokens.ts)
 watchEffect(() => {
   document.documentElement.classList.toggle('dark', isDark.value)
-  const d = document.documentElement.style
-  const a = Math.min(100, Math.max(30, panelOpacity.value)) / 100
-  if (isDark.value) {
-    d.setProperty('--sidebar-bg', `rgba(32,32,32,${a})`)
-    d.setProperty('--sidebar-shadow', '#3c3c3c')
-    d.setProperty('--body-bg', `rgba(38,38,38,${a})`)
-    d.setProperty('--text-color', '#d4d4d4')
-    d.setProperty('--icon-color', '#6e6e6e')
-    d.setProperty('--icon-hover', '#c5c5c5')
-    d.setProperty('--toolbar-bg', `rgba(52,52,52,${a})`)
-    d.setProperty('--card-bg', `rgba(44,44,44,${a})`)
-    d.setProperty('--panel-bg', '#252526')
-    d.setProperty('--border-color', '#3c3c3c')
-    d.setProperty('--active-color', '#ffffff')
-    d.setProperty('--hover-bg', 'rgba(255,255,255,0.05)')
-    d.setProperty('--close-hover-bg', 'rgba(255,255,255,0.1)')
-    d.setProperty('--tab-active-bg', `rgba(22,22,22,${a})`)
-    d.setProperty('--tab-inactive-bg', `rgba(44,44,44,${a})`)
-    d.setProperty('--term-bg', `rgba(22,22,22,${a})`)
-    d.setProperty('--primary-color', '#0078d4')
-  } else {
-    d.setProperty('--sidebar-bg', '#efefef')
-    d.setProperty('--sidebar-shadow', '#d9d9d9')
-    d.setProperty('--body-bg', '#f7f7f7')
-    d.setProperty('--text-color', '#1a1a1a')
-    d.setProperty('--icon-color', '#999999')
-    d.setProperty('--icon-hover', '#555555')
-    d.setProperty('--toolbar-bg', '#e1e1e1')
-    d.setProperty('--card-bg', '#ffffff')
-    d.setProperty('--panel-bg', '#ffffff')
-    d.setProperty('--border-color', '#e0e0e0')
-    d.setProperty('--active-color', '#000000')
-    d.setProperty('--hover-bg', 'rgba(0,0,0,0.03)')
-    d.setProperty('--close-hover-bg', 'rgba(0,0,0,0.06)')
-    d.setProperty('--tab-active-bg', '#ffffff')
-    d.setProperty('--tab-inactive-bg', '#d9d9d9')
-    d.setProperty('--term-bg', `rgba(245,245,245,${a})`)
-    d.setProperty('--primary-color', '#005a9e')
-  }
-  document.body.style.backgroundColor = isDark.value ? `rgba(38,38,38,${a})` : '#f7f7f7'
+  applyThemeVars(isDark.value, panelOpacity.value, accent.value)
 })
 </script>
 
@@ -151,8 +119,8 @@ body {
   width: 100vw;
   height: 100vh;
   overflow: hidden !important;
-  background: var(--body-bg, #1e1e1e);
-  color: var(--text-color, #d4d4d4);
+  background: var(--body-bg);
+  color: var(--text-color);
 }
 
 ::-webkit-scrollbar {
@@ -181,14 +149,14 @@ body {
   cursor: pointer;
   user-select: none;
   background: rgba(255,255,255,0.03);
-  border-bottom: 1px solid var(--sidebar-shadow, #3c3c3c);
+  border-bottom: 1px solid var(--sidebar-shadow);
   transition: background 0.15s;
 }
 .section-header:hover { background: rgba(255,255,255,0.06); }
 .section-arrow { color: #888; transition: transform 0.15s ease; flex-shrink: 0; }
 .section-arrow.rotated { transform: rotate(90deg); }
 .section-icon { color: #888; }
-.section-label { font-size: 12px; font-weight: 600; color: var(--text-color, #d4d4d4); text-transform: uppercase; letter-spacing: 0.5px; }
+.section-label { font-size: 12px; font-weight: 600; color: var(--text-color); text-transform: uppercase; letter-spacing: 0.5px; }
 .section-actions { margin-left: auto; display: flex; gap: 2px; }
 .sm-field {
   display: flex;
@@ -197,7 +165,7 @@ body {
 }
 .sm-label {
   font-size: 11px;
-  color: var(--text-color, #d4d4d4);
+  color: var(--text-color);
   opacity: 0.7;
 }
 .sm-row-inline {
@@ -212,6 +180,20 @@ body {
 .xterm-screen,
 .xterm .xterm-viewport {
   background-color: transparent !important;
+}
+
+/* 深色模式: 结构区域边界不画线(表面明度差已足够分区,消除亮色细线);
+   亮色模式保留标准细线。全局 border-box 下,固定高度容器移除边线无布局跳动。 */
+html.dark .top-menu-bar,
+html.dark .section-header,
+html.dark .resource-header,
+html.dark .resource-tabs,
+html.dark .section-wrapper,
+html.dark .mcp-section,
+html.dark .mcp-log-toolbar,
+html.dark .mcp-log-item {
+  border-bottom: none;
+  border-top: none;
 }
 
 /* 非阻塞提示浮层(message/notification)置于自绘标题栏之上,避免被标题栏遮挡;

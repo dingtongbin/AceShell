@@ -531,7 +531,7 @@ onMounted(loadTree)
     <n-modal v-model:show="showDeleteConfirm" :title="t('scriptManager.deleteConfirmTitle')" preset="dialog" :show-icon="false" style="width: 420px" :closable="false" :mask-closable="false">
       <div style="font-size:14px">
         <p>{{ t('scriptManager.deleteConfirmMsg', { name: deleteTarget?.name }) }}</p>
-        <p v-if="deleteTarget?.isDir" style="margin-top:8px;color:#e45858;font-size:12px">{{ t('scriptManager.deleteFolderWarn') }}</p>
+        <p v-if="deleteTarget?.isDir" style="margin-top:8px;color:var(--danger-color);font-size:12px">{{ t('scriptManager.deleteFolderWarn') }}</p>
       </div>
       <template #action>
         <n-button @click="cancelDelete">{{ t('common.cancel') }}</n-button>
@@ -542,7 +542,7 @@ onMounted(loadTree)
       <div class="form-group">
         <label class="form-label">{{ t('scriptManager.nameLabel') }}</label>
         <n-input v-model:value="newScriptName" class="new-script-input" :placeholder="t('scriptManager.newScriptPlaceholder')" @keyup.enter="confirmNewScript" @keyup.esc="cancelNewScript" />
-        <p v-if="newScriptError" style="margin-top: 8px; color: #e45858; font-size: 12px;">{{ newScriptError }}</p>
+        <p v-if="newScriptError" style="margin-top: 8px; color: var(--danger-color); font-size: 12px;">{{ newScriptError }}</p>
         <p style="margin-top: 8px; color: var(--icon-color); font-size: 12px;">{{ t('scriptManager.newScriptHint') }}</p>
       </div>
       <template #action>
@@ -570,7 +570,7 @@ onMounted(loadTree)
 .indent-guide.guide-last { bottom: 50%; }
 .tree-icon { flex-shrink: 0; width: 16px; text-align: center; }
 .rotated { transform: rotate(90deg); }
-.node-name { flex: 1; min-width: 0; font-size: 13px; color: var(--text-color, #d4d4d4); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: left; }
+.node-name { flex: 1; min-width: 0; font-size: 13px; color: var(--text-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: left; }
 .node-more { flex-shrink: 0; opacity: 0; color: #888; transition: opacity 0.15s; cursor: pointer; margin-right: 4px; }
 .tree-node:hover .node-more { opacity: 0.6; }
 .node-more:hover { opacity: 1 !important; }

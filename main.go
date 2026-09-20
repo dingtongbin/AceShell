@@ -3,7 +3,10 @@ package main
 import (
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -34,12 +37,14 @@ func init() {
 	application.RegisterEvent[string]("mcp-audit-appended")
 	application.RegisterEvent[string]("mcp-status-changed")
 	application.RegisterEvent[string]("mcp-critical-blocked")
-	// 内嵌智能体
-	application.RegisterEvent[string]("agent-event")
-	application.RegisterEvent[string]("agent-stream")
-	application.RegisterEvent[string]("agent-status-changed")
-	application.RegisterEvent[string]("agent-pending-changed")
-	application.RegisterEvent[string]("agent-error")
+	// 插件服务
+	application.RegisterEvent[string]("plugin-registry-changed")
+	application.RegisterEvent[string]("plugin-status-changed")
+	application.RegisterEvent[string]("plugin-open-tab")
+	application.RegisterEvent[string]("plugin-tab-updated")
+	application.RegisterEvent[string]("plugin-tab-closed")
+	application.RegisterEvent[string]("plugin-toast")
+	application.RegisterEvent[string]("plugin-event")
 }
 
 // services 聚合所有后端服务实例，便于统一初始化和注入。
@@ -62,7 +67,7 @@ type services struct {
 	rdp          *appservices.RdpService
 	vnc          *appservices.VncService
 	mcp          *appservices.McpService
-	agent        *appservices.AgentService
+	plugins      *appservices.PluginService
 }
 
 // main 应用入口。
@@ -73,7 +78,7 @@ func main() {
 	}
 
 	svc := initServices()
-	setupCleanup(func() { svc.rdp.Stop(); svc.vnc.Stop() })
+	setupCleanup(func() { svc.rdp.Stop(); svc.vnc.Stop(); svc.plugins.StopAll() })
 
 	app := createApp(svc)
 	wireServices(svc, app)
@@ -85,6 +90,7 @@ func main() {
 	svc.mcp.Stop()
 	svc.rdp.Stop()
 	svc.vnc.Stop()
+	svc.plugins.StopAll()
 }
 
 // setupCleanup 注册退出清理，确保子进程被终止、图形会话桥(RDP/VNC)被关闭。
@@ -127,9 +133,29 @@ func initServices() *services {
 	svc.config.Init()
 	svc.log.Init()
 	svc.mcp = appservices.NewMcpService(svc.config, svc.sessionFile)
-	svc.agent = appservices.NewAgentService(svc.config, svc.mcp)
+	svc.plugins = appservices.NewPluginService(svc.config, svc.sessionFile, hostVueShimSource())
 
 	return svc
+}
+
+// hostVueShimSource 从内嵌前端产物读取宿主 Vue shim(构建时由 vite 插件
+// hostVueShim 自动生成, 导出面与宿主安装的 vue 同步)。缺失时返回空串,
+// PluginService 的资产处理器退回内置兜底清单。
+func hostVueShimSource() string {
+	raw, err := fs.ReadFile(assets, "frontend/dist/plugins-host-vue.js")
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		fmt.Fprintf(os.Stderr, "读取宿主 Vue shim 失败: %v\n", err)
+	}
+	return string(raw)
+}
+
+// webviewDebugArgs 诊断用追加参数(空环境变量返回 nil, 不影响正常启动)。
+func webviewDebugArgs() []string {
+	v := strings.TrimSpace(os.Getenv("ACESHELL_WEBVIEW_ARGS"))
+	if v == "" {
+		return nil
+	}
+	return strings.Fields(v)
 }
 
 // createApp 创建 Wails 应用实例并注册所有服务。
@@ -153,13 +179,29 @@ func createApp(svc *services) *application.App {
 			application.NewService(svc.browser),
 			application.NewService(svc.clipboard),
 			application.NewService(svc.version),
-		application.NewService(svc.rdp),
-		application.NewService(svc.vnc),
-		application.NewService(svc.mcp),
-		application.NewService(svc.agent),
-	},
+			application.NewService(svc.rdp),
+			application.NewService(svc.vnc),
+			application.NewService(svc.mcp),
+			application.NewService(svc.plugins),
+		},
 		Assets: application.AssetOptions{
-			Handler: application.AssetFileServerFS(assets),
+			Handler: func() http.Handler {
+				pluginsAsset := svc.plugins.AssetHandler()
+				embedded := application.AssetFileServerFS(assets)
+				return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					// 插件前端资产(/plugins/...)优先; 其余走内嵌资源
+					if strings.HasPrefix(r.URL.Path, "/plugins/") {
+						pluginsAsset.ServeHTTP(w, r)
+						return
+					}
+					embedded.ServeHTTP(w, r)
+				})
+			}(),
+		},
+		Windows: application.WindowsOptions{
+			// 诊断开关: ACESHELL_WEBVIEW_ARGS="--remote-debugging-port=9333" 追加
+			// WebView2 浏览器参数(设置页卡死类问题需 CDP 现场排查); 未设置时零影响。
+			AdditionalBrowserArgs: webviewDebugArgs(),
 		},
 		Mac: application.MacOptions{
 			ApplicationShouldTerminateAfterLastWindowClosed: true,
@@ -211,8 +253,9 @@ func wireServices(svc *services, app *application.App) {
 		}
 	}
 
-	// 内嵌智能体:注入应用实例供事件推送
-	svc.agent.SetApp(app)
+	// 插件宿主:注入应用实例后扫描并启动全部已启用插件
+	svc.plugins.SetApp(app)
+	svc.plugins.StartAll()
 }
 
 // createMainWindow 创建主窗口。

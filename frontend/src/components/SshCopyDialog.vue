@@ -86,7 +86,7 @@ async function doCopy() {
         <n-input v-model:value="keyRef" disabled :placeholder="t('sshCopyDialog.currentKeyPlaceholder')" />
       </div>
       <div class="form-group">
-        <label class="form-label">{{ t('sshCopyDialog.targetHost') }} <span style="color: #e88070">*</span></label>
+        <label class="form-label">{{ t('sshCopyDialog.targetHost') }} <span style="color: var(--danger-color)">*</span></label>
         <n-input v-model:value="targetHost" :disabled="!!verifiedKey" :placeholder="t('sshCopyDialog.hostPlaceholder')" />
       </div>
       <div class="form-group">
@@ -99,11 +99,11 @@ async function doCopy() {
         <n-checkbox v-model:checked="confirmChecked">{{ t('sshCopyDialog.confirmChecked') }}</n-checkbox>
       </div>
       <div class="form-group">
-        <label class="form-label">{{ t('common.username') }} <span style="color: #e88070">*</span></label>
+        <label class="form-label">{{ t('common.username') }} <span style="color: var(--danger-color)">*</span></label>
         <n-input v-model:value="targetUser" :placeholder="t('sshCopyDialog.usernamePlaceholder')" />
       </div>
       <div class="form-group">
-        <label class="form-label">{{ t('common.password') }} <span style="color: #e88070">*</span></label>
+        <label class="form-label">{{ t('common.password') }} <span style="color: var(--danger-color)">*</span></label>
         <n-input v-model:value="targetPassword" type="password" show-password-on="click" :placeholder="t('sshCopyDialog.passwordPlaceholder')" />
       </div>
       <div class="form-hint">{{ t('sshCopyDialog.hint') }}</div>

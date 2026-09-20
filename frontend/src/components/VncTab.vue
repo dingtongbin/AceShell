@@ -150,10 +150,10 @@ onBeforeUnmount(() => {
 .vnc-overlay {
   position: absolute; inset: 0; display: flex; flex-direction: column;
   align-items: center; justify-content: center; gap: 12px;
-  background: var(--bg-color, #1e1e1e); color: var(--text-color, #d4d4d4);
+  background: var(--bg-color); color: var(--text-color);
   font-size: 13px; z-index: 3; pointer-events: auto;
 }
-.vnc-error { max-width: 90%; word-break: break-all; text-align: center; color: #e45858; }
+.vnc-error { max-width: 90%; word-break: break-all; text-align: center; color: var(--danger-color); }
 .vnc-retry { padding: 4px 16px; cursor: pointer; border-radius: 4px; border: 1px solid #555; background: transparent; color: inherit; }
 .vnc-retry:hover { border-color: #888; }
 </style>

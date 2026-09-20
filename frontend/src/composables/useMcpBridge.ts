@@ -22,11 +22,23 @@ import {
 
 // ==================== 类型 ====================
 
+/** 智能体独占锁持有者(GIL 语义: 同一时刻仅一个智能体可操作 MCP;null=空闲)。 */
+export interface McpLockInfo {
+  owner: string
+  /** 展示名: "内嵌智能体" 或 客户端名+会话短码(如 "opencode#a1b2") */
+  label: string
+  kind: 'embedded' | 'external'
+  heldForSec: number
+  idleSec: number
+}
+
 export interface McpStatus {
   enabled: boolean
   state: 'stopped' | 'running' | 'paused'
   /** 仲裁执行槽占用中(工具调用执行期),驱动"MCP 执行中"按钮与标签页遮罩 */
   busy: boolean
+  /** 智能体独占锁持有者(工具调用之间仍持续持有,驱动持锁者指示) */
+  lock: McpLockInfo | null
   mode: 'manual' | 'auto'
   url: string
   token: string
@@ -89,7 +101,7 @@ export interface McpTabManagerApi {
 // ==================== 状态 ====================
 
 const status = ref<McpStatus>({
-  enabled: false, state: 'stopped', busy: false, mode: 'manual', url: '', token: '',
+  enabled: false, state: 'stopped', busy: false, lock: null, mode: 'manual', url: '', token: '',
   port: 8940, pendingApprovals: 0, ballX: -1, ballY: -1,
   opDelayMs: 1000, batchIntervalMs: 300, grantsEnabled: true,
   auditRetentionDays: 30, terminalReadMax: 32768,

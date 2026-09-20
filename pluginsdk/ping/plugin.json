@@ -1,0 +1,6 @@
+{
+  "id": "ping",
+  "name": "Ping 工具",
+  "version": "0.2.0",
+  "minHost": "0.2.3"
+}

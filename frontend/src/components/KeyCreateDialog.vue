@@ -52,7 +52,7 @@ async function doCreate() {
   <n-modal :show="show" @update:show="emit('update:show', $event)" preset="dialog" :title="t('keyCreateDialog.title')" :show-icon="false" style="width: 440px" :mask-closable="false">
     <div class="key-form">
       <div class="form-group">
-        <label class="form-label">{{ t('keyCreateDialog.keyName') }} <span style="color: #e88070">*</span></label>
+        <label class="form-label">{{ t('keyCreateDialog.keyName') }} <span style="color: var(--danger-color)">*</span></label>
         <n-input v-model:value="keyName" :placeholder="t('keyCreateDialog.keyNamePlaceholder')" />
       </div>
       <div class="form-group">

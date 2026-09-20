@@ -151,7 +151,7 @@ func TestMcpToolSearchLogs_And_Detail(t *testing.T) {
 	mcp := &McpService{state: mcpStateRunning, audit: NewMcpAuditService(McpAuditDir())}
 	t.Cleanup(mcp.audit.Close)
 
-	raw, err := mcp.toolSearchLogs(mcpSrcEmbedded, "prod", "", false, 0)
+	raw, err := mcp.toolSearchLogs(mcpSrcExternal, "prod", "", false, 0)
 	if err != nil {
 		t.Fatalf("toolSearchLogs failed: %v", err)
 	}
@@ -166,7 +166,7 @@ func TestMcpToolSearchLogs_And_Detail(t *testing.T) {
 		t.Fatalf("unexpected search result: %s", raw)
 	}
 
-	detailRaw, err := mcp.toolLogDetail(mcpSrcEmbedded, out.Logs[0].ID, 10)
+	detailRaw, err := mcp.toolLogDetail(mcpSrcExternal, out.Logs[0].ID, 10)
 	if err != nil {
 		t.Fatalf("toolLogDetail failed: %v", err)
 	}
@@ -176,10 +176,10 @@ func TestMcpToolSearchLogs_And_Detail(t *testing.T) {
 
 	// MCP 挂起时应拒绝
 	mcp.state = mcpStatePaused
-	if _, err := mcp.toolSearchLogs(mcpSrcEmbedded, "", "", false, 0); err == nil {
+	if _, err := mcp.toolSearchLogs(mcpSrcExternal, "", "", false, 0); err == nil {
 		t.Fatal("paused MCP should reject search_logs")
 	}
-	if _, err := mcp.toolLogDetail(mcpSrcEmbedded, "x", 10); err == nil {
+	if _, err := mcp.toolLogDetail(mcpSrcExternal, "x", 10); err == nil {
 		t.Fatal("paused MCP should reject log_detail")
 	}
 }

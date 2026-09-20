@@ -34,8 +34,7 @@ const { status: mcpStatus } = useMcpBridge()
 
 const props = defineProps<{
   showSession: boolean
-  showAgent: boolean
-  /** 智能助手总开关(视图菜单): 关闭时隐藏 MCP/资源管理器/AI 面板三个顶栏按钮 */
+  /** 智能助手总开关(视图菜单): 关闭时隐藏 MCP/资源管理器顶栏按钮 */
   showAssistant: boolean
   /** 活动标签页状态快照:用于按活动标签页启用/禁用工具菜单项 */
   activeTabState: ActiveTabState
@@ -45,7 +44,6 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'toggle-session'): void
-  (e: 'toggle-agent'): void
   (e: 'new-session'): void
   (e: 'new-folder'): void
   (e: 'import-sessions'): void
@@ -256,12 +254,19 @@ const mcpPhase = computed<'off' | 'idle' | 'paused' | 'busy'>(() => {
   return (s.busy || s.pendingApprovals > 0) ? 'busy' : 'idle'
 })
 
-const mcpTooltip = computed(() => ({
-  off: t('topMenu.mcpOff'),
-  idle: t('topMenu.mcpOn'),
-  paused: t('topMenu.mcpPaused'),
-  busy: t('topMenu.mcpBusy'),
-}[mcpPhase.value]))
+const mcpTooltip = computed(() => {
+  // 持锁者优先: 即使处于两次调用之间(非 busy),也让用户知道操作权在谁手里
+  const lock = mcpStatus.value.lock
+  if (lock && (mcpPhase.value === 'busy' || mcpPhase.value === 'idle')) {
+    return t('topMenu.mcpLockOwner', { agent: lock.label })
+  }
+  return {
+    off: t('topMenu.mcpOff'),
+    idle: t('topMenu.mcpOn'),
+    paused: t('topMenu.mcpPaused'),
+    busy: t('topMenu.mcpBusy'),
+  }[mcpPhase.value]
+})
 
 async function handleMcpToggle() {
   try {
@@ -496,18 +501,6 @@ onBeforeUnmount(() => {
         </template>
         {{ t('topMenu.resourceManager') }}
       </n-tooltip>
-      <n-tooltip placement="bottom" trigger="hover" :delay="300">
-        <template #trigger>
-          <button class="tmb-panel-btn" :class="{ active: showAgent }" @click="emit('toggle-agent')">
-            <!-- VSCode layout-sidebar-right:圆角方框 + 右侧实心竖条(次侧边栏,AI 聊天) -->
-            <svg width="16" height="16" viewBox="0 0 16 16">
-              <rect x="0.75" y="0.75" width="14.5" height="14.5" rx="2.25" fill="none" stroke="currentColor" stroke-width="1.1" />
-              <rect x="9.9" y="2.7" width="3.4" height="10.6" rx="0.8" fill="currentColor" />
-            </svg>
-          </button>
-        </template>
-        {{ t('agent.panelTitle') }}
-      </n-tooltip>
       </template>
 
       <!-- 窗口控制:仅 Frameless 模式渲染 -->
@@ -538,8 +531,8 @@ onBeforeUnmount(() => {
   flex-shrink: 0;
   display: flex;
   align-items: stretch;
-  background: var(--toolbar-bg, #2d2d2d);
-  border-bottom: 1px solid var(--border-color, #3c3c3c);
+  background: var(--toolbar-bg);
+  border-bottom: 1px solid var(--border-color);
   user-select: none;
   position: relative;
   /* 自绘标题栏必须凌驾于一切应用内弹层(Naive UI 弹窗遮罩从 2000 起动态递增),
@@ -582,7 +575,7 @@ onBeforeUnmount(() => {
   align-items: center;
   padding: 0 12px;
   font-size: 13px;
-  color: var(--text-color, #d4d4d4);
+  color: var(--text-color);
   cursor: pointer;
   border-radius: 0 0 6px 6px;
   transition: background 0.15s;
@@ -599,8 +592,8 @@ onBeforeUnmount(() => {
   top: 100%;
   left: 0;
   min-width: 210px;
-  background: var(--panel-bg, #252526);
-  border: 1px solid var(--border-color, #3c3c3c);
+  background: var(--panel-bg);
+  border: 1px solid var(--border-color);
   border-radius: 6px;
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
   padding: 4px;
@@ -626,7 +619,7 @@ html:not(.dark) .tmb-dropdown {
   gap: 8px;
   padding: 6px 10px;
   font-size: 13px;
-  color: var(--text-color, #d4d4d4);
+  color: var(--text-color);
   border-radius: 4px;
   cursor: pointer;
   transition: background 0.12s;
@@ -651,7 +644,7 @@ html:not(.dark) .tmb-dropdown {
   height: 1px;
   padding: 0;
   margin: 4px 6px;
-  background: var(--sidebar-shadow, #3c3c3c);
+  background: var(--sidebar-shadow);
   cursor: default;
 }
 
@@ -703,7 +696,7 @@ html:not(.dark) .tmb-dropdown {
   border: none;
   background: transparent;
   border-radius: 5px;
-  color: var(--text-color, #d4d4d4);
+  color: var(--text-color);
   opacity: 0.75;
   cursor: pointer;
   transition: background 0.15s, opacity 0.15s, color 0.2s;
@@ -719,7 +712,7 @@ html:not(.dark) .tmb-dropdown {
 }
 
 .tmb-panel-btn.active {
-  color: #4ec9b0;
+  color: var(--primary-color);
   opacity: 1;
 }
 
@@ -743,19 +736,19 @@ html:not(.dark) .tmb-dropdown {
 }
 
 .tmb-mcp-btn.off {
-  color: var(--icon-color, #6e6e6e);
+  color: var(--icon-color);
 }
 
 .tmb-mcp-btn.idle {
-  color: #4ec9b0;
+  color: var(--primary-color);
 }
 
 .tmb-mcp-btn.paused {
-  color: #f2c97d;
+  color: var(--warning-color);
 }
 
 .tmb-mcp-btn.busy {
-  color: var(--primary-color, #0078d4);
+  color: var(--primary-color);
 }
 
 /* 窗口控制按钮 */
@@ -775,7 +768,7 @@ html:not(.dark) .tmb-dropdown {
   justify-content: center;
   border: none;
   background: transparent;
-  color: var(--text-color, #d4d4d4);
+  color: var(--text-color);
   cursor: pointer;
   transition: background 0.12s, color 0.12s;
 }
@@ -785,7 +778,7 @@ html:not(.dark) .tmb-dropdown {
 }
 
 .wc-close:hover {
-  background: #e45858;
+  background: var(--danger-color);
   color: #fff;
 }
 </style>

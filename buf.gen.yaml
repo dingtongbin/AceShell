@@ -1,0 +1,10 @@
+# protoc 生成配置 (buf 驱动本机 protoc-gen-* 插件, 无需 protoc 二进制)。
+# 生成物提交入库, 仅 proto/aceshell.proto 变更时手动执行: buf generate proto
+version: v2
+plugins:
+  - local: protoc-gen-go
+    out: pluginsdk/proto
+    opt: paths=source_relative
+  - local: protoc-gen-go-grpc
+    out: pluginsdk/proto
+    opt: paths=source_relative

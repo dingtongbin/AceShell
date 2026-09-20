@@ -1,19 +1,36 @@
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, watch } from 'vue'
-import { NModal, NSwitch, NTag, NRadioGroup, NRadioButton, NButton, NInput, NCheckbox, NIcon, NSlider, NColorPicker, NInputNumber, NAutoComplete, NSelect, useMessage } from 'naive-ui'
+import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
+import { NModal, NSwitch, NTag, NRadioGroup, NRadioButton, NButton, NInput, NCheckbox, NIcon, NSlider, NColorPicker, NInputNumber, NAutoComplete, NSelect, NPopconfirm, useMessage } from 'naive-ui'
+import { Events } from '@wailsio/runtime'
 import { CloseOutline, LogoGithub, GlobeOutline } from '@vicons/ionicons5'
 import { useTheme } from '../stores/theme'
-import { GetConfig, SetTabOrientation, SetTheme, SetCloseConfirm, SetPanelOpacity, SetWallpaper, SetTerminalConfig, SetShowSerial, SetShowHelp, SetFileEditingAutoSave, SetLanguage, SetCustomTitlebar, SetShowToolbar, SetShowAssistant } from '../../bindings/changeme/internal/services/configservice.js'
+import { ACCENT_PRESETS } from '../stores/tokens'
+import { GetConfig, SetTabOrientation, SetTheme, SetThemeAccent, SetCloseConfirm, SetPanelOpacity, SetWallpaper, SetTerminalConfig, SetShowSerial, SetShowHelp, SetFileEditingAutoSave, SetLanguage, SetCustomTitlebar, SetShowToolbar, SetShowAssistant } from '../../bindings/changeme/internal/services/configservice.js'
 import { OpenFileDialog } from '../../bindings/changeme/internal/services/windowservice.js'
 import { OpenUrl as BrowserOpenUrl } from '../../bindings/changeme/internal/services/browserservice.js'
 import { GetVersion } from '../../bindings/changeme/internal/services/versionservice.js'
 import { setLocale, languageOptions } from '../i18n'
 import { useI18n } from 'vue-i18n'
+import { PluginList, PluginSetEnabled, PluginReload, PluginOpenDir, PluginInstallFromGitHub, PluginUninstall, PluginRestoreBundled } from '../../bindings/changeme/internal/services/pluginservice.js'
+import type { PluginSummary } from '../composables/usePluginBridge'
 
 const message = useMessage()
 const { t } = useI18n()
 
-const { themeMode, setThemeMode } = useTheme()
+const { themeMode, setThemeMode, accent, setAccent } = useTheme()
+
+// 自定义强调色: 即时预览(setAccent) + 持久化(SetThemeAccent) + 跨组件同步(config-changed)
+async function handleAccentChange(color: string) {
+  const hex = color.slice(0, 7)
+  if (!/^#[0-9a-fA-F]{6}$/.test(hex)) return
+  setAccent(hex)
+  try {
+    await SetThemeAccent(hex)
+    window.dispatchEvent(new Event('config-changed'))
+  } catch (e) {
+    console.warn('设置强调色失败:', e)
+  }
+}
 
 // 用系统默认浏览器打开外部链接
 async function openExternal(url: string) {
@@ -50,8 +67,112 @@ const navItems = computed(() => [
   { key: 'terminal', label: t('settings.nav.terminal') },
   { key: 'fileEditing', label: t('settings.nav.fileEditing') },
   { key: 'tabs', label: t('settings.nav.tabs') },
+  { key: 'plugins', label: t('settings.nav.plugins') },
   { key: 'about', label: t('settings.nav.about') },
 ])
+
+// ==================== 插件管理 ====================
+
+const pluginList = ref<PluginSummary[]>([])
+const ghInput = ref('')
+const installing = ref(false)
+// 插件操作防抖: id → 操作名('reload'|'toggle'), 期间控件呈 loading 且忽略重复点击
+const pluginBusy = ref<Record<string, string>>({})
+let offRegistry: (() => void) | null = null
+let offStatusChanged: (() => void) | null = null
+
+function pluginStatusText(p: PluginSummary): string {
+  const key = { running: 'plugins.statusRunning', starting: 'plugins.statusStarting', stopped: 'plugins.statusStopped', error: 'plugins.statusError', disabled: 'plugins.statusDisabled', uninstalled: 'plugins.statusUninstalled' }[p.status] || 'plugins.statusStopped'
+  const text = t(key)
+  return p.error ? `${text} · ${p.error}` : text
+}
+
+async function refreshPlugins() {
+  try {
+    const data = JSON.parse(await PluginList())
+    pluginList.value = Array.isArray(data?.plugins) ? data.plugins : []
+  } catch {}
+}
+
+async function handlePluginEnabledChange(id: string, v: boolean) {
+  if (pluginBusy.value[id]) return
+  pluginBusy.value[id] = 'toggle'
+  try {
+    await PluginSetEnabled(id, v)
+    if (v) {
+      // 启用为异步重启: 稍后刷新拿 running 状态(与重载同策略)
+      setTimeout(refreshPlugins, 800)
+    } else {
+      await refreshPlugins()
+    }
+  } catch (e: any) {
+    message.error(String(e?.message || e))
+  } finally {
+    // 1s 防抖窗口: 期间开关呈 loading 并忽略点击
+    setTimeout(() => { delete pluginBusy.value[id] }, 1000)
+  }
+}
+
+async function handlePluginReload(id: string) {
+  if (pluginBusy.value[id]) return
+  pluginBusy.value[id] = 'reload'
+  try {
+    await PluginReload(id)
+    message.success(t('plugins.reloaded', { id }))
+    setTimeout(refreshPlugins, 800)
+  } catch (e: any) {
+    message.error(String(e?.message || e))
+  } finally {
+    // 1s 防抖窗口: 期间按钮呈 loading 并忽略点击
+    setTimeout(() => { delete pluginBusy.value[id] }, 1000)
+  }
+}
+
+async function handleOpenPluginDir() {
+  try { await PluginOpenDir() } catch {}
+}
+
+async function handleUninstallPlugin(id: string) {
+  try {
+    const res = JSON.parse(await PluginUninstall(id))
+    if (res?.error) { message.error(String(res.error)); return }
+    message.success(t('plugins.uninstalledOk', { id }))
+    await refreshPlugins()
+  } catch (e: any) {
+    message.error(String(e?.message || e))
+  }
+}
+
+async function handleRestoreBundled(id: string) {
+  try {
+    const res = JSON.parse(await PluginRestoreBundled(id))
+    if (res?.error) { message.error(String(res.error)); return }
+    message.success(t('plugins.restoredOk', { id }))
+    setTimeout(refreshPlugins, 800)
+  } catch (e: any) {
+    message.error(String(e?.message || e))
+  }
+}
+
+async function handleInstallPlugin() {
+  const input = ghInput.value.trim()
+  if (!input || installing.value) return
+  installing.value = true
+  try {
+    const res = JSON.parse(await PluginInstallFromGitHub(input))
+    if (res?.error) {
+      message.error(String(res.error))
+    } else {
+      message.success(t('plugins.installOk', { id: res.id, version: res.version }))
+      ghInput.value = ''
+      setTimeout(refreshPlugins, 800)
+    }
+  } catch (e: any) {
+    message.error(String(e?.message || e))
+  } finally {
+    installing.value = false
+  }
+}
 
 // ==================== 终端设置(表单模式:确定才保存生效) ====================
 
@@ -274,8 +395,13 @@ async function loadConfig() {
 onMounted(() => {
   loadConfig()
   GetVersion().then(v => { appVersion.value = v }).catch(() => {})
+  // 注册表/状态事件 → 插件列表自愈刷新: 启用/恢复为异步重启, 期间注册表瞬时为空,
+  // 仅靠操作后的定时刷新会停留在空列表(卡片消失)。
+  offRegistry = Events.On('plugin-registry-changed', () => { refreshPlugins() })
+  offStatusChanged = Events.On('plugin-status-changed', () => { refreshPlugins() })
 })
-watch(() => props.show, (val) => { if (val) loadConfig() })
+onUnmounted(() => { offRegistry?.(); offStatusChanged?.() })
+watch(() => props.show, (val) => { if (val) { loadConfig(); refreshPlugins() } })
 </script>
 
 <template>
@@ -306,6 +432,16 @@ watch(() => props.show, (val) => { if (val) loadConfig() })
                 <n-radio-button value="light">{{ t('settings.themeLight') }}</n-radio-button>
                 <n-radio-button value="auto">{{ t('settings.themeAuto') }}</n-radio-button>
               </n-radio-group>
+            </div>
+            <div class="setting-item" style="margin-top: 12px;">
+              <div class="setting-label">{{ t('settings.accentColor') }}</div>
+              <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                <div v-for="p in ACCENT_PRESETS" :key="p.value" class="accent-swatch"
+                     :class="{ active: accent === p.value }" :style="{ background: p.value }"
+                     :title="p.label" @click="handleAccentChange(p.value)" />
+                <n-color-picker :value="accent" :show-alpha="false" size="small" style="width: 88px"
+                                :modes="['hex']" :on-complete="handleAccentChange" />
+              </div>
             </div>
             <div class="setting-item" style="margin-top: 12px;">
               <div class="setting-label">{{ t('settings.panelOpacity') }}</div>
@@ -477,6 +613,50 @@ watch(() => props.show, (val) => { if (val) loadConfig() })
               <n-checkbox :checked="closeNoConfirm" @update:checked="handleCloseNoConfirmChange" />
             </div>
           </div>
+          <div v-if="activeNav === 'plugins'">
+            <div class="setting-item" style="flex-direction: column; align-items: stretch; gap: 8px;">
+              <div class="setting-label">{{ t('plugins.installTitle') }}</div>
+              <div style="display: flex; gap: 8px;">
+                <n-input v-model:value="ghInput" size="small" :placeholder="t('plugins.installPlaceholder')" :disabled="installing" @keyup.enter="handleInstallPlugin" />
+                <n-button size="small" type="primary" :loading="installing" @click="handleInstallPlugin">{{ t('plugins.installBtn') }}</n-button>
+              </div>
+              <div style="font-size: 12px; color: var(--icon-color);">{{ t('plugins.installHint') }}</div>
+            </div>
+            <div class="setting-item" style="margin-top: 12px;">
+              <div class="setting-label">{{ t('plugins.openDir') }}</div>
+              <n-button size="small" @click="handleOpenPluginDir">{{ t('plugins.openDir') }}</n-button>
+            </div>
+            <div v-if="pluginList.length === 0" style="margin-top: 12px; font-size: 12px; color: var(--icon-color);">
+              {{ t('plugins.empty') }}
+            </div>
+            <div v-for="p in pluginList" :key="p.id" class="plugin-card">
+              <img v-if="p.icon" class="plugin-card-icon" :src="p.icon" alt="" />
+              <div class="plugin-card-main">
+                <div class="plugin-card-name">
+                  {{ p.displayName }}
+                  <n-tag size="tiny" :bordered="false">v{{ p.version || '-' }}</n-tag>
+                  <n-tag v-if="p.bundled" size="tiny" :bordered="false" type="info">{{ t('plugins.bundled') }}</n-tag>
+                </div>
+                <div class="plugin-card-status" :class="{ 'plugin-status-error': p.status === 'error' }">{{ pluginStatusText(p) }}</div>
+              </div>
+              <template v-if="p.status === 'uninstalled'">
+                <n-button size="tiny" type="primary" quaternary @click="handleRestoreBundled(p.id)">{{ t('plugins.restore') }}</n-button>
+              </template>
+              <template v-else>
+                <n-button size="tiny" quaternary :loading="pluginBusy[p.id] === 'reload'" :disabled="pluginBusy[p.id] === 'reload' || p.status === 'disabled'" @click="handlePluginReload(p.id)">{{ t('plugins.reload') }}</n-button>
+                <n-popconfirm placement="top" :width="260" :show-icon="false" @positive-click="handleUninstallPlugin(p.id)">
+                  <template #trigger>
+                    <n-button size="tiny" quaternary type="error">{{ t('plugins.uninstall') }}</n-button>
+                  </template>
+                  {{ t('plugins.uninstallConfirm', { id: p.id }) }}
+                </n-popconfirm>
+                <n-switch size="small" :loading="pluginBusy[p.id] === 'toggle'" :value="p.status !== 'disabled'" @update:value="(v: boolean) => handlePluginEnabledChange(p.id, v)" />
+              </template>
+            </div>
+            <div style="margin-top: 12px; font-size: 12px; color: var(--icon-color);">
+              {{ t('plugins.dirHint') }}
+            </div>
+          </div>
           <div v-if="activeNav === 'about'">
             <div class="about-item"><span class="about-label">{{ t('settings.aboutName') }}</span><span class="about-value">AceShell</span></div>
             <div class="about-item"><span class="about-label">{{ t('settings.aboutVersion') }}</span><span class="about-value"><n-tag size="tiny" type="info">v{{ appVersion }}</n-tag></span></div>
@@ -504,10 +684,25 @@ watch(() => props.show, (val) => { if (val) loadConfig() })
 </template>
 
 <style scoped>
+.accent-swatch {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  cursor: pointer;
+  border: 2px solid transparent;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.18);
+  transition: transform 0.12s, border-color 0.12s;
+}
+.accent-swatch:hover { transform: scale(1.12); }
+.accent-swatch.active {
+  border-color: var(--text-color);
+  box-shadow: 0 0 0 2px var(--primary-color);
+}
+
 .settings-dialog {
   display: flex;
   height: 420px;
-  background: var(--body-bg, #1e1e1e);
+  background: var(--body-bg);
   border-radius: 8px;
   overflow: hidden;
   position: relative;
@@ -515,7 +710,7 @@ watch(() => props.show, (val) => { if (val) loadConfig() })
 .settings-nav {
   width: 110px;
   flex-shrink: 0;
-  border-right: 1px solid var(--border-color, #3c3c3c);
+  border-right: 1px solid var(--border-color);
   padding: 16px 0;
   display: flex;
   flex-direction: column;
@@ -524,7 +719,7 @@ watch(() => props.show, (val) => { if (val) loadConfig() })
 .settings-title {
   font-size: 13px;
   font-weight: 600;
-  color: var(--text-color, #d4d4d4);
+  color: var(--text-color);
   padding: 0 16px 12px;
   text-transform: uppercase;
   letter-spacing: 0.5px;
@@ -532,7 +727,7 @@ watch(() => props.show, (val) => { if (val) loadConfig() })
 .settings-nav-item {
   padding: 6px 16px;
   font-size: 12px;
-  color: var(--text-color, #d4d4d4);
+  color: var(--text-color);
   cursor: pointer;
   transition: background 0.15s, color 0.15s;
   user-select: none;
@@ -543,7 +738,7 @@ watch(() => props.show, (val) => { if (val) loadConfig() })
 }
 .settings-nav-item.active {
   background: rgba(0, 120, 212, 0.2);
-  color: #0078d4;
+  color: var(--primary-color);
   font-weight: 500;
 }
 .settings-content {
@@ -566,7 +761,7 @@ watch(() => props.show, (val) => { if (val) loadConfig() })
   justify-content: center;
   border: none;
   background: transparent;
-  color: var(--text-color, #999);
+  color: var(--text-color);
   cursor: pointer;
   border-radius: 4px;
   font-size: 16px;
@@ -575,7 +770,7 @@ watch(() => props.show, (val) => { if (val) loadConfig() })
 }
 .settings-close:hover {
   background: rgba(255,255,255,0.1);
-  color: var(--text-color, #d4d4d4);
+  color: var(--text-color);
 }
 .setting-item {
   display: flex;
@@ -585,7 +780,7 @@ watch(() => props.show, (val) => { if (val) loadConfig() })
 }
 .setting-label {
   font-size: 13px;
-  color: var(--text-color, #d4d4d4);
+  color: var(--text-color);
 }
 .about-item {
   display: flex;
@@ -601,20 +796,62 @@ watch(() => props.show, (val) => { if (val) loadConfig() })
 }
 .about-value {
   font-size: 13px;
-  color: var(--text-color, #d4d4d4);
+  color: var(--text-color);
 }
 .about-link {
   display: inline-flex;
   align-items: center;
   gap: 4px;
   font-size: 12px;
-  color: #0078d4;
+  color: var(--primary-color);
   cursor: pointer;
   user-select: none;
 }
 .about-link:hover {
   text-decoration: underline;
-  color: #4ec9b0;
+  color: var(--primary-color);
+}
+.plugin-card {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--panel-bg, rgba(128, 128, 128, 0.06));
+}
+/* 操作按钮禁止收缩: 空间不足时整行换行, 杜绝溢出弹窗导致点不到 */
+.plugin-card .n-button,
+.plugin-card .n-switch {
+  flex-shrink: 0;
+}
+.plugin-card-icon {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  object-fit: contain;
+}
+.plugin-card-main {
+  flex: 1;
+  min-width: 0;
+}
+.plugin-card-name {
+  font-size: 12px;
+  color: var(--text-color);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.plugin-card-status {
+  font-size: 11px;
+  color: var(--icon-color);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.plugin-status-error {
+  color: var(--danger-color);
 }
 .term-settings {
   display: flex;
@@ -640,21 +877,21 @@ watch(() => props.show, (val) => { if (val) loadConfig() })
   flex-shrink: 0;
   padding-top: 12px;
   margin-top: 12px;
-  border-top: 1px solid var(--border-color, #3c3c3c);
+  border-top: 1px solid var(--border-color);
 }
 .term-error {
   font-size: 12px;
-  color: #e45858;
+  color: var(--danger-color);
   margin-right: auto;
 }
 .setting-desc {
   font-size: 11px;
-  color: var(--icon-color, #888);
+  color: var(--icon-color);
   font-weight: normal;
 }
 .settings-divider {
   height: 1px;
-  background: var(--border-color, #3c3c3c);
+  background: var(--border-color);
   margin: 10px 0;
 }
 </style>

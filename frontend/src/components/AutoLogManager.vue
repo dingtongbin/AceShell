@@ -125,10 +125,10 @@ function getProtoIcon(p?: string) {
 
 function getProtoColor(p?: string) {
   switch (p) {
-    case 'ssh': return '#4ec9b0'
-    case 'telnet': return '#569cd6'
-    case 'serial': return '#c586c0'
-    case 'shell': return '#6e9fc7'
+    case 'ssh': return 'var(--proto-ssh)'
+    case 'telnet': return 'var(--proto-telnet)'
+    case 'serial': return 'var(--primary-color)'
+    case 'shell': return 'var(--proto-default)'
     default: return 'var(--icon-color)'
   }
 }

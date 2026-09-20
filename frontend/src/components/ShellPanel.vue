@@ -4,6 +4,7 @@ import { NModal, NInput, NInputNumber, NSelect, NButton, NDescriptions, NDescrip
 import { DocumentTextOutline } from '@vicons/ionicons5'
 import { Window } from '@wailsio/runtime'
 import LeftToolBar from './LeftToolBar.vue'
+import PluginPanel from './PluginPanel.vue'
 import TopMenuBar from './TopMenuBar.vue'
 import type { ActiveTabState } from './tabTypes'
 import ResourceManager from './ResourceManager.vue'
@@ -26,14 +27,17 @@ import SshCopyDialog from './SshCopyDialog.vue'
 import FileEditor from './FileEditor.vue'
 import type { FileEditorApi } from './FileEditor.vue'
 import McpSettingsPanel from './McpSettingsPanel.vue'
-import AgentChatPanel from './AgentChatPanel.vue'
-import AgentSettingsDialog from './AgentSettingsDialog.vue'
 import { useMcpBridge } from '../composables/useMcpBridge'
-import { useAgentBridge } from '../composables/useAgentBridge'
+import { usePlugins } from '../composables/usePluginBridge'
 
 const message = useMessage()
 const { t } = useI18n()
 const { status: mcpStatus, initMcpBridge, bindTabManager, bindOpenScriptHandler, criticalBlock } = useMcpBridge()
+const {
+  plugins,
+  initPluginBridge, bindPluginTabManager, bindPluginToast,
+  pluginToolbarViews: computeToolbarViews,
+} = usePlugins()
 // MCP 忙碌源:工具调用进行中(含槽外回读/只读工具)或等待用户审批
 const mcpBusySource = computed(() => {
   const s = mcpStatus.value
@@ -43,6 +47,8 @@ const mcpBusySource = computed(() => {
 // 熄灭防抖 900ms:短调用也至少完整可见一个闪烁周期;期间新忙碌立即恢复
 const mcpBusy = ref(false)
 let mcpBusyTimer: ReturnType<typeof setTimeout> | null = null
+// 智能体独占锁持有者(GIL): 两次工具调用之间仍持续持有,持久展示"谁在操作"
+const mcpLockLabel = computed(() => mcpStatus.value.lock?.label || '')
 watch(mcpBusySource, (v) => {
   if (mcpBusyTimer) { clearTimeout(mcpBusyTimer); mcpBusyTimer = null }
   if (v) {
@@ -52,22 +58,17 @@ watch(mcpBusySource, (v) => {
   }
 })
 onBeforeUnmount(() => { if (mcpBusyTimer) clearTimeout(mcpBusyTimer) })
-const { initAgentBridge } = useAgentBridge()
 
 const emit = defineEmits<{
   (e: 'open-settings'): void
 }>()
 
 // 左侧面板两态:资源管理器 / 关闭(MCP 设置已弹窗化,不再占用侧栏)
-const leftPanel = ref<'resource' | 'none'>('resource')
-// 右侧智能体聊天面板(独立于左侧面板,独立开关,可最大化铺满)
-const showAgentPanel = ref(false) // 实际默认随配置(后端默认开启助手入口,面板默认收纳)
-const agentPanelWidth = ref(300)
-const agentMaximized = ref(false)
-// MCP 设置弹窗(独立于智能体设置弹窗)
+const leftPanel = ref<'resource' | 'plugin' | 'none'>('resource')
+// 当前激活的插件侧栏视图(左侧面板为 'plugin' 时显示其面板)
+const activePluginView = ref<{ pluginID: string; viewID: string } | null>(null)
+// MCP 设置弹窗
 const showMcpSettings = ref(false)
-// 智能体设置弹窗(独立于主设置弹窗)
-const showAgentSettings = ref(false)
 // 兼容原 showSessionManager 语义:资源面板是否开启(配置持久化)
 const showSessionManager = computed(() => leftPanel.value === 'resource')
 // 自绘标题栏开关(Frameless):决定 TopMenuBar 是否渲染窗口控制与拖拽区
@@ -264,14 +265,12 @@ async function loadConfig() {
     tabOrientation.value = cfg.view?.tabOrientation ?? 'horizontal'
     verticalTabWidth.value = cfg.view?.verticalTabWidth ?? 180
     customTitlebar.value = cfg.view?.customTitlebar ?? true
-    showAgentPanel.value = cfg.view?.showAgentPanel ?? false
-    agentPanelWidth.value = cfg.view?.agentPanelWidth ?? 300
     sessionWidth.value = cfg.view?.sessionWidth ?? 220
     applyAssistant(!!(cfg.view?.showAssistant))
   } catch {}
 }
 
-// 智能助手总开关: 关闭时隐藏顶栏三个入口按钮,并联动收起资源管理器/AI 面板
+// 智能助手总开关: 关闭时隐藏顶栏入口按钮,并联动收起资源管理器
 // (收纳按钮已隐藏,若面板仍展开将无法操作)
 const showAssistant = ref(false)
 
@@ -283,17 +282,12 @@ function applyAssistant(on: boolean) {
       leftPanel.value = 'none'
       SetShowSession(false).catch(() => {})
     }
-    if (showAgentPanel.value) {
-      showAgentPanel.value = false
-      agentMaximized.value = false
-      pushPanelLayout()
-    }
   }
 }
 
 // 面板布局持久化: 前端只上报最新值,Go 侧周期写盘(1s)+窗口关闭必写,保护磁盘
 function pushPanelLayout() {
-  SetPanelLayout(showAgentPanel.value, agentPanelWidth.value, sessionWidth.value).catch(() => {})
+  SetPanelLayout(sessionWidth.value).catch(() => {})
 }
 
 function toggleSessionManager() {
@@ -301,16 +295,47 @@ function toggleSessionManager() {
   SetShowSession(leftPanel.value === 'resource').catch(() => message.error(t('shellPanel.saveConfigFailed')))
 }
 
-function toggleAgentPanel() {
-  showAgentPanel.value = !showAgentPanel.value
-  if (!showAgentPanel.value) agentMaximized.value = false
-  pushPanelLayout()
-}
+// ==================== 插件侧栏视图 ====================
 
-function closeAgentPanel() {
-  showAgentPanel.value = false
-  agentMaximized.value = false
-  pushPanelLayout()
+// 已启用插件的工具栏视图项(ref 源自插件桥单例)
+const pluginViews = computed(() => computeToolbarViews(plugins))
+
+// 当前激活插件视图标识(工具栏高亮)
+const activePluginViewKey = computed(() =>
+  leftPanel.value === 'plugin' && activePluginView.value
+    ? `${activePluginView.value.pluginID}:${activePluginView.value.viewID}`
+    : null)
+
+// 激活的插件视图失效(插件崩溃/禁用/视图注销)时回落关闭面板;
+// 同时关闭已停用/卸载插件打开的全部标签页(主界面不再保留其内容)。
+watch(pluginViews, (views, old) => {
+  if (old) {
+    const alive = new Set(views.map(v => v.pluginID))
+    for (const pid of new Set(old.map(v => v.pluginID))) {
+      if (!alive.has(pid)) {
+        tabManagerRef.value?.closePluginTabsOf(pid)
+        if (activePluginView.value?.pluginID === pid) {
+          activePluginView.value = null
+          if (leftPanel.value === 'plugin') leftPanel.value = 'none'
+        }
+      }
+    }
+  }
+  if (activePluginView.value && !views.some(v => v.pluginID === activePluginView.value!.pluginID && v.viewID === activePluginView.value!.viewID)) {
+    activePluginView.value = null
+    if (leftPanel.value === 'plugin') leftPanel.value = 'none'
+  }
+})
+
+/** togglePluginView 点击工具栏插件图标: 同图标再点关闭, 否则切换到该插件面板。 */
+function togglePluginView(view: { pluginID: string; viewID: string }) {
+  if (leftPanel.value === 'plugin' && activePluginView.value?.pluginID === view.pluginID && activePluginView.value?.viewID === view.viewID) {
+    leftPanel.value = 'none'
+    activePluginView.value = null
+    return
+  }
+  activePluginView.value = { pluginID: view.pluginID, viewID: view.viewID }
+  leftPanel.value = 'plugin'
 }
 
 // 自绘标题栏即时切换:设置弹窗开关 → config-changed → loadConfig 刷新本值 → Frameless 往返
@@ -351,44 +376,6 @@ function stopResize() {
   }
 }
 
-// AI 聊天面板(左侧边框拖宽,反向: 鼠标左移变宽)
-const AGENT_W_MIN = 240
-const AGENT_W_MAX = 720
-const isAgentResizing = ref(false)
-let agentResizeX = 0
-let agentResizeW = 0
-let agentPushAt = 0
-function startAgentResize(e: PointerEvent) {
-  isAgentResizing.value = true
-  agentResizeX = e.clientX
-  agentResizeW = agentPanelWidth.value
-  ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
-}
-function onAgentResize(e: PointerEvent) {
-  if (!isAgentResizing.value) return
-  agentPanelWidth.value = Math.max(AGENT_W_MIN, Math.min(AGENT_W_MAX, agentResizeW + (agentResizeX - e.clientX)))
-  // 拖拽中节流上报(200ms): Go 内存即时最新,落盘由 Go 周期写+关闭必写兜底
-  const now = Date.now()
-  if (now - agentPushAt > 200) {
-    agentPushAt = now
-    pushPanelLayout()
-  }
-}
-function stopAgentResize() {
-  if (!isAgentResizing.value) return
-  isAgentResizing.value = false
-  pushPanelLayout()
-}
-
-// 合并分发: shell-body 上的 pointermove/up 同时服务两个拖拽源
-function onBodyPointerMove(e: PointerEvent) {
-  onResize(e)
-  onAgentResize(e)
-}
-function onBodyPointerUp() {
-  stopResize()
-  stopAgentResize()
-}
 
 // ==================== 窄窗自适应 ====================
 
@@ -937,8 +924,20 @@ onMounted(() => {
   })
   bindOpenScriptHandler(async (filePath: string) => handleOpenFile(filePath))
 
-  // 智能体桥接初始化(事件订阅 + 会话列表加载)
-  initAgentBridge()
+  // 插件桥接初始化:订阅注册表/标签页事件 + 注入 TabManager 能力与 Toast 落点
+  initPluginBridge()
+  bindPluginTabManager({
+    openPluginTab: async payload => { await tabManagerRef.value?.openPluginTab(payload) },
+    closePluginTab: (pluginID, tabKey) => tabManagerRef.value?.closePluginTab(pluginID, tabKey),
+    setPluginTabTitle: (pluginID, tabKey, title) => tabManagerRef.value?.setPluginTabTitle(pluginID, tabKey, title),
+  })
+  bindPluginToast((msg, level) => {
+    if (level === 'error') message.error(msg)
+    else if (level === 'warning') message.warning(msg)
+    else if (level === 'success') message.success(msg)
+    else message.info(msg)
+  })
+
 })
 
 onBeforeUnmount(() => {
@@ -952,12 +951,10 @@ onBeforeUnmount(() => {
     <!-- 顶部菜单栏:左菜单 + 拖拽区 + 收纳按钮 + 窗口控制(Frameless 模式) -->
     <TopMenuBar
       :show-session="showSessionManager"
-      :show-agent="showAgentPanel"
       :show-assistant="showAssistant"
       :active-tab-state="activeTabState"
       :frameless-enabled="customTitlebar"
       @toggle-session="toggleSessionManager"
-      @toggle-agent="toggleAgentPanel"
       @new-session="openNewSession('')"
       @new-folder="handleNewFolder('')"
       @import-sessions="showImport = true"
@@ -970,11 +967,14 @@ onBeforeUnmount(() => {
       @about="showAbout = true"
       @view-docs="openExternal('https://github.com/dingtongbin/AceShell')"
     />
-    <div class="shell-body" @pointermove="onBodyPointerMove" @pointerup="onBodyPointerUp" @pointerleave="onBodyPointerUp">
+    <div class="shell-body" @pointermove="onResize" @pointerup="stopResize" @pointerleave="stopResize">
       <LeftToolBar
         :show-session="leftPanel === 'resource'"
         :show-help="showHelp"
+        :plugin-views="pluginViews"
+        :active-plugin-view="activePluginViewKey"
         @toggle-session="toggleSessionManager"
+        @toggle-plugin-view="togglePluginView"
         @open-help="showAbout = true"
         @open-settings="emit('open-settings')"
       />
@@ -999,35 +999,25 @@ onBeforeUnmount(() => {
           @open-file="handleOpenFile"
           @close="toggleSessionManager"
         />
+        <!-- 插件侧栏面板(与资源管理器共享侧栏容器; 常驻保活) -->
+        <template v-for="pv in pluginViews" :key="pv.pluginID + ':' + pv.viewID">
+          <PluginPanel
+            v-show="leftPanel === 'plugin' && activePluginViewKey === pv.pluginID + ':' + pv.viewID"
+            :view="pv"
+            :active="leftPanel === 'plugin' && activePluginViewKey === pv.pluginID + ':' + pv.viewID"
+            @close="leftPanel = 'none'; activePluginView = null"
+          />
+        </template>
       </div>
       <div v-if="leftPanel !== 'none'" class="resize-handle" :class="{ 'handle-overlay': isNarrow }" :style="{ left: sessionWidth + 'px' }" @pointerdown="startResize" />
       <div class="tab-area" :class="{ 'mcp-busy': mcpBusy }">
         <div v-if="mcpBusy" class="mcp-tab-mask" @click.stop @contextmenu.stop.prevent @mousedown.stop @wheel.stop />
+        <div v-if="mcpLockLabel" class="mcp-lock-badge">
+          <span class="mcp-lock-dot" /><span class="mcp-lock-text">{{ t('mcp.lockBadge', { agent: mcpLockLabel }) }}</span>
+        </div>
         <TabManager ref="tabManagerRef" :show-toolbar="showToolbar" :tab-orientation="tabOrientation" :vertical-tab-width="verticalTabWidth"
           @new-ssh="openNewSession('', 'ssh')" @new-telnet="openNewSession('', 'telnet')" @new-serial="openNewSession('', 'serial')" @status="onTabStatus" @active-tab-state="(s) => { activeTabState = s }" />
       </div>
-      <!-- 智能体聊天面板:右侧停靠,可最大化铺满内容区(悬浮覆盖);窄窗时浮层弹出 -->
-      <AgentChatPanel
-        v-show="showAgentPanel"
-        :width="agentPanelWidth"
-        :maximized="agentMaximized"
-        :class="{ 'agent-maximized': agentMaximized, 'agent-overlay': isNarrow && !agentMaximized }"
-        :style="agentMaximized ? undefined : { width: agentPanelWidth + 'px' }"
-        @close="closeAgentPanel"
-        @toggle-maximize="agentMaximized = !agentMaximized"
-        @open-settings="showAgentSettings = true"
-        @open-mcp-settings="showMcpSettings = true"
-      />
-      <!-- AI 面板左侧拖宽手柄(最大化时隐藏) -->
-      <div
-        v-if="showAgentPanel && !agentMaximized"
-        class="agent-resize-handle"
-        :class="{ 'agent-handle-overlay': isNarrow }"
-        :style="{ right: agentPanelWidth - 2 + 'px' }"
-        @pointerdown="startAgentResize"
-      />
-      <!-- 智能体设置弹窗(独立于主设置) -->
-      <AgentSettingsDialog v-model:show="showAgentSettings" />
         </div>
       <div class="global-status-bar">
         <span v-if="globalStatus.text" class="gs-left">{{ globalStatus.text }}</span>
@@ -1177,7 +1167,7 @@ onBeforeUnmount(() => {
             </n-descriptions>
           </div>
           <div v-else-if="sessionSide === 'advanced'" class="anim-fade">
-            <div style="font-size: 13px; color: var(--text-color, #d4d4d4); margin-bottom: 12px; line-height: 1.6">
+            <div style="font-size: 13px; color: var(--text-color); margin-bottom: 12px; line-height: 1.6">
               {{ t('shellPanel.advancedHint') }}
             </div>
             <div class="cipher-buttons">
@@ -1227,7 +1217,7 @@ onBeforeUnmount(() => {
     <n-modal :show="editorClosePending.length > 0" :title="t('shellPanel.unsavedTitle')" preset="dialog" :show-icon="false" style="width: 400px" :mask-closable="false">
       <div style="font-size: 14px">
         <p>{{ t('shellPanel.unsavedMsg', { file: editorClosePending[0]?.fileName }) }}</p>
-        <p style="margin-top: 8px; color: #e45858; font-size: 12px">{{ t('shellPanel.unsavedAsk') }}</p>
+        <p style="margin-top: 8px; color: var(--danger-color); font-size: 12px">{{ t('shellPanel.unsavedAsk') }}</p>
       </div>
       <template #action>
         <n-button @click="cancelEditorClose">{{ t('common.cancel') }}</n-button>
@@ -1242,10 +1232,10 @@ onBeforeUnmount(() => {
     <!-- MCP 绝对危险指令拦截弹窗:命令已被拒绝执行,MCP 已自动挂起 -->
     <n-modal :show="!!criticalBlock" :title="t('mcp.criticalTitle')" preset="dialog" :show-icon="false" style="width: 480px" :mask-closable="false">
       <div style="font-size: 14px; line-height: 1.7">
-        <p style="color: #e45858; font-weight: 600">{{ t('mcp.criticalMsg') }}</p>
+        <p style="color: var(--danger-color); font-weight: 600">{{ t('mcp.criticalMsg') }}</p>
         <pre style="margin: 10px 0; padding: 8px 10px; background: rgba(0,0,0,0.35); border-radius: 4px; font-size: 12px; font-family: Consolas, 'Courier New', monospace; white-space: pre-wrap; word-break: break-all; max-height: 160px; overflow: auto">{{ criticalBlock?.command }}</pre>
-        <p style="font-size: 12px; color: var(--text-secondary, #888)">{{ t('mcp.criticalReason') }}: {{ criticalBlock?.reason }}</p>
-        <p style="font-size: 12px; color: var(--text-secondary, #888)">{{ t('mcp.criticalHint') }}</p>
+        <p style="font-size: 12px; color: var(--text-secondary)">{{ t('mcp.criticalReason') }}: {{ criticalBlock?.reason }}</p>
+        <p style="font-size: 12px; color: var(--text-secondary)">{{ t('mcp.criticalHint') }}</p>
       </div>
       <template #action>
         <n-button type="primary" @click="criticalBlock = null">{{ t('common.confirm') }}</n-button>
@@ -1290,7 +1280,7 @@ onBeforeUnmount(() => {
 
 /* MCP 执行中: 主题色窄边框持久亮起 + 纯透明遮罩拦截鼠标(键盘走用户抢占通道) */
 .tab-area.mcp-busy {
-  outline: 2px solid var(--primary-color, #0078d4);
+  outline: 2px solid var(--primary-color);
   outline-offset: -2px;
 }
 
@@ -1299,6 +1289,39 @@ onBeforeUnmount(() => {
   inset: 0;
   z-index: 500;
   cursor: not-allowed;
+}
+
+/* MCP 持锁者指示: 两次工具调用之间也持续可见(谁在操作),不拦截鼠标 */
+.mcp-lock-badge {
+  position: absolute;
+  top: 6px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 501;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  pointer-events: none;
+  font-size: 12px;
+  color: var(--primary-color);
+  background: color-mix(in srgb, var(--primary-color) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--primary-color) 45%, transparent);
+  backdrop-filter: blur(4px);
+}
+
+.mcp-lock-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentcolor;
+  animation: mcp-lock-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes mcp-lock-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
 }
 
 .resize-handle {
@@ -1314,23 +1337,7 @@ onBeforeUnmount(() => {
 }
 .resize-handle:hover,
 .resize-handle:active {
-  background: #0078d4;
-}
-
-/* AI 面板左侧拖宽手柄(悬停/拖拽时高亮) */
-.agent-resize-handle {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 5px;
-  cursor: col-resize;
-  background: transparent;
-  z-index: 10;
-  transition: background 0.15s;
-}
-.agent-resize-handle:hover,
-.agent-resize-handle:active {
-  background: #0078d4;
+  background: var(--primary-color);
 }
 
 .global-status-bar {
@@ -1364,15 +1371,8 @@ onBeforeUnmount(() => {
   position: relative;
 }
 
-/* 智能体面板最大化:悬浮铺满内容区(不挤压终端区) */
-.agent-maximized {
-  position: absolute;
-  inset: 0;
-  z-index: 800;
-}
-
-/* 窄窗浮层模式(宽度 < NARROW_THRESHOLD): 资源管理器/AI 面板悬浮于标签页之上,
-   不再挤压终端区;层级 标签页 < 资源管理器(600) < AI 面板(700) < AI 最大化(800) */
+/* 窄窗浮层模式(宽度 < NARROW_THRESHOLD): 资源管理器悬浮于标签页之上,
+   不再挤压终端区;层级 标签页 < 资源管理器(600) */
 .shell-sidebar.sidebar-overlay {
   position: absolute;
   left: 0;
@@ -1381,16 +1381,7 @@ onBeforeUnmount(() => {
   z-index: 600;
   box-shadow: 2px 0 12px rgba(0, 0, 0, 0.35);
 }
-.agent-overlay {
-  position: absolute;
-  right: 0;
-  top: 0;
-  bottom: 0;
-  z-index: 700;
-  box-shadow: -2px 0 12px rgba(0, 0, 0, 0.35);
-}
 .resize-handle.handle-overlay { z-index: 610; }
-.agent-resize-handle.agent-handle-overlay { z-index: 710; }
 
 .session-dialog {
   display: flex;
@@ -1399,7 +1390,7 @@ onBeforeUnmount(() => {
 .session-type-list {
   width: 140px;
   flex-shrink: 0;
-  border-right: 1px solid var(--border-color, #3c3c3c);
+  border-right: 1px solid var(--border-color);
   padding: 8px;
   display: flex;
   flex-direction: column;
@@ -1422,15 +1413,15 @@ onBeforeUnmount(() => {
   display: block;
   font-size: 13px;
   font-weight: 500;
-  color: var(--text-color, #d4d4d4);
+  color: var(--text-color);
 }
 .type-item.active .type-name {
-  color: #0078d4;
+  color: var(--primary-color);
 }
 .type-desc {
   display: block;
   font-size: 11px;
-  color: var(--text-secondary, #888);
+  color: var(--text-secondary);
   margin-top: 2px;
 }
 .session-main {
@@ -1454,9 +1445,9 @@ onBeforeUnmount(() => {
 .http-hint {
   font-size: 12px;
   line-height: 1.8;
-  color: var(--text-color-dim, #9d9d9d);
+  color: var(--text-color-dim);
   background: var(--sidebar-bg, rgba(255, 255, 255, 0.03));
-  border: 1px solid var(--border-color, #3c3c3c);
+  border: 1px solid var(--border-color);
   border-radius: 4px;
   padding: 8px 10px;
   max-width: 100%;
@@ -1473,10 +1464,10 @@ onBeforeUnmount(() => {
   display: block;
   font-size: 13px;
   margin-bottom: 6px;
-  color: var(--text-color, #d4d4d4);
+  color: var(--text-color);
 }
 .required {
-  color: #e45858;
+  color: var(--danger-color);
 }
 .cipher-buttons {
   display: flex;
@@ -1490,7 +1481,7 @@ onBeforeUnmount(() => {
 .cipher-group-label {
   font-size: 12px;
   font-weight: 600;
-  color: var(--text-secondary, #888);
+  color: var(--text-secondary);
   margin-bottom: 8px;
   text-transform: uppercase;
   letter-spacing: 0.5px;
@@ -1513,16 +1504,16 @@ onBeforeUnmount(() => {
 .about-name {
   font-size: 18px;
   font-weight: 600;
-  color: var(--text-color, #d4d4d4);
+  color: var(--text-color);
 }
 .about-desc {
   font-size: 13px;
-  color: var(--text-secondary, #888);
+  color: var(--text-secondary);
   margin-top: 2px;
 }
 .about-version {
   font-size: 12px;
-  color: var(--text-secondary, #888);
+  color: var(--text-secondary);
   margin-top: 2px;
 }
 .about-links {
@@ -1538,17 +1529,17 @@ onBeforeUnmount(() => {
   font-size: 13px;
 }
 .about-label {
-  color: var(--text-secondary, #888);
+  color: var(--text-secondary);
   flex-shrink: 0;
 }
 .about-link {
   font-size: 13px;
-  color: #0078d4;
+  color: var(--primary-color);
   text-decoration: none;
   word-break: break-all;
 }
 .about-link:hover {
   text-decoration: underline;
-  color: #4ec9b0;
+  color: var(--primary-color);
 }
 </style>

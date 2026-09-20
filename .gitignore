@@ -25,3 +25,15 @@ CLAUDE.md
 
 # 废弃的未使用素材
 shapes/
+
+# 插件捆绑载荷(构建期生成, 不入库; 保留 README)
+internal/services/pluginbundle/*
+!internal/services/pluginbundle/README.md
+frontend/node_modules
+
+# 依赖与构建产物(全仓库任意层级)
+node_modules/
+pluginsdk/*/dist/
+
+# 插件 release zip(构建期产物, 供 GitHub 安装器测试/上传)
+pluginsdk/ping/*.zip

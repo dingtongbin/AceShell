@@ -21,19 +21,28 @@ type AppConfig struct {
 	Terminal     TerminalConfig     `toml:"terminal" json:"terminal"`
 	FileEditing  FileEditingConfig  `toml:"fileEditing" json:"fileEditing"`
 	Mcp          McpConfig          `toml:"mcp" json:"mcp"`
-	Agent        AgentConfig        `toml:"agent" json:"agent"`
+	Plugins      PluginsConfig      `toml:"plugins" json:"plugins"`
 	Language     string             `toml:"language" json:"language"`
 }
 
-// mainConfigFile 主配置文件(config.toml)落盘结构: 不含 mcp/agent 节(拆分至 mcp.toml/agent.toml)。
-// 注意: AppConfig 新增非 mcp/agent 字段时需同步此结构。
+// mainConfigFile 主配置文件(config.toml)落盘结构: 不含 mcp 节(拆分至 mcp.toml)。
+// 注意: AppConfig 新增非 mcp 字段时需同步此结构。
 type mainConfigFile struct {
 	View        ViewConfig        `toml:"view" json:"view"`
 	Sections    SectionsConfig    `toml:"sections" json:"sections"`
 	Serial      SerialConfig      `toml:"serial" json:"serial"`
 	Terminal    TerminalConfig    `toml:"terminal" json:"terminal"`
 	FileEditing FileEditingConfig `toml:"fileEditing" json:"fileEditing"`
+	Plugins     PluginsConfig     `toml:"plugins" json:"plugins"`
 	Language    string            `toml:"language" json:"language"`
+}
+
+// PluginsConfig 插件配置: 显式禁用表(未出现的插件默认启用)与捆绑插件卸载记录。
+type PluginsConfig struct {
+	// Enabled 插件ID → 是否启用。nil/缺项 = 启用; 显式 false = 禁用。
+	Enabled map[string]bool `toml:"enabled" json:"enabled"`
+	// UninstalledBundled 用户已卸载的捆绑插件 ID(发版升级后不复活)。
+	UninstalledBundled []string `toml:"uninstalledBundled" json:"uninstalledBundled"`
 }
 
 // McpConfig MCP 服务配置(令牌密文经 encryptSecret 加密,不含明文)。
@@ -65,38 +74,6 @@ type McpCustomRule struct {
 	Note    string `toml:"note" json:"note"`       // 备注说明
 }
 
-// AgentProfile AI 服务档案(连接身份: 提供商/端点/密钥/模型)。
-// 密钥密文经 encryptSecret 加密,不含明文;档案可添加任意多个。
-type AgentProfile struct {
-	ID             string   `toml:"id" json:"id"`
-	Name           string   `toml:"name" json:"name"`
-	Provider       string   `toml:"provider" json:"provider"`                          // 提供商预设名
-	BaseURL        string   `toml:"baseURL" json:"baseURL"`                            // OpenAI 兼容端点
-	ApiKeyEnc      string   `toml:"apiKeyEnc" json:"apiKeyEnc"`
-	Model          string   `toml:"model" json:"model"`
-	ApiMode        string   `toml:"apiMode" json:"apiMode"`                            // chat / responses
-	ContextWindow  int      `toml:"contextWindow,omitzero" json:"contextWindow,omitzero"` // 模型上下文窗口(token;0=默认128K)
-	CustomModels   []string `toml:"customModels,omitempty" json:"customModels,omitempty"` // 自定义模型(接口不可用时手动补充;下拉里排在自动获取之前)
-}
-
-// AgentConfig 内嵌智能体配置。
-// 行为参数(权限模式/步数/窗口)全局一份,与档案解耦——切模型不改安全策略。
-type AgentConfig struct {
-	Enabled           bool   `toml:"enabled" json:"enabled"`
-	PermMode          string `toml:"permMode" json:"permMode"`                 // plan / manual / auto(全局)
-	HistoryWindow     int    `toml:"historyWindow" json:"historyWindow"`       // 前端渲染窗口(分页大小)
-	ContextMaxEvents  int    `toml:"contextMaxEvents" json:"contextMaxEvents"` // 上下文截断上限
-	WebSearch         bool   `toml:"webSearch" json:"webSearch"`               // 联网搜索工具开关(默认开启,AI 视情况调用)
-	ActiveProfileID   string `toml:"activeProfileId" json:"activeProfileId"`   // 当前活动档案
-	Profiles          []AgentProfile `toml:"profile" json:"profiles"`          // 多 AI 档案
-	// 旧版单份配置(仅作迁移源读取;迁移完成后零值)
-	Provider  string `toml:"provider,omitempty" json:"provider,omitempty"`
-	BaseURL   string `toml:"baseURL,omitempty" json:"baseURL,omitempty"`
-	ApiKeyEnc string `toml:"apiKeyEnc,omitempty" json:"apiKeyEnc,omitempty"`
-	Model     string `toml:"model,omitempty" json:"model,omitempty"`
-	ApiMode   string `toml:"apiMode,omitempty" json:"apiMode,omitempty"`
-}
-
 type FileEditingConfig struct {
 	AutoSave bool `toml:"autoSave" json:"autoSave"`
 }
@@ -114,14 +91,13 @@ type ViewConfig struct {
 	VerticalTabWidth int    `toml:"verticalTabWidth" json:"verticalTabWidth"`
 	CloseConfirm     bool   `toml:"closeConfirm" json:"closeConfirm"`
 	Theme            string `toml:"theme" json:"theme"`
-	PanelOpacity     int    `toml:"panelOpacity" json:"panelOpacity"`
+	// 自定义强调色(#RRGGBB;空 = 默认蓝 #0078d4)。派生主色族/语义色高亮。
+	AccentColor  string `toml:"accentColor" json:"accentColor"`
+	PanelOpacity int    `toml:"panelOpacity" json:"panelOpacity"`
 	Wallpaper        string `toml:"wallpaper" json:"wallpaper"`
 	ShowHelp         bool   `toml:"showHelp" json:"showHelp"`
 	// 自绘标题栏(Frameless 窗口 + 顶部菜单栏融入窗口控制)开关。
 	CustomTitlebar bool `toml:"customTitlebar" json:"customTitlebar"`
-	// AI 聊天面板: 显隐 + 宽度(px)。
-	ShowAgentPanel bool `toml:"showAgentPanel" json:"showAgentPanel"`
-	AgentPanelWidth int  `toml:"agentPanelWidth" json:"agentPanelWidth"`
 	// 资源管理器面板宽度(px)。
 	SessionWidth int `toml:"sessionWidth" json:"sessionWidth"`
 	// 智能助手总开关(视图菜单): 关闭时隐藏顶栏 MCP 按钮/资源管理器收纳按钮/AI 面板按钮。
@@ -174,9 +150,9 @@ type ConfigService struct {
 	panelTimer *time.Timer
 }
 
-// SetPanelLayout 更新面板布局(AI 面板显隐/宽度 + 资源管理器宽度)。
+// SetPanelLayout 更新面板布局(资源管理器宽度)。
 // 仅写内存并标记脏; 由后台定时器周期落盘, 窗口关闭时 Flush 落盘, 保护磁盘。
-func (c *ConfigService) SetPanelLayout(showAgentPanel bool, agentPanelWidth int, sessionWidth int) {
+func (c *ConfigService) SetPanelLayout(sessionWidth int) {
 	clamp := func(v, lo, hi int) int {
 		if v < lo {
 			return lo
@@ -188,8 +164,6 @@ func (c *ConfigService) SetPanelLayout(showAgentPanel bool, agentPanelWidth int,
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.config.View.ShowAgentPanel = showAgentPanel
-	c.config.View.AgentPanelWidth = clamp(agentPanelWidth, 240, 720)
 	c.config.View.SessionWidth = clamp(sessionWidth, 60, 600)
 	c.panelDirty = true
 	// 定时器已启动则不重置: 保证固定周期写盘, 拖拽中不会连续触发 IO。
@@ -234,9 +208,7 @@ func (c *ConfigService) Init() {
 			PanelOpacity:     100,
 			// 自绘标题栏默认开启
 			CustomTitlebar: true,
-			// AI 聊天面板默认收纳,宽度默认 300px;资源管理器默认 220px
-			ShowAgentPanel:  false,
-			AgentPanelWidth: 300,
+			// 资源管理器默认 220px
 			SessionWidth:    220,
 			// 智能助手(测试功能)默认开启,视图菜单可手动关闭
 			ShowAssistant: true,
@@ -282,13 +254,9 @@ func (c *ConfigService) Init() {
 			AuditRetentionDays:  30,
 			TerminalReadMaxBytes: 32768,
 		},
-		Agent: AgentConfig{
-			Enabled:          true,
-			ApiMode:          "chat",
-			PermMode:         "manual",
-			HistoryWindow:    200,
-			ContextMaxEvents: 400,
-			WebSearch:        true, // 联网搜索默认开启
+		// 插件默认全部启用(显式禁用记录于 Enabled[id]=false)
+		Plugins: PluginsConfig{
+			Enabled: map[string]bool{},
 		},
 		Language: "zh-CN",
 	}
@@ -300,7 +268,7 @@ func (c *ConfigService) load() {
 	data, err := os.ReadFile(configFile)
 	rawMain := string(data)
 	if err == nil {
-		// 旧版主文件可能内嵌 mcp/agent 节,先读入;随后被独立文件覆盖并触发迁移
+		// 旧版主文件可能内嵌 mcp 节,先读入;随后被独立文件覆盖并触发迁移
 		toml.Unmarshal(data, &c.config)
 	}
 	// 独立文件优先(权威源): mcp.toml
@@ -312,25 +280,8 @@ func (c *ConfigService) load() {
 			c.config.Mcp = f.Mcp
 		}
 	}
-	// 独立文件优先(权威源): agent.toml
-	if data, err := os.ReadFile(AgentConfigFile()); err == nil {
-		var f struct {
-			Agent AgentConfig `toml:"agent"`
-		}
-		if uerr := toml.Unmarshal(data, &f); uerr == nil {
-			// 旧版配置文件不含 webSearch 键: 反序列化零值会整体覆盖默认值,导致联网搜索被静默关闭——回退到默认值
-			if !strings.Contains(string(data), "webSearch") {
-				f.Agent.WebSearch = c.config.Agent.WebSearch
-			}
-			c.config.Agent = f.Agent
-		} else {
-			// 解析失败留痕(静默吞掉会导致档案/密钥"凭空消失")
-			logConfigLoadError("agent.toml", uerr)
-		}
-	}
-	c.ensureAgentMigrated()
-	// 旧版主文件内嵌 mcp/agent 节 → 拆分迁移一次(save 重写主文件剔除旧节并落盘独立文件)
-	if tomlHasSection(rawMain, "mcp") || tomlHasSection(rawMain, "agent") {
+	// 旧版主文件内嵌 mcp 节 → 拆分迁移一次(save 重写主文件剔除旧节并落盘独立文件)
+	if tomlHasSection(rawMain, "mcp") {
 		c.save()
 	}
 }
@@ -364,13 +315,14 @@ func (c *ConfigService) save() error {
 		fmt.Printf("[config] save failed (%s): %v\n", step, err)
 		return err
 	}
-	// 主配置: 剔除 mcp/agent(拆分至独立文件,禁止写入 config.toml)
+	// 主配置: 剔除 mcp(拆分至独立文件,禁止写入 config.toml)
 	main := mainConfigFile{
 		View:        c.config.View,
 		Sections:    c.config.Sections,
 		Serial:      c.config.Serial,
 		Terminal:    c.config.Terminal,
 		FileEditing: c.config.FileEditing,
+		Plugins:     c.config.Plugins,
 		Language:    c.config.Language,
 	}
 	mainData, err := toml.Marshal(main)
@@ -390,74 +342,7 @@ func (c *ConfigService) save() error {
 	if err := atomicWriteFile(McpConfigFile(), mcpData, 0600); err != nil {
 		return fail("write-mcp", err)
 	}
-	// agent.toml(写盘前密文保护: 内存密文为空但磁盘已有密文 → 合并保留,
-	// 防止任何调用路径因内存状态丢失而清空已存密钥)
-	c.protectAgentKeysLocked()
-	agentData, err := toml.Marshal(struct {
-		Agent AgentConfig `toml:"agent"`
-	}{c.config.Agent})
-	if err != nil {
-		return fail("marshal-agent", err)
-	}
-	if err := atomicWriteFile(AgentConfigFile(), agentData, 0600); err != nil {
-		return fail("write-agent", err)
-	}
 	return nil
-}
-
-// mergeDiskKeysLocked 将磁盘 agent.toml 中的密文合并进 keys(调用方持锁)。
-// 仅在内存值为空时取磁盘值 —— 磁盘是权威源,内存丢失不得清空已存密钥。
-func (c *ConfigService) mergeDiskKeysLocked(keys map[string]string) {
-	data, err := os.ReadFile(AgentConfigFile())
-	if err != nil {
-		return
-	}
-	var f struct {
-		Agent AgentConfig `toml:"agent"`
-	}
-	if toml.Unmarshal(data, &f) != nil {
-		return
-	}
-	for _, p := range f.Agent.Profiles {
-		if p.ID != "" && p.ApiKeyEnc != "" && keys[p.ID] == "" {
-			keys[p.ID] = p.ApiKeyEnc
-		}
-	}
-}
-
-// protectAgentKeysLocked 写盘前密文保护(调用方持锁):
-// 逐档案检查,内存密文为空但磁盘已有 → 从磁盘取回,留审计痕迹。
-func (c *ConfigService) protectAgentKeysLocked() {
-	need := false
-	for i := range c.config.Agent.Profiles {
-		if c.config.Agent.Profiles[i].ApiKeyEnc == "" {
-			need = true
-			break
-		}
-	}
-	if !need {
-		return
-	}
-	disk := make(map[string]string, len(c.config.Agent.Profiles))
-	for _, p := range c.config.Agent.Profiles {
-		if p.ApiKeyEnc != "" {
-			disk[p.ID] = p.ApiKeyEnc
-		}
-	}
-	c.mergeDiskKeysLocked(disk)
-	saved := make([]string, 0, 2)
-	for i := range c.config.Agent.Profiles {
-		p := &c.config.Agent.Profiles[i]
-		if p.ApiKeyEnc == "" && disk[p.ID] != "" {
-			p.ApiKeyEnc = disk[p.ID]
-			if len(saved) < 2 {
-				saved = append(saved, p.ID)
-			}
-		}
-	}
-	if len(saved) > 0 {
-		logConfigLoadError("agent.toml", fmt.Errorf("写盘密文保护: 内存密文丢失已从磁盘保留(档案=%v)", strings.Join(saved, ",")))
-	}
 }
 
 // ThemeMode 返回已保存的视图主题模式（dark / light / auto），默认 "dark"。
@@ -471,21 +356,17 @@ func (c *ConfigService) ThemeMode() string {
 	return t
 }
 
-// configJSONLocked 序列化配置为 JSON(调用方持锁);加密密文(Mcp.TokenEnc /
-// Agent.Profiles[].ApiKeyEnc)不外发,前端仅凭 hasKey 判断是否已存密钥。
+// configJSONLocked 序列化配置为 JSON(调用方持锁);加密密文(Mcp.TokenEnc)
+// 不外发,密钥不出后端。
 func (c *ConfigService) configJSONLocked() string {
 	out := c.config
 	out.Mcp.TokenEnc = ""
-	for i := range out.Agent.Profiles {
-		out.Agent.Profiles[i].ApiKeyEnc = ""
-	}
 	data, _ := json.Marshal(out)
 	return string(data)
 }
 
 // GetConfig 返回当前完整配置的 JSON 字符串。
-// 加密密文(Mcp.TokenEnc/Agent.Profiles[].ApiKeyEnc)不外发: 密钥不出后端,
-// 前端仅凭 hasKey 标记判断是否已存密钥(与 AgentProfilesGet 口径一致)。
+// 加密密文(Mcp.TokenEnc)不外发: 密钥不出后端。
 func (c *ConfigService) GetConfig() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -703,6 +584,30 @@ func (c *ConfigService) SetTheme(theme string) string {
 	return c.configJSONLocked()
 }
 
+// GetThemeAccent 返回自定义强调色（#RRGGBB；空 = 默认蓝）。
+func (c *ConfigService) GetThemeAccent() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.config.View.AccentColor
+}
+
+// SetThemeAccent 设置自定义强调色并持久化（#RRGGBB；非法值忽略）。
+func (c *ConfigService) SetThemeAccent(color string) string {
+	if len(color) == 7 && color[0] == '#' {
+		if _, err := fmt.Sscanf(color[1:], "%06x", new(uint32)); err == nil {
+			c.mu.Lock()
+			c.config.View.AccentColor = strings.ToLower(color)
+			c.save()
+			out := c.configJSONLocked()
+			c.mu.Unlock()
+			return out
+		}
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.configJSONLocked()
+}
+
 // GetLanguage 返回当前语言（如 zh-CN / en-US）。
 func (c *ConfigService) GetLanguage() string {
 	c.mu.Lock()
@@ -717,6 +622,69 @@ func (c *ConfigService) SetLanguage(lang string) string {
 	c.config.Language = lang
 	c.save()
 	return c.configJSONLocked()
+}
+
+// PluginEnabled 查询插件是否启用(缺项=启用;仅显式记录的 false 视为禁用)。
+func (c *ConfigService) PluginEnabled(pluginID string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if v, ok := c.config.Plugins.Enabled[pluginID]; ok {
+		return v
+	}
+	return true
+}
+
+// SetPluginEnabled 设置插件启用状态并持久化。
+func (c *ConfigService) SetPluginEnabled(pluginID string, enabled bool) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.config.Plugins.Enabled == nil {
+		c.config.Plugins.Enabled = map[string]bool{}
+	}
+	if enabled {
+		// 启用即移除显式禁用项,保持落盘最小化
+		delete(c.config.Plugins.Enabled, pluginID)
+	} else {
+		c.config.Plugins.Enabled[pluginID] = false
+	}
+	c.save()
+	return c.configJSONLocked()
+}
+
+// BundledUninstalled 查询捆绑插件是否已被用户卸载。
+func (c *ConfigService) BundledUninstalled(pluginID string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, id := range c.config.Plugins.UninstalledBundled {
+		if id == pluginID {
+			return true
+		}
+	}
+	return false
+}
+
+// SetBundledUninstalled 记录/撤销捆绑插件卸载状态并持久化(调用方负责落盘插件目录)。
+func (c *ConfigService) SetBundledUninstalled(pluginID string, uninstalled bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	list := c.config.Plugins.UninstalledBundled
+	out := list[:0]
+	if uninstalled {
+		for _, id := range list {
+			if id != pluginID {
+				out = append(out, id)
+			}
+		}
+		c.config.Plugins.UninstalledBundled = append(out, pluginID)
+	} else {
+		for _, id := range list {
+			if id != pluginID {
+				out = append(out, id)
+			}
+		}
+		c.config.Plugins.UninstalledBundled = out
+	}
+	c.save()
 }
 
 // SetSerialConfig 更新串口配置并持久化。
@@ -1061,350 +1029,4 @@ func (c *ConfigService) SetMcpCustomRules(jsonStr string) string {
 	c.save()
 	data, _ := json.Marshal(rules)
 	return string(data)
-}
-
-// ==================== 智能体配置 ====================
-
-// ensureAgentMigrated 旧版单份配置 → 多档案结构(加载后调用一次)。
-func (c *ConfigService) ensureAgentMigrated() {
-	a := &c.config.Agent
-	if len(a.Profiles) == 0 {
-		// 旧版有配置 → 迁移为首个档案
-		if a.BaseURL != "" {
-			apiMode := a.ApiMode
-			if apiMode == "" {
-				apiMode = "chat"
-			}
-			a.Profiles = []AgentProfile{{
-				ID:        "p-default",
-				Name:      "默认",
-				Provider:  a.Provider,
-				BaseURL:   a.BaseURL,
-				ApiKeyEnc: a.ApiKeyEnc,
-				Model:     a.Model,
-				ApiMode:   apiMode,
-			}}
-			a.ActiveProfileID = "p-default"
-		}
-	} else if a.ActiveProfileID == "" {
-		a.ActiveProfileID = a.Profiles[0].ID
-	}
-	if len(a.Profiles) > 0 {
-		// 旧字段零值(不再落盘)
-		a.Provider, a.BaseURL, a.ApiKeyEnc, a.Model, a.ApiMode = "", "", "", "", ""
-	}
-}
-
-// ActiveAgentProfile 返回活动档案副本;无档案返回空 ID。
-func (c *ConfigService) ActiveAgentProfile() AgentProfile {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	a := c.config.Agent
-	for _, p := range a.Profiles {
-		if p.ID == a.ActiveProfileID {
-			return p
-		}
-	}
-	if len(a.Profiles) > 0 {
-		return a.Profiles[0]
-	}
-	return AgentProfile{}
-}
-
-// AgentCfg 返回智能体配置副本(密文不出后端,档案带 hasKey 标记)。
-func (c *ConfigService) AgentCfg() AgentConfig {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	out := c.config.Agent
-	for i := range out.Profiles {
-		out.Profiles[i].ApiKeyEnc = ""
-	}
-	return out
-}
-
-// agentProfileHasKey 判断档案是否已存密钥(内部)。
-func (c *ConfigService) agentProfileHasKey(id string) bool {
-	for _, p := range c.config.Agent.Profiles {
-		if p.ID == id {
-			return p.ApiKeyEnc != ""
-		}
-	}
-	return false
-}
-
-// AgentProfilesSet 全量保存档案列表与活动档案。
-// 输入 JSON: {"activeProfileId":"...","profiles":[{"id","name","provider","baseURL","model","apiMode","apiKey?"}]}
-// apiKey 非空则重新加密;为空则保留该档案原密文。
-func (c *ConfigService) AgentProfilesSet(jsonStr string) string {
-	var in struct {
-		ActiveProfileID string `json:"activeProfileId"`
-		Profiles        []struct {
-			ID            string   `json:"id"`
-			Name          string   `json:"name"`
-			Provider      string   `json:"provider"`
-			BaseURL       string   `json:"baseURL"`
-			Model         string   `json:"model"`
-			ApiMode       string   `json:"apiMode"`
-			ApiKey        string   `json:"apiKey"`
-			ContextWindow int      `json:"contextWindow"`
-			CustomModels  []string `json:"customModels"`
-		} `json:"profiles"`
-	}
-	if err := json.Unmarshal([]byte(jsonStr), &in); err != nil {
-		return `{"error":"invalid json"}`
-	}
-	if len(in.Profiles) > 20 { // 有界
-		return `{"error":"too many profiles"}`
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	old := c.config.Agent
-	oldKeys := make(map[string]string, len(old.Profiles))
-	for _, p := range old.Profiles {
-		oldKeys[p.ID] = p.ApiKeyEnc
-	}
-	// 权威源兜底: 内存密文丢失(未知覆盖/状态异常)时从磁盘取回,
-	// 保证"留空=保留原密文"语义永远成立,绝不把空密文写盘清掉已有密钥。
-	c.mergeDiskKeysLocked(oldKeys)
-	var out []AgentProfile
-	auditParts := make([]string, 0, len(in.Profiles))
-	for _, p := range in.Profiles {
-		p.ID = strings.TrimSpace(p.ID)
-		p.Name = truncateUtf8(strings.TrimSpace(p.Name), 40)
-		p.BaseURL = strings.TrimSpace(p.BaseURL)
-		p.Model = strings.TrimSpace(p.Model)
-		if p.ApiMode != "responses" {
-			p.ApiMode = "chat"
-		}
-		enc := ""
-		keySrc := "empty"
-		if p.ApiKey != "" {
-			var err error
-			enc, err = encryptSecret(p.ApiKey)
-			if err != nil {
-				return `{"error":"加密 API Key 失败"}`
-			}
-			keySrc = "new"
-		} else if old, ok := oldKeys[p.ID]; ok && old != "" {
-			enc = old // 保留原密文
-			keySrc = "keep"
-		}
-		// 自定义模型: 去重去空 + 有界(最多 50 个,防止无限增长)
-		custom := make([]string, 0, len(p.CustomModels))
-		seen := make(map[string]bool, len(p.CustomModels))
-		for _, m := range p.CustomModels {
-			m = strings.TrimSpace(m)
-			if m != "" && !seen[m] {
-				seen[m] = true
-				custom = append(custom, m)
-			}
-			if len(custom) >= 50 {
-				break
-			}
-		}
-		// 上下文窗口: 0=默认 128K;有效值钳制 [4096, 10,000,000]
-		ctxWin := p.ContextWindow
-		if ctxWin != 0 {
-			if ctxWin < 4096 {
-				ctxWin = 4096
-			}
-			if ctxWin > 10_000_000 {
-				ctxWin = 10_000_000
-			}
-		}
-		auditParts = append(auditParts, fmt.Sprintf("id=%s key=%s encLen=%d", p.ID, keySrc, len(enc)))
-		out = append(out, AgentProfile{
-			ID: p.ID, Name: p.Name, Provider: p.Provider, BaseURL: p.BaseURL,
-			ApiKeyEnc: enc, Model: p.Model, ApiMode: p.ApiMode,
-			ContextWindow: ctxWin, CustomModels: custom,
-		})
-	}
-	// 审计留痕: 每次全量保存记录档案与密钥来源,便于追踪密文丢失
-	logConfigLoadError("profiles-set", fmt.Errorf("active=%s %s", strings.TrimSpace(in.ActiveProfileID), strings.Join(auditParts, " | ")))
-	// 活动档案必须存在
-	active := strings.TrimSpace(in.ActiveProfileID)
-	found := false
-	for _, p := range out {
-		if p.ID == active {
-			found = true
-			break
-		}
-	}
-	if !found && len(out) > 0 {
-		active = out[0].ID
-	}
-	c.config.Agent.Profiles = out
-	c.config.Agent.ActiveProfileID = active
-	c.save()
-	return c.agentProfilesViewLocked()
-}
-
-// AgentSetActiveProfile 切换活动档案(下一轮对话生效)。
-func (c *ConfigService) AgentSetActiveProfile(id string) string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	for _, p := range c.config.Agent.Profiles {
-		if p.ID == id {
-			c.config.Agent.ActiveProfileID = id
-			c.save()
-			return `{"ok":true}`
-		}
-	}
-	return `{"error":"profile not found"}`
-}
-
-// agentProfilesViewLocked 档案视图(不含密文;调用方持锁)。
-func (c *ConfigService) agentProfilesViewLocked() string {
-	type profileView struct {
-		AgentProfile
-		HasKey bool `json:"hasKey"`
-	}
-	out := struct {
-		ActiveProfileID string        `json:"activeProfileId"`
-		Profiles        []profileView `json:"profiles"`
-	}{ActiveProfileID: c.config.Agent.ActiveProfileID}
-	for _, p := range c.config.Agent.Profiles {
-		pv := profileView{AgentProfile: p, HasKey: p.ApiKeyEnc != ""}
-		pv.ApiKeyEnc = ""
-		out.Profiles = append(out.Profiles, pv)
-	}
-	data, _ := json.Marshal(out)
-	return string(data)
-}
-
-// AgentProfilesGet 返回档案视图 JSON(不含密文)。
-func (c *ConfigService) AgentProfilesGet() string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.agentProfilesViewLocked()
-}
-
-// SetAgentBehavior 保存全局行为参数(权限模式/窗口)。
-func (c *ConfigService) SetAgentBehavior(permMode string, historyWindow int, contextMaxEvents int) string {
-	switch permMode {
-	case "plan", "manual", "auto":
-	default:
-		permMode = "manual"
-	}
-	if historyWindow < 20 {
-		historyWindow = 200
-	}
-	if contextMaxEvents < 20 {
-		contextMaxEvents = 400
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.config.Agent.PermMode = permMode
-	c.config.Agent.HistoryWindow = historyWindow
-	c.config.Agent.ContextMaxEvents = contextMaxEvents
-	c.save()
-	return `{"ok":true}`
-}
-
-// SetAgentEnabled 启用/停用智能体。
-func (c *ConfigService) SetAgentEnabled(enabled bool) string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.config.Agent.Enabled = enabled
-	c.save()
-	return `{"ok":true}`
-}
-
-// AgentApiKeyPlain 解密返回活动档案 API Key 明文(仅智能体服务内部使用)。
-func (c *ConfigService) AgentApiKeyPlain() string {
-	plain, _, _ := c.AgentApiKeyState()
-	return plain
-}
-
-// AgentProfileByIDPlain 返回指定档案的 baseURL 与 API Key 明文(仅智能体服务
-// 内部使用;密钥不出后端)。档案不存在返回 found=false;未存密钥/解密失败时
-// apiKey 为空但 found=true(由调用方让端点自然报鉴权错)。
-func (c *ConfigService) AgentProfileByIDPlain(id string) (baseURL string, apiKey string, found bool) {
-	c.mu.Lock()
-	var enc string
-	for _, p := range c.config.Agent.Profiles {
-		if p.ID == id {
-			baseURL, enc = p.BaseURL, p.ApiKeyEnc
-			break
-		}
-	}
-	c.mu.Unlock()
-	if baseURL == "" && enc == "" {
-		return "", "", false
-	}
-	if enc == "" {
-		return baseURL, "", true
-	}
-	plain, err := decryptSecret(enc)
-	if err != nil {
-		return baseURL, "", true
-	}
-	return baseURL, plain, true
-}
-
-// AgentApiKeyState 诊断用:区分"未存密钥"与"存了但解密失败"。
-// 返回 明文 / 是否已存密文 / 解密错误。
-// 自愈:内存中活动档案无密文时,先从磁盘重载一次(兜住双开实例/未知覆盖
-// 造成的内存与磁盘不一致——磁盘是权威源)。
-func (c *ConfigService) AgentApiKeyState() (plain string, encStored bool, err error) {
-	plain, encStored, err = c.agentApiKeyStateMem()
-	if err == nil {
-		return plain, encStored, nil
-	}
-	// 内存不可用 → 尝试磁盘自愈重载
-	if c.reloadAgentFromDisk() {
-		p2, e2, err2 := c.agentApiKeyStateMem()
-		if err2 == nil {
-			logConfigLoadError("agent.toml", fmt.Errorf("内存密钥不可用已从磁盘自愈: %v", err))
-			return p2, e2, nil
-		}
-		logConfigLoadError("agent.toml", fmt.Errorf("内存密钥不可用且磁盘自愈失败: 内存=%v 磁盘=%v", err, err2))
-		return p2, e2, err2
-	}
-	return plain, encStored, err
-}
-
-// agentApiKeyStateMem 纯内存检查。
-func (c *ConfigService) agentApiKeyStateMem() (plain string, encStored bool, err error) {
-	c.mu.Lock()
-	enc := ""
-	profileCount := len(c.config.Agent.Profiles)
-	activeID := c.config.Agent.ActiveProfileID
-	for _, p := range c.config.Agent.Profiles {
-		if p.ID == c.config.Agent.ActiveProfileID {
-			enc = p.ApiKeyEnc
-			break
-		}
-	}
-	c.mu.Unlock()
-	if enc == "" {
-		return "", false, fmt.Errorf("活动档案无密文(档案数=%d 活动=%q)", profileCount, activeID)
-	}
-	plain, err = decryptSecret(enc)
-	if err != nil {
-		return "", true, fmt.Errorf("解密失败: %w", err)
-	}
-	if plain == "" {
-		return "", true, fmt.Errorf("解密结果为空")
-	}
-	return plain, true, nil
-}
-
-// reloadAgentFromDisk 从磁盘 agent.toml 重载 agent 节覆盖内存(权威源)。
-// 磁盘无档案/解析失败返回 false。
-func (c *ConfigService) reloadAgentFromDisk() bool {
-	data, rerr := os.ReadFile(AgentConfigFile())
-	if rerr != nil {
-		return false
-	}
-	var f struct {
-		Agent AgentConfig `toml:"agent"`
-	}
-	if uerr := toml.Unmarshal(data, &f); uerr != nil || len(f.Agent.Profiles) == 0 {
-		return false
-	}
-	c.mu.Lock()
-	c.config.Agent = f.Agent
-	c.mu.Unlock()
-	return true
 }
