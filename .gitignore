@@ -34,3 +34,6 @@ frontend/node_modules
 # 依赖与构建产物(全仓库任意层级)
 node_modules/
 pluginsdk/*/dist/
+
+# 插件 release zip(构建期产物, 供 GitHub 安装器测试/上传)
+pluginsdk/ping/*.zip

@@ -25,7 +25,10 @@ tasks:
   plugins:build:
     summary: 构建捆绑插件并填充 pluginbundle 载荷(发版前执行; 产物不入库)
     cmds:
-      - powershell -ExecutionPolicy Bypass -File pluginsdk/ping/build.ps1
+      - cmd: powershell -NoProfile -ExecutionPolicy Bypass -File pluginsdk/ping/build.ps1
+        platforms: [windows]
+      - cmd: pwsh -NoProfile -File pluginsdk/ping/build.ps1
+        platforms: [linux, darwin]
       - cmd: echo "pluginbundle 载荷已更新, 重新执行 wails3 task build 使其嵌入主程序"
         silent: true
 
