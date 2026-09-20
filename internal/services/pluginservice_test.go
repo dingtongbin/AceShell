@@ -108,11 +108,11 @@ func TestPluginScanAndConfigGate(t *testing.T) {
 		}
 	}
 	writeFile(filepath.Join(helloDir, "plugin.json"), `{"id":"hello","name":"Hello","version":"0.1.0"}`)
-	writeFile(filepath.Join(helloDir, "hello.exe"), "fake")
+	writeFile(filepath.Join(helloDir, "hello"+exeSuffix()), "fake")
 	byeDir := filepath.Join(PluginsDir(), "bye")
 	_ = os.MkdirAll(byeDir, 0700)
 	writeFile(filepath.Join(byeDir, "plugin.json"), `{"id":"bye","name":"Bye","version":"0.1.0"}`)
-	writeFile(filepath.Join(byeDir, "bye.exe"), "fake")
+	writeFile(filepath.Join(byeDir, "bye"+exeSuffix()), "fake")
 	_ = os.MkdirAll(filepath.Join(PluginsDir(), "Incomplete"), 0700)
 
 	cfg := &ConfigService{}

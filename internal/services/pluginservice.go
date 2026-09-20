@@ -14,7 +14,6 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -487,10 +486,7 @@ func (s *PluginService) scanPluginsDir() []pluginCandidate {
 			s.logLine(e.Name() + ": plugin.json 无效或 ID 与目录名不一致, 跳过")
 			continue
 		}
-		exeName := mf.ID
-		if runtime.GOOS == "windows" {
-			exeName += ".exe"
-		}
+		exeName := mf.ID + exeSuffix()
 		exePath := filepath.Join(dir, exeName)
 		if st, err := os.Stat(exePath); err != nil || st.IsDir() {
 			s.logLine(mf.ID + ": 缺少可执行文件 " + exeName + ", 跳过")
