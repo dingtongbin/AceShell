@@ -37,6 +37,7 @@ AceShell 是一个跨平台（Windows / macOS / Linux）网络终端管理工具
 ├── agent-mcp.json    # 智能体外接 MCP 服务器配置（兼容 Claude/Cursor 字段惯例）
 ├── sessions/         # 会话目录（.toml 会话文件 + 指纹 + 密钥库 key/）
 ├── autolog/          # 自动连接日志（logs/ 日志正文 + meta/ 会话元数据）
+├── errors/           # 全局错误日志（errors.log JSONL，10MB 轮转，保留 7 份/30 天）
 └── script/           # 脚本目录
 ```
 

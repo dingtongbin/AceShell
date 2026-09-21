@@ -113,7 +113,7 @@ func TestMcpAgentLock_HTTPIntegration(t *testing.T) {
 	}
 
 	// 5) 挂起清锁 → 恢复后 B 重新取得
-	svc.Pause(true)
+	svc.Pause()
 	if snap := svc.agentLock.snapshot(); snap != nil {
 		t.Fatalf("挂起后锁应清空: %+v", snap)
 	}

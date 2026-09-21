@@ -1,9 +1,9 @@
 // MCP 前端桥接器(模块级单例)。
 // 职责:
-//   1. 订阅后端事件(mcp-command / mcp-approval / mcp-audit / mcp-status / mcp-critical-blocked)
+//   1. 订阅后端事件(mcp-command / mcp-audit / mcp-status / mcp-critical-blocked)
 //   2. 把 MCP 工具命令路由到与用户手动操作完全相同的前端路径(同一 UI、同一弹窗)
 //   3. 命令严格串行(promise 队列 FIFO): 后端仲裁器已串行,前端兜底防并发竞态
-//   4. activateTab=false 的命令(批量执行)不切换标签页;opDelayMs 为可视时延
+//   4. activateTab=false 的命令(批量执行)不切换标签页;opDelayMs 为可控操作延迟
 //   5. 用户键盘抢占检测: 终端/编辑器收到用户手动输入时立即通知后端挂起 MCP
 import { ref } from 'vue'
 import { Events } from '@wailsio/runtime'
@@ -11,13 +11,9 @@ import {
   GetMcpStatus,
   GetMcpAuditLog,
   McpResolveCommand,
-  McpResolveApproval,
   McpNotifyPreemption,
-  GetMcpGrants,
-  RemoveMcpGrant,
-  ClearMcpGrants,
+  McpPoll,
   SetMcpExecTuning,
-  SetMcpCustomRules,
 } from '../../bindings/changeme/internal/services/mcpservice.js'
 
 // ==================== 类型 ====================
@@ -39,16 +35,13 @@ export interface McpStatus {
   busy: boolean
   /** 智能体独占锁持有者(工具调用之间仍持续持有,驱动持锁者指示) */
   lock: McpLockInfo | null
-  mode: 'manual' | 'auto'
   url: string
   token: string
   port: number
-  pendingApprovals: number
   ballX: number
   ballY: number
   opDelayMs: number
   batchIntervalMs: number
-  grantsEnabled: boolean
   auditRetentionDays: number
   terminalReadMax: number
 }
@@ -67,24 +60,6 @@ export interface McpAuditEntry {
   batchId: string
 }
 
-export interface McpApproval {
-  id: string
-  action: string
-  summary: string
-  detail: string
-  risk: string
-  command: string
-  paths: string[]
-  expiresAt: string
-}
-
-export interface McpGrant {
-  id: string
-  command: string
-  paths: string[]
-  createdAt: string
-}
-
 export interface McpCriticalBlock {
   command: string
   reason: string
@@ -101,13 +76,12 @@ export interface McpTabManagerApi {
 // ==================== 状态 ====================
 
 const status = ref<McpStatus>({
-  enabled: false, state: 'stopped', busy: false, lock: null, mode: 'manual', url: '', token: '',
-  port: 8940, pendingApprovals: 0, ballX: -1, ballY: -1,
-  opDelayMs: 1000, batchIntervalMs: 300, grantsEnabled: true,
+  enabled: false, state: 'stopped', busy: false, lock: null, url: '', token: '',
+  port: 8940, ballX: -1, ballY: -1,
+  opDelayMs: 1000, batchIntervalMs: 300,
   auditRetentionDays: 30, terminalReadMax: 32768,
 })
 const auditLog = ref<McpAuditEntry[]>([])
-const pendingApprovals = ref<McpApproval[]>([])
 const criticalBlock = ref<McpCriticalBlock | null>(null)
 
 let tabManagerApi: McpTabManagerApi | null = null
@@ -117,10 +91,69 @@ const editorRegistry = new Map<string, { isDirty: () => boolean; save: () => Pro
 let started = false
 let preemptLock = false
 
+// ==================== 轮询通道(binding 主通道) ====================
+
+// 事件推送(mcp-command 等)在部分 WebView 环境不可达(前后端 runtime 版本
+// 错配),binding 轮询为命令下发与状态刷新的主通道,事件仅作冗余。
+const MCP_POLL_MS = 600
+let pollTimer: ReturnType<typeof setInterval> | null = null
+let lastCriticalID = 0
+// 双通道命令去重: 事件与轮询可能先后送达同一 requestId(领取即删,取先到者)
+const seenCmdIDs = new Set<string>()
+
+/** handleCommand 命令入口(事件/轮询共用),按 requestId 幂等。 */
+function handleCommand(cmd: any) {
+  if (!cmd?.requestId || seenCmdIDs.has(cmd.requestId)) return
+  seenCmdIDs.add(cmd.requestId)
+  if (seenCmdIDs.size > 256) {
+    let n = 128
+    for (const id of seenCmdIDs) { seenCmdIDs.delete(id); if (--n <= 0) break }
+  }
+  enqueueDispatch(async () => {
+    try {
+      await dispatchCommand(cmd.requestId, cmd.type, cmd.payload || {})
+    } catch (e: any) {
+      resolveCmd(cmd.requestId, '', String(e?.message || e)).catch(() => {})
+    }
+  })
+}
+
+/** startMcpPolling 启动轮询(幂等): 每次响应直刷状态、领取命令、消费拦截告警。 */
+function startMcpPolling() {
+  if (pollTimer !== null) return
+  pollTimer = setInterval(async () => {
+    try {
+      const res = JSON.parse(await McpPoll(lastCriticalID) || '{}')
+      if (!res || typeof res !== 'object') return
+      // 状态兜底刷新(等价 mcp-status-changed)
+      Object.assign(status.value, {
+        enabled: !!res.enabled, state: res.state, busy: !!res.busy, lock: res.lock ?? null,
+        url: res.url ?? '', token: res.token ?? '', port: res.port ?? 8940,
+        ballX: res.ballX ?? -1, ballY: res.ballY ?? -1,
+        opDelayMs: res.opDelayMs ?? 1000, batchIntervalMs: res.batchIntervalMs ?? 300,
+        auditRetentionDays: res.auditRetentionDays ?? 30, terminalReadMax: res.terminalReadMax ?? 32768,
+      })
+      // 绝对危险拦截告警(等价 mcp-critical-blocked 兜底)
+      for (const c of res.criticals || []) {
+        if (c?.id > lastCriticalID) {
+          lastCriticalID = c.id
+          criticalBlock.value = { command: c.command, reason: c.reason }
+        }
+      }
+      // 待执行命令(领取即删)
+      for (const cmd of res.commands || []) handleCommand(cmd)
+    } catch { /* 后端未就绪等瞬时错误,静默重试 */ }
+  }, MCP_POLL_MS)
+}
+
 // ==================== 事件订阅 ====================
 
 function parseEvt(evt: any): any {
-  try { return JSON.parse(evt.data) } catch { return null }
+  // 防御: 运行时若已反序列化为对象则直通, 字符串再 parse(双编码/包装均兼容)
+  const d = evt?.data
+  if (d == null) return null
+  if (typeof d === 'object') return d
+  try { return JSON.parse(d) } catch { return null }
 }
 
 /** init 初始化桥接器(应用启动时调用一次;重复调用幂等)。 */
@@ -139,30 +172,10 @@ async function initMcpBridge() {
   } catch {}
 
   // MCP 工具命令 → 串行队列 → 路由到与用户完全相同的 UI 路径
+  // (事件通道,与轮询通道共用 handleCommand,按 requestId 幂等)
   Events.On('mcp-command', async (evt: any) => {
     const cmd = parseEvt(evt)
-    if (!cmd?.requestId) return
-    enqueueDispatch(async () => {
-      try {
-        await dispatchCommand(cmd.requestId, cmd.type, cmd.payload || {})
-      } catch (e: any) {
-        McpResolveCommand(cmd.requestId, '', String(e?.message || e)).catch(() => {})
-      }
-    })
-  })
-
-  // 审批请求: 弹窗等用户决策
-  Events.On('mcp-approval-requested', (evt: any) => {
-    const ap = parseEvt(evt)
-    if (!ap?.id) return
-    pendingApprovals.value.push(ap)
-  })
-
-  // 审批被移除(超时/挂起/抢占): 清理待审批列表
-  Events.On('mcp-approval-removed', (evt: any) => {
-    const info = parseEvt(evt)
-    if (!info?.id) return
-    pendingApprovals.value = pendingApprovals.value.filter(a => a.id !== info.id)
+    handleCommand(cmd)
   })
 
   // 审计日志实时追加(有界: 前端只保留最近 500 条,历史查后端)
@@ -184,6 +197,9 @@ async function initMcpBridge() {
     const info = parseEvt(evt)
     if (info) criticalBlock.value = info
   })
+
+  // 启动 binding 轮询主通道(命令下发/状态刷新/拦截告警)
+  startMcpPolling()
 }
 
 // ==================== 命令路由(严格串行) ====================
@@ -196,15 +212,41 @@ function enqueueDispatch(run: () => Promise<void>) {
   dispatchTail = dispatchTail.then(run, run)
 }
 
+/** resolveCmd 回执(带重试): binding 偶发失败会使命令"已执行但无回执",
+ * 服务端只能判超时,MCP 客户端将重发命令 —— 非幂等命令(terminal_send)
+ * 有重复执行风险,故回执失败时短暂重试 3 次。 */
+async function resolveCmd(requestId: string, result: string, errMsg: string) {
+  for (let i = 0; i < 3; i++) {
+    try {
+      await McpResolveCommand(requestId, result, errMsg)
+      return
+    } catch { /* 瞬时失败,重试 */ }
+    await new Promise(r => setTimeout(r, 300))
+  }
+}
+
 /** sleep 可中断延时(挂起/抢占时命令会被后端取消,延时只是尽力而为)。 */
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+/** ensureRunning 命令执行前/延时后复查 MCP 状态。
+ * dispatch 排队与 opDelayMs 等待期间状态可能翻转(用户挂起/停止/抢占),
+ * 不复查会出现"已挂起仍向终端发送输入"的竞态窗口 —— 后端取消只对
+ * 等待中的请求生效, 已进入前端执行体的命令只能在这里拦截。 */
+function ensureRunning(requestId: string): boolean {
+  if (status.value.state === 'running') return true
+  const why = status.value.state === 'paused' ? 'MCP 已挂起, 拒绝执行' : 'MCP 已停止, 拒绝执行'
+  resolveCmd(requestId, '', why).catch(() => {})
+  return false
 }
 
 async function dispatchCommand(requestId: string, type: string, payload: any) {
   const activateTab = payload?.activateTab !== false
   // 可视时延: 激活标签页后给用户留出观察时间(0 = 关闭)
   const opDelayMs = Math.max(0, Number(payload?.opDelayMs) || 0)
+  // 执行前复查(排队期间状态可能已翻转)
+  if (!ensureRunning(requestId)) return
 
   switch (type) {
     case 'list_tabs': {
@@ -216,33 +258,37 @@ async function dispatchCommand(requestId: string, type: string, payload: any) {
             String(tb?.title || '').toLowerCase().includes(kw) ||
             String(tb?.id || '').toLowerCase().includes(kw))
         : all
-      McpResolveCommand(requestId, JSON.stringify(tabs), '').catch(() => {})
+      resolveCmd(requestId, JSON.stringify(tabs), '').catch(() => {})
       break
     }
     case 'open_session': {
-      if (!tabManagerApi) { McpResolveCommand(requestId, '', '前端未就绪').catch(() => {}); return }
+      if (!tabManagerApi) { resolveCmd(requestId, '', '前端未就绪').catch(() => {}); return }
       const tabId = await tabManagerApi.openSession(payload.sessionPath)
       if (!tabId) {
-        McpResolveCommand(requestId, '', '打开会话失败(会话不存在或协议不支持)').catch(() => {})
+        resolveCmd(requestId, '', '打开会话失败(会话不存在或协议不支持)').catch(() => {})
       } else {
-        McpResolveCommand(requestId, JSON.stringify({ tab_id: tabId, status: 'opened' }), '').catch(() => {})
+        resolveCmd(requestId, JSON.stringify({ tab_id: tabId, status: 'opened' }), '').catch(() => {})
       }
       break
     }
     case 'terminal_send': {
-      if (!tabManagerApi) { McpResolveCommand(requestId, '', '前端未就绪').catch(() => {}); return }
-      if (opDelayMs > 0 && activateTab) await sleep(opDelayMs)
-      const res = await tabManagerApi.mcpTerminalSend(payload.tabId, payload.text, !!payload.needPasteConfirm, activateTab)
+      if (!tabManagerApi) { resolveCmd(requestId, '', '前端未就绪').catch(() => {}); return }
+      if (opDelayMs > 0 && activateTab) {
+        await sleep(opDelayMs)
+        // 延时窗口内用户可能已挂起/停止, 发送前再查一次
+        if (!ensureRunning(requestId)) return
+      }
+      const res = await tabManagerApi.mcpTerminalSend(payload.tabId, payload.text, false, activateTab)
       if (!res.ok) {
-        McpResolveCommand(requestId, '', res.note || '发送失败').catch(() => {})
+        resolveCmd(requestId, '', res.note || '发送失败').catch(() => {})
       } else {
-        McpResolveCommand(requestId, JSON.stringify({ ok: true, note: res.note || '' }), '').catch(() => {})
+        resolveCmd(requestId, JSON.stringify({ ok: true, note: res.note || '' }), '').catch(() => {})
       }
       break
     }
     case 'batch_execute': {
       // 批量执行: 不切换标签页(activateTab=false),逐条串行发送,间隔 intervalMs
-      if (!tabManagerApi) { McpResolveCommand(requestId, '', '前端未就绪').catch(() => {}); return }
+      if (!tabManagerApi) { resolveCmd(requestId, '', '前端未就绪').catch(() => {}); return }
       const commands: string[] = Array.isArray(payload.commands) ? payload.commands : []
       const intervalMs = Math.max(50, Number(payload.intervalMs) || 200)
       const results: any[] = []
@@ -252,47 +298,50 @@ async function dispatchCommand(requestId: string, type: string, payload: any) {
         results.push({ index: i + 1, ok: res.ok, note: res.note || '' })
         if (!res.ok) {
           // 单条失败即停止后续(连接断开等场景继续无意义)
-          McpResolveCommand(requestId, '', `第 ${i + 1} 条执行失败: ${res.note || '发送失败'}`).catch(() => {})
+          resolveCmd(requestId, '', `第 ${i + 1} 条执行失败: ${res.note || '发送失败'}`).catch(() => {})
           return
         }
       }
-      McpResolveCommand(requestId, JSON.stringify({ ok: true, executed: results.length, results }), '').catch(() => {})
+      resolveCmd(requestId, JSON.stringify({ ok: true, executed: results.length, results }), '').catch(() => {})
       break
     }
     case 'open_script': {
-      if (!openScriptHandler) { McpResolveCommand(requestId, '', '前端未就绪').catch(() => {}); return }
+      if (!openScriptHandler) { resolveCmd(requestId, '', '前端未就绪').catch(() => {}); return }
       const tabId = await openScriptHandler(payload.filePath)
       if (!tabId) {
-        McpResolveCommand(requestId, '', '打开脚本失败').catch(() => {})
+        resolveCmd(requestId, '', '打开脚本失败').catch(() => {})
       } else {
-        McpResolveCommand(requestId, JSON.stringify({ tab_id: tabId }), '').catch(() => {})
+        resolveCmd(requestId, JSON.stringify({ tab_id: tabId }), '').catch(() => {})
       }
       break
     }
     case 'script_write': {
       // 先确保文件在编辑器标签页中打开,再通过编辑器 API 写入(与用户编辑完全一致)
-      if (!openScriptHandler) { McpResolveCommand(requestId, '', '前端未就绪').catch(() => {}); return }
+      if (!openScriptHandler) { resolveCmd(requestId, '', '前端未就绪').catch(() => {}); return }
       const tabId = await openScriptHandler(payload.filePath)
-      if (!tabId) { McpResolveCommand(requestId, '', '打开脚本失败').catch(() => {}); return }
+      if (!tabId) { resolveCmd(requestId, '', '打开脚本失败').catch(() => {}); return }
       const api = await waitForEditor(payload.filePath)
-      if (!api) { McpResolveCommand(requestId, '', '编辑器未就绪').catch(() => {}); return }
+      if (!api) { resolveCmd(requestId, '', '编辑器未就绪').catch(() => {}); return }
       api.setContent(payload.content)
-      McpResolveCommand(requestId, JSON.stringify({ ok: true, note: '内容已写入编辑器' }), '').catch(() => {})
+      resolveCmd(requestId, JSON.stringify({ ok: true, note: '内容已写入编辑器' }), '').catch(() => {})
       break
     }
     case 'close_tab': {
-      if (!tabManagerApi) { McpResolveCommand(requestId, '', '前端未就绪').catch(() => {}); return }
-      if (opDelayMs > 0 && activateTab) await sleep(opDelayMs)
+      if (!tabManagerApi) { resolveCmd(requestId, '', '前端未就绪').catch(() => {}); return }
+      if (opDelayMs > 0 && activateTab) {
+        await sleep(opDelayMs)
+        if (!ensureRunning(requestId)) return
+      }
       const res = await tabManagerApi.mcpCloseTab(payload.tabId, activateTab)
       if (!res.ok) {
-        McpResolveCommand(requestId, '', res.note || '关闭失败').catch(() => {})
+        resolveCmd(requestId, '', res.note || '关闭失败').catch(() => {})
       } else {
-        McpResolveCommand(requestId, JSON.stringify({ ok: true }), '').catch(() => {})
+        resolveCmd(requestId, JSON.stringify({ ok: true }), '').catch(() => {})
       }
       break
     }
     default:
-      McpResolveCommand(requestId, '', '未知命令: ' + type).catch(() => {})
+      resolveCmd(requestId, '', '未知命令: ' + type).catch(() => {})
   }
 }
 
@@ -332,38 +381,18 @@ function bindOpenScriptHandler(handler: (filePath: string) => Promise<string | n
 function registerEditor(filePath: string, api: any) { editorRegistry.set(filePath, api) }
 function unregisterEditor(filePath: string) { editorRegistry.delete(filePath) }
 
-/** approveApproval / denyApproval 审批弹窗决策回执(permanent=永久授权,仅批准时有效)。 */
-function approveApproval(id: string, permanent = false) {
-  pendingApprovals.value = pendingApprovals.value.filter(a => a.id !== id)
-  McpResolveApproval(id, true, permanent).catch(() => {})
-}
-function denyApproval(id: string) {
-  pendingApprovals.value = pendingApprovals.value.filter(a => a.id !== id)
-  McpResolveApproval(id, false, false).catch(() => {})
-}
+// ==================== 执行参数(设置面板调用) ====================
 
-// ==================== 永久授权/执行参数(设置面板调用) ====================
-
-function refreshGrants(): Promise<McpGrant[]> {
-  return GetMcpGrants().then(raw => {
-    const list = JSON.parse(raw)
-    return Array.isArray(list) ? list : []
-  }).catch(() => [])
+function saveExecTuning(opDelayMs: number, batchIntervalMs: number, auditRetentionDays: number, terminalReadMax: number) {
+  return SetMcpExecTuning(opDelayMs, batchIntervalMs, auditRetentionDays, terminalReadMax).catch(() => '')
 }
-function removeGrant(id: string) { return RemoveMcpGrant(id).catch(() => '') }
-function clearGrants() { return ClearMcpGrants().catch(() => '') }
-function saveExecTuning(opDelayMs: number, batchIntervalMs: number, grantsEnabled: boolean, auditRetentionDays: number, terminalReadMax: number) {
-  return SetMcpExecTuning(opDelayMs, batchIntervalMs, grantsEnabled, auditRetentionDays, terminalReadMax).catch(() => '')
-}
-function saveCustomRules(jsonStr: string) { return SetMcpCustomRules(jsonStr).catch(() => '') }
 
 export function useMcpBridge() {
   return {
-    status, auditLog, pendingApprovals, criticalBlock,
+    status, auditLog, criticalBlock,
     initMcpBridge,
     bindTabManager, bindOpenScriptHandler, registerEditor, unregisterEditor,
     notifyUserInput,
-    approveApproval, denyApproval,
-    refreshGrants, removeGrant, clearGrants, saveExecTuning, saveCustomRules,
+    saveExecTuning,
   }
 }

@@ -1,21 +1,20 @@
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
-import { NModal, NSwitch, NTag, NRadioGroup, NRadioButton, NButton, NInput, NCheckbox, NIcon, NSlider, NColorPicker, NInputNumber, NAutoComplete, NSelect, NPopconfirm, useMessage } from 'naive-ui'
-import { Events } from '@wailsio/runtime'
-import { CloseOutline, LogoGithub, GlobeOutline } from '@vicons/ionicons5'
+import { ref, reactive, computed, onMounted, watch } from 'vue'
+import { NModal, NSwitch, NTag, NRadioGroup, NRadioButton, NButton, NInput, NCheckbox, NIcon, NSlider, NColorPicker, NInputNumber, NAutoComplete, NSelect, useMessage } from 'naive-ui'
+import { CloseOutline, LogoGithub, GlobeOutline, CopyOutline, RefreshOutline, PauseOutline, PlayOutline, SaveOutline, DocumentTextOutline, ChevronDownOutline } from '@vicons/ionicons5'
 import { useTheme } from '../stores/theme'
 import { ACCENT_PRESETS } from '../stores/tokens'
-import { GetConfig, SetTabOrientation, SetTheme, SetThemeAccent, SetCloseConfirm, SetPanelOpacity, SetWallpaper, SetTerminalConfig, SetShowSerial, SetShowHelp, SetFileEditingAutoSave, SetLanguage, SetCustomTitlebar, SetShowToolbar, SetShowAssistant } from '../../bindings/changeme/internal/services/configservice.js'
+import { GetConfig, SetTabOrientation, SetTheme, SetThemeAccent, SetCloseConfirm, SetPanelOpacity, SetWallpaper, SetTerminalConfig, SetShowSerial, SetShowHelp, SetFileEditingAutoSave, SetLanguage, SetCustomTitlebar, SetShowToolbar, SetShowAssistant, McpDangerousPatterns } from '../../bindings/changeme/internal/services/configservice.js'
+import { SetMcpEnabled, McpPause, McpResume, ResetMcpToken, ExportAuditPdf, SetMcpDangerousPatterns } from '../../bindings/changeme/internal/services/mcpservice.js'
 import { OpenFileDialog } from '../../bindings/changeme/internal/services/windowservice.js'
 import { OpenUrl as BrowserOpenUrl } from '../../bindings/changeme/internal/services/browserservice.js'
 import { GetVersion } from '../../bindings/changeme/internal/services/versionservice.js'
 import { setLocale, languageOptions } from '../i18n'
 import { useI18n } from 'vue-i18n'
-import { PluginList, PluginSetEnabled, PluginReload, PluginOpenDir, PluginInstallFromGitHub, PluginUninstall, PluginRestoreBundled } from '../../bindings/changeme/internal/services/pluginservice.js'
-import type { PluginSummary } from '../composables/usePluginBridge'
+import { useMcpBridge } from '../composables/useMcpBridge'
 
 const message = useMessage()
-const { t } = useI18n()
+const { t, locale } = useI18n()
 
 const { themeMode, setThemeMode, accent, setAccent } = useTheme()
 
@@ -67,111 +66,205 @@ const navItems = computed(() => [
   { key: 'terminal', label: t('settings.nav.terminal') },
   { key: 'fileEditing', label: t('settings.nav.fileEditing') },
   { key: 'tabs', label: t('settings.nav.tabs') },
-  { key: 'plugins', label: t('settings.nav.plugins') },
+  { key: 'mcp', label: t('settings.nav.mcp') },
   { key: 'about', label: t('settings.nav.about') },
 ])
 
-// ==================== 插件管理 ====================
+// ==================== MCP 服务设置(与设置弹窗布局同语言) ====================
 
-const pluginList = ref<PluginSummary[]>([])
-const ghInput = ref('')
-const installing = ref(false)
-// 插件操作防抖: id → 操作名('reload'|'toggle'), 期间控件呈 loading 且忽略重复点击
-const pluginBusy = ref<Record<string, string>>({})
-let offRegistry: (() => void) | null = null
-let offStatusChanged: (() => void) | null = null
+const { status: mcpStatus, auditLog: mcpAuditLog, saveExecTuning } = useMcpBridge()
 
-function pluginStatusText(p: PluginSummary): string {
-  const key = { running: 'plugins.statusRunning', starting: 'plugins.statusStarting', stopped: 'plugins.statusStopped', error: 'plugins.statusError', disabled: 'plugins.statusDisabled', uninstalled: 'plugins.statusUninstalled' }[p.status] || 'plugins.statusStopped'
-  const text = t(key)
-  return p.error ? `${text} · ${p.error}` : text
+const mcpSwitching = ref(false)
+const mcpShowToken = ref(false)
+
+const mcpStateText = computed(() => {
+  switch (mcpStatus.value.state) {
+    case 'running': return t('mcp.stateRunning')
+    case 'paused': return t('mcp.statePaused')
+    default: return t('mcp.stateStopped')
+  }
+})
+const mcpStateType = computed(() => (mcpStatus.value.state === 'running' ? 'success' : mcpStatus.value.state === 'paused' ? 'warning' : 'default') as any)
+
+function maskedToken(token: string): string {
+  if (!token) return ''
+  if (mcpShowToken.value) return token
+  if (token.length <= 8) return '****'
+  return token.slice(0, 4) + '****' + token.slice(-4)
 }
 
-async function refreshPlugins() {
+async function copyText(text: string) {
   try {
-    const data = JSON.parse(await PluginList())
-    pluginList.value = Array.isArray(data?.plugins) ? data.plugins : []
-  } catch {}
+    await navigator.clipboard.writeText(text)
+    message.success(t('mcp.copied'))
+  } catch { message.error(t('mcp.copyFailed')) }
 }
 
-async function handlePluginEnabledChange(id: string, v: boolean) {
-  if (pluginBusy.value[id]) return
-  pluginBusy.value[id] = 'toggle'
+// 解析控制接口返回: statusMap 刷新本地状态; {"error":...} 弹错并返回 false
+function applyMcpControlResult(res: any, successTip?: string): boolean {
+  if (!res || typeof res !== 'object') return false
+  if (res.error) { message.error(String(res.error)); return false }
+  Object.assign(mcpStatus.value, res)
+  if (successTip) message.success(successTip)
+  return true
+}
+
+async function handleMcpToggle(enabled: boolean) {
+  mcpSwitching.value = true
   try {
-    await PluginSetEnabled(id, v)
-    if (v) {
-      // 启用为异步重启: 稍后刷新拿 running 状态(与重载同策略)
-      setTimeout(refreshPlugins, 800)
-    } else {
-      await refreshPlugins()
-    }
+    const res = JSON.parse(await SetMcpEnabled(enabled) || '{}')
+    applyMcpControlResult(res)
   } catch (e: any) {
     message.error(String(e?.message || e))
-  } finally {
-    // 1s 防抖窗口: 期间开关呈 loading 并忽略点击
-    setTimeout(() => { delete pluginBusy.value[id] }, 1000)
+  } finally { mcpSwitching.value = false }
+}
+
+async function handleMcpPause() {
+  try {
+    const res = JSON.parse(await McpPause() || '{}')
+    applyMcpControlResult(res)
+  } catch (e: any) { message.error(String(e?.message || e)) }
+}
+async function handleMcpResume() {
+  try {
+    const res = JSON.parse(await McpResume() || '{}')
+    applyMcpControlResult(res)
+  } catch (e: any) { message.error(String(e?.message || e)) }
+}
+
+async function handleMcpResetToken() {
+  try {
+    const res = JSON.parse(await ResetMcpToken() || '{}')
+    applyMcpControlResult(res, t('mcp.tokenResetOk'))
+  } catch (e: any) { message.error(String(e?.message || e)) }
+}
+
+// 执行参数(本地编辑副本,保存时整体提交)
+const mcpTuning = ref({ opDelayMs: 1000, batchIntervalMs: 300, auditRetentionDays: 30, terminalReadMaxKB: 32 })
+const mcpTuningSaving = ref(false)
+
+watch(() => [
+  mcpStatus.value.opDelayMs, mcpStatus.value.batchIntervalMs,
+  mcpStatus.value.auditRetentionDays, mcpStatus.value.terminalReadMax,
+], () => {
+  mcpTuning.value = {
+    opDelayMs: mcpStatus.value.opDelayMs,
+    batchIntervalMs: mcpStatus.value.batchIntervalMs,
+    auditRetentionDays: mcpStatus.value.auditRetentionDays,
+    terminalReadMaxKB: Math.round(mcpStatus.value.terminalReadMax / 1024),
+  }
+}, { immediate: true })
+
+async function handleMcpSaveTuning() {
+  mcpTuningSaving.value = true
+  try {
+    const raw = await saveExecTuning(
+      mcpTuning.value.opDelayMs, mcpTuning.value.batchIntervalMs,
+      mcpTuning.value.auditRetentionDays, Math.round(mcpTuning.value.terminalReadMaxKB * 1024),
+    )
+    const res = raw ? JSON.parse(raw) : null
+    if (res?.error) message.error(String(res.error))
+    else message.success(t('mcp.tuningSaved'))
+  } catch (e: any) { message.error(String(e?.message || e)) } finally { mcpTuningSaving.value = false }
+}
+
+// 绝对危险指令字典(每行一条正则;清空全部并保存 = 恢复内置默认)
+const mcpDangerousText = ref('')
+const mcpDangerousLoading = ref(false)
+const mcpDangerousSaving = ref(false)
+const mcpDangerousLoaded = ref(false)
+
+async function loadMcpDangerous() {
+  mcpDangerousLoading.value = true
+  try {
+    const list = JSON.parse(await McpDangerousPatterns() || '[]')
+    mcpDangerousText.value = (Array.isArray(list) ? list : []).join('\n')
+  } catch { mcpDangerousText.value = '' } finally { mcpDangerousLoading.value = false }
+}
+
+function mcpDangerousCount(): number {
+  return mcpDangerousText.value.split('\n').map(s => s.trim()).filter(Boolean).length
+}
+
+async function handleMcpSaveDangerous(restoreDefault = false) {
+  mcpDangerousSaving.value = true
+  try {
+    const patterns = restoreDefault ? [] : mcpDangerousText.value.split('\n').map(s => s.trim()).filter(Boolean)
+    const raw = await SetMcpDangerousPatterns(JSON.stringify(patterns))
+    const res = raw ? JSON.parse(raw) : null
+    if (res && !Array.isArray(res) && res.error) message.error(String(res.error))
+    else { message.success(t('mcp.dangerousSaved')); loadMcpDangerous() }
+  } catch (e: any) { message.error(String(e?.message || e)) } finally { mcpDangerousSaving.value = false }
+}
+
+// 打开弹窗时懒加载危险字典
+watch(() => props.show && activeNav.value === 'mcp', (v) => {
+  if (v && !mcpDangerousLoaded.value) {
+    mcpDangerousLoaded.value = true
+    loadMcpDangerous()
+  }
+})
+
+// 审计日志(倒序 + 过滤 + 展开详情)
+const mcpReversedLogs = computed(() => [...mcpAuditLog.value].reverse())
+const mcpRiskFilter = ref<'all' | 'blocked' | 'allowed'>('all')
+const mcpLogExpanded = ref<Record<string, boolean>>({})
+const mcpPdfExporting = ref(false)
+
+const mcpRiskFilterOptions = computed(() => [
+  { key: 'all', label: t('mcp.filterAll') },
+  { key: 'blocked', label: t('mcp.riskBlocked') },
+  { key: 'allowed', label: t('mcp.riskAllowed') },
+])
+
+const mcpFilteredLogs = computed(() => mcpReversedLogs.value.filter(log => {
+  if (mcpRiskFilter.value === 'blocked' && log.risk !== 'blocked') return false
+  if (mcpRiskFilter.value === 'allowed' && log.risk === 'blocked') return false
+  return true
+}))
+
+function mcpSourceText(source: string): string {
+  switch (source) {
+    case 'external': return t('mcp.sourceExternal')
+    case 'embedded': return t('mcp.sourceEmbedded')
+    default: return source
   }
 }
 
-async function handlePluginReload(id: string) {
-  if (pluginBusy.value[id]) return
-  pluginBusy.value[id] = 'reload'
-  try {
-    await PluginReload(id)
-    message.success(t('plugins.reloaded', { id }))
-    setTimeout(refreshPlugins, 800)
-  } catch (e: any) {
-    message.error(String(e?.message || e))
-  } finally {
-    // 1s 防抖窗口: 期间按钮呈 loading 并忽略点击
-    setTimeout(() => { delete pluginBusy.value[id] }, 1000)
-  }
+function toggleMcpLogDetail(id: string) {
+  mcpLogExpanded.value[id] = !mcpLogExpanded.value[id]
 }
 
-async function handleOpenPluginDir() {
-  try { await PluginOpenDir() } catch {}
+function mcpRiskType(risk: string): any {
+  return risk === 'blocked' ? 'error' : 'success'
 }
-
-async function handleUninstallPlugin(id: string) {
-  try {
-    const res = JSON.parse(await PluginUninstall(id))
-    if (res?.error) { message.error(String(res.error)); return }
-    message.success(t('plugins.uninstalledOk', { id }))
-    await refreshPlugins()
-  } catch (e: any) {
-    message.error(String(e?.message || e))
+function mcpRiskText(risk: string): string {
+  return risk === 'blocked' ? t('mcp.riskBlocked') : t('mcp.riskAllowed')
+}
+function mcpDecisionType(decision: string): any {
+  switch (decision) {
+    case 'approved': case 'auto': case 'executed': return 'success'
+    case 'denied': case 'rejected': case 'blocked': return 'error'
+    case 'pending': case 'timeout': return 'warning'
+    default: return 'default'
   }
 }
-
-async function handleRestoreBundled(id: string) {
-  try {
-    const res = JSON.parse(await PluginRestoreBundled(id))
-    if (res?.error) { message.error(String(res.error)); return }
-    message.success(t('plugins.restoredOk', { id }))
-    setTimeout(refreshPlugins, 800)
-  } catch (e: any) {
-    message.error(String(e?.message || e))
-  }
+function mcpDecisionText(decision: string): string {
+  const key = 'mcp.decision_' + decision
+  const val = t(key)
+  return val === key ? decision : val
 }
 
-async function handleInstallPlugin() {
-  const input = ghInput.value.trim()
-  if (!input || installing.value) return
-  installing.value = true
+async function handleMcpExportPdf() {
+  mcpPdfExporting.value = true
   try {
-    const res = JSON.parse(await PluginInstallFromGitHub(input))
-    if (res?.error) {
-      message.error(String(res.error))
-    } else {
-      message.success(t('plugins.installOk', { id: res.id, version: res.version }))
-      ghInput.value = ''
-      setTimeout(refreshPlugins, 800)
-    }
+    const raw = JSON.parse(await ExportAuditPdf(locale.value))
+    if (raw?.error) message.error(String(raw.error))
+    else if (raw?.path) message.success(t('mcp.exportPdfOk', { path: raw.path }))
+    // path 为空 = 用户取消,不提示
   } catch (e: any) {
     message.error(String(e?.message || e))
-  } finally {
-    installing.value = false
-  }
+  } finally { mcpPdfExporting.value = false }
 }
 
 // ==================== 终端设置(表单模式:确定才保存生效) ====================
@@ -395,13 +488,8 @@ async function loadConfig() {
 onMounted(() => {
   loadConfig()
   GetVersion().then(v => { appVersion.value = v }).catch(() => {})
-  // 注册表/状态事件 → 插件列表自愈刷新: 启用/恢复为异步重启, 期间注册表瞬时为空,
-  // 仅靠操作后的定时刷新会停留在空列表(卡片消失)。
-  offRegistry = Events.On('plugin-registry-changed', () => { refreshPlugins() })
-  offStatusChanged = Events.On('plugin-status-changed', () => { refreshPlugins() })
 })
-onUnmounted(() => { offRegistry?.(); offStatusChanged?.() })
-watch(() => props.show, (val) => { if (val) { loadConfig(); refreshPlugins() } })
+watch(() => props.show, (val) => { if (val) { loadConfig() } })
 </script>
 
 <template>
@@ -613,48 +701,139 @@ watch(() => props.show, (val) => { if (val) { loadConfig(); refreshPlugins() } }
               <n-checkbox :checked="closeNoConfirm" @update:checked="handleCloseNoConfirmChange" />
             </div>
           </div>
-          <div v-if="activeNav === 'plugins'">
-            <div class="setting-item" style="flex-direction: column; align-items: stretch; gap: 8px;">
-              <div class="setting-label">{{ t('plugins.installTitle') }}</div>
-              <div style="display: flex; gap: 8px;">
-                <n-input v-model:value="ghInput" size="small" :placeholder="t('plugins.installPlaceholder')" :disabled="installing" @keyup.enter="handleInstallPlugin" />
-                <n-button size="small" type="primary" :loading="installing" @click="handleInstallPlugin">{{ t('plugins.installBtn') }}</n-button>
+          <!-- MCP 服务: 开关/状态 + 连接 + 危险拦截 + 执行参数 + 危险字典 + 审计日志 -->
+          <div v-if="activeNav === 'mcp'" class="mcp-settings">
+            <div class="setting-item">
+              <div class="setting-label">{{ t('mcp.enable') }}<span class="setting-desc">{{ t('mcp.enableDesc') }}</span></div>
+              <div style="display: flex; align-items: center; gap: 10px; flex-shrink: 0;">
+                <n-tag :type="mcpStateType" size="small" round>{{ mcpStateText }}</n-tag>
+                <n-switch :value="mcpStatus.enabled" :loading="mcpSwitching" size="small" @update:value="handleMcpToggle" />
+                <n-button size="small" :type="mcpStatus.state === 'paused' ? 'primary' : 'default'" :disabled="mcpStatus.state === 'stopped'"
+                          :title="mcpStatus.state === 'paused' ? t('mcp.resume') : t('mcp.pause')"
+                          @click="mcpStatus.state === 'paused' ? handleMcpResume() : handleMcpPause()">
+                  <template #icon><n-icon :size="13" :component="mcpStatus.state === 'paused' ? PlayOutline : PauseOutline" /></template>
+                </n-button>
               </div>
-              <div style="font-size: 12px; color: var(--icon-color);">{{ t('plugins.installHint') }}</div>
             </div>
-            <div class="setting-item" style="margin-top: 12px;">
-              <div class="setting-label">{{ t('plugins.openDir') }}</div>
-              <n-button size="small" @click="handleOpenPluginDir">{{ t('plugins.openDir') }}</n-button>
+
+            <div class="settings-divider"></div>
+            <div class="mcp-block">
+              <div class="mcp-block-title">{{ t('mcp.connection') }}</div>
+              <div class="mcp-conn-row">
+                <span class="mcp-conn-label">URL</span>
+                <span class="mcp-conn-value mono">{{ mcpStatus.url || '--' }}</span>
+                <n-button text size="small" @click="copyText(mcpStatus.url)"><n-icon :size="14" :component="CopyOutline" /></n-button>
+              </div>
+              <div class="mcp-conn-row">
+                <span class="mcp-conn-label">{{ t('mcp.tokenLabel') }}</span>
+                <span class="mcp-conn-value mono">{{ maskedToken(mcpStatus.token) || '--' }}</span>
+                <n-button text size="small" @click="mcpShowToken = !mcpShowToken">{{ mcpShowToken ? t('mcp.hide') : t('mcp.show') }}</n-button>
+                <n-button text size="small" @click="copyText(mcpStatus.token)"><n-icon :size="14" :component="CopyOutline" /></n-button>
+                <n-button text size="small" :title="t('mcp.resetToken')" @click="handleMcpResetToken"><n-icon :size="14" :component="RefreshOutline" /></n-button>
+              </div>
+              <div class="mcp-hint">{{ t('mcp.connDesc') }}</div>
             </div>
-            <div v-if="pluginList.length === 0" style="margin-top: 12px; font-size: 12px; color: var(--icon-color);">
-              {{ t('plugins.empty') }}
+
+            <div class="settings-divider"></div>
+            <div class="mcp-block">
+              <div class="mcp-block-title">{{ t('mcp.riskTitle') }}</div>
+              <div class="mcp-risk-item"><span class="dot dot-red" /><span>{{ t('mcp.riskBlockedDesc') }}</span></div>
+              <div class="mcp-risk-item"><span class="dot dot-green" /><span>{{ t('mcp.riskAutoDesc') }}</span></div>
             </div>
-            <div v-for="p in pluginList" :key="p.id" class="plugin-card">
-              <img v-if="p.icon" class="plugin-card-icon" :src="p.icon" alt="" />
-              <div class="plugin-card-main">
-                <div class="plugin-card-name">
-                  {{ p.displayName }}
-                  <n-tag size="tiny" :bordered="false">v{{ p.version || '-' }}</n-tag>
-                  <n-tag v-if="p.bundled" size="tiny" :bordered="false" type="info">{{ t('plugins.bundled') }}</n-tag>
+
+            <div class="settings-divider"></div>
+            <div class="mcp-block">
+              <div class="mcp-block-title">{{ t('mcp.execTuning') }}</div>
+              <div class="setting-item">
+                <div class="setting-label">{{ t('mcp.opDelay') }}<span class="setting-desc">{{ t('mcp.opDelayDesc') }}</span></div>
+                <n-input-number v-model:value="mcpTuning.opDelayMs" size="small" :min="0" :max="10000" :step="100" style="width: 120px; flex-shrink: 0" />
+              </div>
+              <div class="setting-item">
+                <div class="setting-label">{{ t('mcp.batchInterval') }}<span class="setting-desc">{{ t('mcp.batchIntervalDesc') }}</span></div>
+                <n-input-number v-model:value="mcpTuning.batchIntervalMs" size="small" :min="50" :max="10000" :step="50" style="width: 120px; flex-shrink: 0" />
+              </div>
+              <div class="setting-item">
+                <div class="setting-label">{{ t('mcp.auditRetention') }}<span class="setting-desc">{{ t('mcp.auditRetentionDesc') }}</span></div>
+                <n-input-number v-model:value="mcpTuning.auditRetentionDays" size="small" :min="1" :max="365" style="width: 120px; flex-shrink: 0" />
+              </div>
+              <div class="setting-item">
+                <div class="setting-label">{{ t('mcp.terminalReadMax') }}<span class="setting-desc">{{ t('mcp.terminalReadMaxDesc') }}</span></div>
+                <n-input-number v-model:value="mcpTuning.terminalReadMaxKB" size="small" :min="1" :max="256" style="width: 120px; flex-shrink: 0" />
+              </div>
+              <div class="mcp-actions">
+                <n-button size="small" type="primary" :loading="mcpTuningSaving" @click="handleMcpSaveTuning">
+                  <template #icon><n-icon :size="13" :component="SaveOutline" /></template>
+                  {{ t('mcp.saveTuning') }}
+                </n-button>
+              </div>
+            </div>
+
+            <div class="settings-divider"></div>
+            <div class="mcp-block">
+              <div class="mcp-block-title">{{ t('mcp.dangerousDict') }}</div>
+              <div class="mcp-hint" style="margin-bottom: 8px">{{ t('mcp.dangerousDictDesc') }}</div>
+              <n-input
+                v-model:value="mcpDangerousText"
+                type="textarea"
+                size="small"
+                :rows="7"
+                :placeholder="t('mcp.dangerousPlaceholder')"
+                class="mcp-pattern-editor mono"
+              />
+              <div class="mcp-actions">
+                <span class="mcp-hint">{{ t('mcp.dangerousCount', { count: mcpDangerousCount() }) }}</span>
+                <div class="mcp-btn-group">
+                  <n-button size="small" :disabled="mcpDangerousSaving" @click="handleMcpSaveDangerous(true)">
+                    <template #icon><n-icon :size="13" :component="RefreshOutline" /></template>
+                    {{ t('mcp.restoreDefault') }}
+                  </n-button>
+                  <n-button size="small" type="primary" :loading="mcpDangerousSaving" @click="handleMcpSaveDangerous()">
+                    <template #icon><n-icon :size="13" :component="SaveOutline" /></template>
+                    {{ t('mcp.saveTuning') }}
+                  </n-button>
                 </div>
-                <div class="plugin-card-status" :class="{ 'plugin-status-error': p.status === 'error' }">{{ pluginStatusText(p) }}</div>
               </div>
-              <template v-if="p.status === 'uninstalled'">
-                <n-button size="tiny" type="primary" quaternary @click="handleRestoreBundled(p.id)">{{ t('plugins.restore') }}</n-button>
-              </template>
-              <template v-else>
-                <n-button size="tiny" quaternary :loading="pluginBusy[p.id] === 'reload'" :disabled="pluginBusy[p.id] === 'reload' || p.status === 'disabled'" @click="handlePluginReload(p.id)">{{ t('plugins.reload') }}</n-button>
-                <n-popconfirm placement="top" :width="260" :show-icon="false" @positive-click="handleUninstallPlugin(p.id)">
-                  <template #trigger>
-                    <n-button size="tiny" quaternary type="error">{{ t('plugins.uninstall') }}</n-button>
-                  </template>
-                  {{ t('plugins.uninstallConfirm', { id: p.id }) }}
-                </n-popconfirm>
-                <n-switch size="small" :loading="pluginBusy[p.id] === 'toggle'" :value="p.status !== 'disabled'" @update:value="(v: boolean) => handlePluginEnabledChange(p.id, v)" />
-              </template>
             </div>
-            <div style="margin-top: 12px; font-size: 12px; color: var(--icon-color);">
-              {{ t('plugins.dirHint') }}
+
+            <div class="settings-divider"></div>
+            <div class="mcp-block">
+              <div class="mcp-block-title">{{ t('mcp.tabLogs') }}</div>
+              <div class="mcp-log-toolbar">
+                <div class="mcp-log-filter-group">
+                  <button
+                    v-for="opt in mcpRiskFilterOptions" :key="'r-' + opt.key"
+                    class="mcp-filter-btn"
+                    :class="{ active: mcpRiskFilter === opt.key, [`risk-${opt.key}`]: opt.key !== 'all' }"
+                    @click="mcpRiskFilter = opt.key as any"
+                  >{{ opt.label }}</button>
+                </div>
+                <n-button size="small" quaternary :loading="mcpPdfExporting" @click="handleMcpExportPdf">
+                  <template #icon><n-icon :size="13" :component="DocumentTextOutline" /></template>
+                  PDF
+                </n-button>
+              </div>
+              <div class="mcp-log-list">
+                <div v-if="mcpFilteredLogs.length === 0" class="mcp-hint" style="padding: 12px 0; text-align: center">
+                  {{ mcpReversedLogs.length === 0 ? t('mcp.noLogs') : t('mcp.noFilterMatch') }}
+                </div>
+                <div
+                  v-for="log in mcpFilteredLogs" :key="log.id"
+                  class="mcp-log-item"
+                  :class="{ clickable: !!log.detail }"
+                  @click="log.detail && toggleMcpLogDetail(log.id)"
+                >
+                  <div class="mcp-log-line1">
+                    <span class="mcp-log-ts">{{ log.ts }}</span>
+                    <span class="mcp-log-source">{{ mcpSourceText(log.source) }}</span>
+                    <n-tag :type="mcpRiskType(log.risk)" size="small">{{ mcpRiskText(log.risk) }}</n-tag>
+                    <n-tag :type="mcpDecisionType(log.decision)" size="small">{{ mcpDecisionText(log.decision) }}</n-tag>
+                    <span class="mcp-log-action">{{ log.action }}</span>
+                    <n-icon v-if="log.detail" :size="12" :component="ChevronDownOutline" class="mcp-log-chev" :class="{ expanded: mcpLogExpanded[log.id] }" />
+                  </div>
+                  <div class="mcp-log-subject">{{ log.subject }}</div>
+                  <pre v-if="log.detail && mcpLogExpanded[log.id]" class="mcp-log-detail">{{ log.detail }}</pre>
+                </div>
+              </div>
             </div>
           </div>
           <div v-if="activeNav === 'about'">
@@ -894,4 +1073,54 @@ watch(() => props.show, (val) => { if (val) { loadConfig(); refreshPlugins() } }
   background: var(--border-color);
   margin: 10px 0;
 }
+
+/* ==================== MCP 设置页 ==================== */
+.mcp-block { padding: 2px 0; }
+.mcp-block-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--icon-color);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+}
+.mcp-hint { font-size: 11px; color: var(--icon-color); line-height: 1.6; margin-top: 2px; }
+.mcp-conn-row { display: flex; align-items: center; gap: 8px; padding: 5px 0; }
+.mcp-conn-label { font-size: 12px; color: var(--icon-color); flex-shrink: 0; width: 44px; }
+.mcp-conn-value { font-size: 13px; color: var(--text-color); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+.mono { font-family: Consolas, 'Courier New', monospace; }
+.mcp-risk-item { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-color); line-height: 2; }
+.dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.dot-red { background: var(--danger-color); }
+.dot-green { background: var(--primary-color); }
+.mcp-btn-group { display: flex; gap: 8px; flex-shrink: 0; }
+.mcp-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 10px; }
+.mcp-pattern-editor { font-size: 12px; }
+
+.mcp-log-toolbar { display: flex; align-items: center; gap: 10px; padding: 4px 0 10px; flex-wrap: wrap; }
+.mcp-log-filter-group { display: flex; align-items: center; background: var(--hover-bg, rgba(255, 255, 255, 0.04)); border-radius: 6px; padding: 2px; gap: 1px; }
+.mcp-filter-btn { border: none; background: transparent; color: var(--icon-color); font-size: 12px; padding: 3px 10px; border-radius: 5px; cursor: pointer; transition: background 0.15s, color 0.15s; white-space: nowrap; }
+.mcp-filter-btn:hover { color: var(--text-color); }
+.mcp-filter-btn.active { background: color-mix(in srgb, var(--primary-color) 25%, transparent); color: var(--primary-color); }
+.mcp-filter-btn.active.risk-blocked { background: rgba(228, 88, 88, 0.22); color: var(--danger-color); }
+.mcp-filter-btn.active.risk-allowed { background: rgba(78, 201, 176, 0.2); color: var(--primary-color); }
+.mcp-log-list {
+  max-height: 260px;
+  overflow-y: auto;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--hover-bg, rgba(128, 128, 128, 0.05));
+}
+.mcp-log-item { padding: 7px 10px; border-bottom: 1px solid var(--border-color); }
+.mcp-log-item:last-child { border-bottom: none; }
+.mcp-log-item.clickable { cursor: pointer; }
+.mcp-log-item.clickable:hover { background: var(--hover-bg, rgba(255, 255, 255, 0.03)); }
+.mcp-log-line1 { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.mcp-log-ts { font-size: 11px; color: var(--icon-color); font-family: Consolas, 'Courier New', monospace; }
+.mcp-log-source { font-size: 11px; color: var(--icon-color); }
+.mcp-log-action { font-size: 12px; font-weight: 600; color: var(--text-color); }
+.mcp-log-subject { font-size: 12px; color: var(--icon-color); margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: Consolas, 'Courier New', monospace; }
+.mcp-log-chev { color: var(--icon-color); transition: transform 0.15s; margin-left: auto; flex-shrink: 0; }
+.mcp-log-chev.expanded { transform: rotate(180deg); }
+.mcp-log-detail { margin: 4px 0 0; padding: 6px 8px; background: rgba(0, 0, 0, 0.3); border-radius: 4px; font-size: 11.5px; line-height: 1.6; color: var(--text-color); white-space: pre-wrap; word-break: break-all; max-height: 180px; overflow: auto; font-family: Consolas, 'Courier New', monospace; }
 </style>

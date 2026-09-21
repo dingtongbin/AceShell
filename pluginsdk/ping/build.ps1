@@ -34,6 +34,10 @@ function deploy([string]$dest) {
   if ($LASTEXITCODE -ne 0) { throw "go build 失败: $dest" }
   Copy-Item (Join-Path $scriptDir "plugin.json") $dest -Force
   Copy-Item (Join-Path $scriptDir "dist") $dest -Recurse -Force
+  # 文档钩子: plugin.json 的 docs 字段指向 docs/ 下的 md, 随载荷一并部署
+  if (Test-Path (Join-Path $scriptDir "docs")) {
+    Copy-Item (Join-Path $scriptDir "docs") $dest -Recurse -Force
+  }
   Write-Host "  -> $dest"
 }
 
@@ -62,6 +66,9 @@ try {
   Copy-Item (Join-Path $bundleDir $exeName) $stage
   Copy-Item (Join-Path $scriptDir "plugin.json") $stage
   Copy-Item (Join-Path $scriptDir "dist") (Join-Path $stage "dist") -Recurse
+  if (Test-Path (Join-Path $scriptDir "docs")) {
+    Copy-Item (Join-Path $scriptDir "docs") (Join-Path $stage "docs") -Recurse
+  }
   if (Test-Path $outZip) { Remove-Item $outZip -Force }
   try { Add-Type -AssemblyName System.IO.Compression.FileSystem } catch {}
   [System.IO.Compression.ZipFile]::CreateFromDirectory($stage, $outZip, [System.IO.Compression.CompressionLevel]::Optimal, $false)
