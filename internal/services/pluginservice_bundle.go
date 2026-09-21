@@ -80,12 +80,27 @@ func shouldMaterializeBundled(bundled pluginManifest, dir string) bool {
 	return compareVersion(bundled.Version, disk.Version) > 0
 }
 
-// materializeBundled 将内置插件目录整体复制到插件安装目录(先清理旧内容)。
+// materializeBundled 将内置插件目录整体铺到插件安装目录。
+// 先解到同卷临时目录再原子替换: 旧版本只在替换成功时才让位,
+// 打包/磁盘异常不会把用户手上的插件弄丢(exe 文件锁由 swapPluginDir 负责等待)。
 func materializeBundled(pluginID string) error {
-	finalDir := filepath.Join(PluginsDir(), pluginID)
-	if err := os.RemoveAll(finalDir); err != nil {
+	if err := os.MkdirAll(PluginsDir(), 0700); err != nil {
 		return err
 	}
+	tmp, err := os.MkdirTemp(PluginsDir(), dirInstallPrefix)
+	if err != nil {
+		return err
+	}
+	// 替换成功后 tmp 已被消费(改名就位), 此处为空操作
+	defer os.RemoveAll(tmp)
+	if err := extractBundled(pluginID, tmp); err != nil {
+		return err
+	}
+	return swapPluginDir(pluginID, tmp)
+}
+
+// extractBundled 把嵌入的插件载荷展开到 dst。
+func extractBundled(pluginID, dst string) error {
 	src := pluginBundleRoot + "/" + pluginID
 	return fs.WalkDir(pluginBundleFS, src, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -95,7 +110,7 @@ func materializeBundled(pluginID string) error {
 		if err != nil {
 			return err
 		}
-		target := filepath.Join(finalDir, filepath.FromSlash(rel))
+		target := filepath.Join(dst, filepath.FromSlash(rel))
 		if d.IsDir() {
 			return os.MkdirAll(target, 0700)
 		}
@@ -111,13 +126,20 @@ func materializeBundled(pluginID string) error {
 func (s *PluginService) PluginUninstall(pluginID string) string {
 	inst := s.getInstance(pluginID)
 	if inst == nil {
-		return `{"error":"未知插件: ` + pluginID + `"}`
+		return `{"error":` + mustJSONString("未知插件: "+pluginID) + `}`
 	}
 	if inst.status != pluginStatusDisabled {
 		s.stopInstance(inst)
 	}
 	bundled := s.isBundled(pluginID)
-	if err := os.RemoveAll(inst.dir); err != nil {
+	// 进程刚被 Kill, exe 文件锁在 Windows 上可能尚未释放。不等锁直接删会出现
+	// "卸载报错但插件已从注册表消失"的不一致状态, 故先等锁再重试删除。
+	if err := waitUnlocked(filepath.Join(inst.dir, pluginID+exeSuffix()), dirLockBudget); err != nil {
+		CollectError("plugin:"+pluginID, "uninstall-waitlock", err)
+		return `{"error":` + mustJSONString(err.Error()) + `}`
+	}
+	if err := removeAllWithRetry(inst.dir, dirLockBudget); err != nil {
+		CollectError("plugin:"+pluginID, "uninstall-remove", err)
 		return `{"error":` + mustJSONString(err.Error()) + `}`
 	}
 	// 连带清理手动安装时可能残留在插件目录旁的压缩包
@@ -137,18 +159,20 @@ func (s *PluginService) PluginUninstall(pluginID string) string {
 	}
 	s.mu.Lock()
 	delete(s.instances, pluginID)
+	delete(s.crashAttempts, pluginID)
 	s.mu.Unlock()
 	s.emitRegistry()
+	s.emitInvalidated(pluginID, "uninstall")
 	return mustJSON(map[string]any{"ok": true, "bundled": bundled})
 }
 
 // PluginRestoreBundled 恢复已卸载的捆绑插件(清除卸载记录 + 重新落盘 + 启动)。
 func (s *PluginService) PluginRestoreBundled(pluginID string) string {
 	if !s.isBundled(pluginID) {
-		return `{"error":"非捆绑插件: ` + pluginID + `"}`
+		return `{"error":` + mustJSONString("非捆绑插件: "+pluginID) + `}`
 	}
 	if !s.cfg.BundledUninstalled(pluginID) {
-		return `{"error":"插件未被卸载: ` + pluginID + `"}`
+		return `{"error":` + mustJSONString("插件未被卸载: "+pluginID) + `}`
 	}
 	s.cfg.SetBundledUninstalled(pluginID, false)
 	var mf pluginManifest
@@ -166,13 +190,15 @@ func (s *PluginService) PluginRestoreBundled(pluginID string) string {
 		return mustJSON(map[string]any{"ok": true, "launched": false})
 	}
 	cand := pluginCandidate{
-		id:      mf.ID,
-		dir:     filepath.Join(PluginsDir(), mf.ID),
-		exePath: filepath.Join(PluginsDir(), mf.ID, mf.ID+exeSuffix()),
+		id:       mf.ID,
+		dir:      filepath.Join(PluginsDir(), mf.ID),
+		exePath:  filepath.Join(PluginsDir(), mf.ID, mf.ID+exeSuffix()),
 		manifest: mf,
 	}
 	go func() {
-		_ = s.launch(cand)
+		if err := s.launch(cand); err != nil {
+			CollectError("plugin:"+pluginID, "restore-launch", err)
+		}
 		s.emitRegistry()
 	}()
 	return mustJSON(map[string]any{"ok": true, "launched": true})

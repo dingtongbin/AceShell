@@ -5,6 +5,7 @@ import { DocumentTextOutline } from '@vicons/ionicons5'
 import { Window } from '@wailsio/runtime'
 import LeftToolBar from './LeftToolBar.vue'
 import PluginPanel from './PluginPanel.vue'
+import PluginManagerPanel from './PluginManagerPanel.vue'
 import TopMenuBar from './TopMenuBar.vue'
 import type { ActiveTabState } from './tabTypes'
 import ResourceManager from './ResourceManager.vue'
@@ -18,6 +19,7 @@ import { GetConfig, SetShowSession, SetShowSerial, SetCustomTitlebar, SetPanelLa
 import { ListPorts } from '../../bindings/changeme/internal/services/serialservice.js'
 import { ListShells } from '../../bindings/changeme/internal/services/localservice.js'
 import { OpenUrl as BrowserOpenUrl } from '../../bindings/changeme/internal/services/browserservice.js'
+import { PluginCall } from '../../bindings/changeme/internal/services/pluginservice.js'
 import { useI18n } from 'vue-i18n'
 import { ListKeys, DeleteKey } from '../../bindings/changeme/internal/services/globalkeyservice.js'
 import { ScanBrowsers } from '../../bindings/changeme/internal/services/browserservice.js'
@@ -26,7 +28,6 @@ import KeyCreateDialog from './KeyCreateDialog.vue'
 import SshCopyDialog from './SshCopyDialog.vue'
 import FileEditor from './FileEditor.vue'
 import type { FileEditorApi } from './FileEditor.vue'
-import McpSettingsPanel from './McpSettingsPanel.vue'
 import { useMcpBridge } from '../composables/useMcpBridge'
 import { usePlugins } from '../composables/usePluginBridge'
 
@@ -38,11 +39,11 @@ const {
   initPluginBridge, bindPluginTabManager, bindPluginToast,
   pluginToolbarViews: computeToolbarViews,
 } = usePlugins()
-// MCP 忙碌源:工具调用进行中(含槽外回读/只读工具)或等待用户审批
+// MCP 忙碌源:工具调用进行中(含槽外回读/只读工具)
 const mcpBusySource = computed(() => {
   const s = mcpStatus.value
   if (!s.enabled || s.state !== 'running') return false
-  return !!s.busy || s.pendingApprovals > 0
+  return !!s.busy
 })
 // 熄灭防抖 900ms:短调用也至少完整可见一个闪烁周期;期间新忙碌立即恢复
 const mcpBusy = ref(false)
@@ -63,12 +64,10 @@ const emit = defineEmits<{
   (e: 'open-settings'): void
 }>()
 
-// 左侧面板两态:资源管理器 / 关闭(MCP 设置已弹窗化,不再占用侧栏)
-const leftPanel = ref<'resource' | 'plugin' | 'none'>('resource')
+// 左侧面板三态: 资源管理器 / 插件管理器 / 插件视图 / 关闭
+const leftPanel = ref<'resource' | 'plugins' | 'plugin' | 'none'>('resource')
 // 当前激活的插件侧栏视图(左侧面板为 'plugin' 时显示其面板)
 const activePluginView = ref<{ pluginID: string; viewID: string } | null>(null)
-// MCP 设置弹窗
-const showMcpSettings = ref(false)
 // 兼容原 showSessionManager 语义:资源面板是否开启(配置持久化)
 const showSessionManager = computed(() => leftPanel.value === 'resource')
 // 自绘标题栏开关(Frameless):决定 TopMenuBar 是否渲染窗口控制与拖拽区
@@ -295,6 +294,16 @@ function toggleSessionManager() {
   SetShowSession(leftPanel.value === 'resource').catch(() => message.error(t('shellPanel.saveConfigFailed')))
 }
 
+// 插件管理面板(VSCode 扩展视图风格): 与资源管理器共用侧栏容器与宽度
+function togglePluginManager() {
+  leftPanel.value = leftPanel.value === 'plugins' ? 'none' : 'plugins'
+}
+
+// 插件详情: 每个插件至多一个详情标签页, 已存在则激活定位
+function openPluginDetail(pluginID: string) {
+  tabManagerRef.value?.openPluginDetailTab(pluginID)
+}
+
 // ==================== 插件侧栏视图 ====================
 
 // 已启用插件的工具栏视图项(ref 源自插件桥单例)
@@ -305,6 +314,9 @@ const activePluginViewKey = computed(() =>
   leftPanel.value === 'plugin' && activePluginView.value
     ? `${activePluginView.value.pluginID}:${activePluginView.value.viewID}`
     : null)
+
+// 当前激活标签页的协议(视图点击钩子型插件: 图标高亮跟随工具标签页激活态)
+const activeTabProtocol = computed(() => activeTabState.value.protocol)
 
 // 激活的插件视图失效(插件崩溃/禁用/视图注销)时回落关闭面板;
 // 同时关闭已停用/卸载插件打开的全部标签页(主界面不再保留其内容)。
@@ -327,8 +339,16 @@ watch(pluginViews, (views, old) => {
   }
 })
 
-/** togglePluginView 点击工具栏插件图标: 同图标再点关闭, 否则切换到该插件面板。 */
+/** togglePluginView 点击工具栏插件图标。
+ * 声明了 viewClickRpc 的插件(如 ping): 点图标 = 调该 RPC 打开/定位其工具标签页, 不展开侧栏;
+ * 其余插件: 同图标再点关闭, 否则切换到该插件面板。 */
 function togglePluginView(view: { pluginID: string; viewID: string }) {
+  const summary = plugins.value.find(p => p.id === view.pluginID)
+  if (summary?.viewClickRpc) {
+    PluginCall(view.pluginID, summary.viewClickRpc, '{}').catch(e =>
+      message.error(String(e?.message || e)))
+    return
+  }
   if (leftPanel.value === 'plugin' && activePluginView.value?.pluginID === view.pluginID && activePluginView.value?.viewID === view.viewID) {
     leftPanel.value = 'none'
     activePluginView.value = null
@@ -350,7 +370,7 @@ function toggleSerial() {
 
 // ==================== Resize ====================
 
-// 资源管理器面板(右侧边框拖宽)
+// 侧栏边框拖宽(资源管理器/插件面板共用同一宽度)
 let resizeOffset = 0
 function startResize(e: PointerEvent) {
   isResizing.value = true
@@ -361,17 +381,19 @@ function onResize(e: PointerEvent) {
   if (!isResizing.value) return
   const w = e.clientX - resizeOffset
   if (w < 60) {
+    // 拖到阈值以下: 收起侧栏(资源/插件两种面板一致, 可从工具栏重新打开)
     leftPanel.value = 'none'
     sessionWidth.value = 0
-  } else {
-    leftPanel.value = 'resource'
-    sessionWidth.value = Math.max(0, Math.min(w, 600))
+    return
   }
+  // 只调宽度, 不动面板归属 —— 插件面板拖宽时不许被顶回资源管理器
+  sessionWidth.value = Math.max(60, Math.min(w, 600))
 }
 function stopResize() {
   if (isResizing.value) {
     isResizing.value = false
-    sessionWidth.value = showSessionManager.value ? Math.max(60, sessionWidth.value) : 220
+    // 保留拖出的宽度; 仅收起态回落默认值(下次打开不至于 0 宽)
+    sessionWidth.value = leftPanel.value === 'none' ? 220 : Math.max(60, Math.min(sessionWidth.value, 600))
     pushPanelLayout()
   }
 }
@@ -930,6 +952,7 @@ onMounted(() => {
     openPluginTab: async payload => { await tabManagerRef.value?.openPluginTab(payload) },
     closePluginTab: (pluginID, tabKey) => tabManagerRef.value?.closePluginTab(pluginID, tabKey),
     setPluginTabTitle: (pluginID, tabKey, title) => tabManagerRef.value?.setPluginTabTitle(pluginID, tabKey, title),
+    reloadPluginTabs: async pluginID => { await tabManagerRef.value?.reloadPluginTabs(pluginID) },
   })
   bindPluginToast((msg, level) => {
     if (level === 'error') message.error(msg)
@@ -970,12 +993,13 @@ onBeforeUnmount(() => {
     <div class="shell-body" @pointermove="onResize" @pointerup="stopResize" @pointerleave="stopResize">
       <LeftToolBar
         :show-session="leftPanel === 'resource'"
-        :show-help="showHelp"
+        :show-plugins="leftPanel === 'plugins'"
         :plugin-views="pluginViews"
         :active-plugin-view="activePluginViewKey"
+        :active-tab-protocol="activeTabProtocol"
         @toggle-session="toggleSessionManager"
+        @toggle-plugins="togglePluginManager"
         @toggle-plugin-view="togglePluginView"
-        @open-help="showAbout = true"
         @open-settings="emit('open-settings')"
       />
       <div class="right-area">
@@ -1008,6 +1032,11 @@ onBeforeUnmount(() => {
             @close="leftPanel = 'none'; activePluginView = null"
           />
         </template>
+        <!-- 插件管理面板(VSCode 扩展视图风格; 常驻保活) -->
+        <PluginManagerPanel
+          v-show="leftPanel === 'plugins'"
+          @open-detail="openPluginDetail"
+        />
       </div>
       <div v-if="leftPanel !== 'none'" class="resize-handle" :class="{ 'handle-overlay': isNarrow }" :style="{ left: sessionWidth + 'px' }" @pointerdown="startResize" />
       <div class="tab-area" :class="{ 'mcp-busy': mcpBusy }">
@@ -1225,9 +1254,6 @@ onBeforeUnmount(() => {
         <n-button type="primary" @click="confirmEditorCloseSave">{{ t('shellPanel.saveAndClose') }}</n-button>
       </template>
     </n-modal>
-
-    <!-- MCP 设置弹窗(入口: AI 聊天面板标题栏) -->
-    <McpSettingsPanel v-model:show="showMcpSettings" />
 
     <!-- MCP 绝对危险指令拦截弹窗:命令已被拒绝执行,MCP 已自动挂起 -->
     <n-modal :show="!!criticalBlock" :title="t('mcp.criticalTitle')" preset="dialog" :show-icon="false" style="width: 480px" :mask-closable="false">

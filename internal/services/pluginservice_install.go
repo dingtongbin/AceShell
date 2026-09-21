@@ -3,6 +3,8 @@ package services
 import (
 	"archive/zip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -47,6 +49,7 @@ func (s *PluginService) PluginInstallFromGitHub(input string) string {
 	id, version, err := s.installFromGitHub(owner, repo, tag)
 	if err != nil {
 		s.logLine("GitHub 安装失败: " + err.Error())
+		CollectError("plugin-install", "github:"+owner+"/"+repo, err)
 		return `{"error":` + mustJSONString(err.Error()) + `}`
 	}
 	s.emitRegistry()
@@ -81,6 +84,28 @@ func (s *PluginService) installFromGitHub(owner, repo, tag string) (string, stri
 	}
 	tmpZip.Close()
 
+	// SHA256 强校验: release 附带 checksums 文件时按其核对下载内容,
+	// 防止下载被劫持/截断; 找不到对应条目视为校验失败(拒绝安装)。
+	if csAsset := pickChecksumAsset(rel.Assets); csAsset != nil {
+		checksums, err := fetchChecksums(ctx, csAsset.BrowserDownloadURL)
+		if err != nil {
+			return "", "", fmt.Errorf("获取校验文件失败: %w", err)
+		}
+		want := matchChecksum(checksums, asset.Name)
+		if want == "" {
+			return "", "", fmt.Errorf("checksums 中没有 %s 的哈希, 拒绝安装", asset.Name)
+		}
+		got, err := fileSHA256(tmpZipPath)
+		if err != nil {
+			return "", "", fmt.Errorf("计算 SHA256 失败: %w", err)
+		}
+		if !strings.EqualFold(got, want) {
+			return "", "", fmt.Errorf("SHA256 校验失败: 期望 %s, 实际 %s", want, got)
+		}
+	} else {
+		s.logLine("GitHub 安装: release 未提供 checksums 文件, 跳过哈希校验 (" + asset.Name + ")")
+	}
+
 	// 解压到 PluginsDir 同卷临时目录(保证 Rename 原子性)
 	_ = os.MkdirAll(PluginsDir(), 0700)
 	tmpDir, err := os.MkdirTemp(PluginsDir(), ".install-")
@@ -108,7 +133,7 @@ func (s *PluginService) installFromGitHub(owner, repo, tag string) (string, stri
 		return "", "", fmt.Errorf("插件 %s 需要宿主 >= %s, 当前 %s", mf.ID, mf.MinHost, AppVersion)
 	}
 
-	// 停旧实例解 exe 文件锁 → 换目录 → 按配置启动
+	// 停旧实例解 exe 文件锁 → 原子换目录 → 按配置启动
 	s.mu.Lock()
 	old := s.instances[mf.ID]
 	s.mu.Unlock()
@@ -116,11 +141,10 @@ func (s *PluginService) installFromGitHub(owner, repo, tag string) (string, stri
 		s.stopInstance(old)
 	}
 	finalDir := filepath.Join(PluginsDir(), mf.ID)
-	if err := os.RemoveAll(finalDir); err != nil {
-		return "", "", fmt.Errorf("清理旧版本失败: %w", err)
-	}
-	if err := os.Rename(root, finalDir); err != nil {
-		return "", "", fmt.Errorf("安装落盘失败: %w", err)
+	// 原子替换(旧版本先留档, 失败可回滚; 内部等待 exe 文件锁释放)。
+	// 原先是 RemoveAll → Rename, Rename 失败会让插件彻底消失且无法回滚。
+	if err := swapPluginDir(mf.ID, root); err != nil {
+		return "", "", err
 	}
 	// root 可能是包裹目录内的子路径, 落盘后统一以 finalDir 重扫
 	cand := pluginCandidate{id: mf.ID, dir: finalDir,
@@ -130,7 +154,7 @@ func (s *PluginService) installFromGitHub(owner, repo, tag string) (string, stri
 		s.instances[mf.ID] = &pluginInstance{
 			id: cand.id, dir: cand.dir, exePath: cand.exePath,
 			manifest: cand.manifest, status: pluginStatusDisabled,
-			done: make(chan struct{}),
+			done: make(chan struct{}), startedAt: time.Now(),
 		}
 		s.mu.Unlock()
 		return mf.ID, firstNonEmpty(mf.Version, rel.TagName), nil
@@ -138,7 +162,87 @@ func (s *PluginService) installFromGitHub(owner, repo, tag string) (string, stri
 	if err := s.launch(cand); err != nil {
 		return "", "", fmt.Errorf("安装成功但启动失败: %w", err)
 	}
+	s.emitInvalidated(mf.ID, "update")
 	return mf.ID, firstNonEmpty(mf.Version, rel.TagName), nil
+}
+
+// PluginInstallZip 从本地 zip 包安装(或更新)插件。
+// 包结构与 GitHub 资产一致: plugin.json + <id> 可执行文件 (+ dist/ docs/)。
+// zipPath 为空串视为用户取消。返回 JSON: {ok,id,version} 或 {error}。
+func (s *PluginService) PluginInstallZip(zipPath string) string {
+	zipPath = strings.TrimSpace(zipPath)
+	if zipPath == "" {
+		return `{"error":"未选择插件包"}`
+	}
+	if st, err := os.Stat(zipPath); err != nil || st.IsDir() {
+		return `{"error":"文件不存在: ` + mustJSONString(zipPath) + `"}`
+	}
+	if !strings.HasSuffix(strings.ToLower(zipPath), ".zip") {
+		return `{"error":"仅支持 .zip 插件包"}`
+	}
+	id, version, err := s.installFromZip(zipPath)
+	if err != nil {
+		s.logLine("本地安装失败: " + err.Error())
+		return `{"error":` + mustJSONString(err.Error()) + `}`
+	}
+	s.emitRegistry()
+	return mustJSON(map[string]any{"ok": true, "id": id, "version": version})
+}
+
+// installFromZip 本地包安装主体: 复用 GitHub 安装的 解压→定位→校验→原子换目录→启动 管线。
+func (s *PluginService) installFromZip(zipPath string) (string, string, error) {
+	// 解压到 PluginsDir 同卷临时目录(保证 Rename 原子性)
+	_ = os.MkdirAll(PluginsDir(), 0700)
+	tmpDir, err := os.MkdirTemp(PluginsDir(), ".install-")
+	if err != nil {
+		return "", "", err
+	}
+	defer os.RemoveAll(tmpDir)
+	if err := unzipTo(zipPath, tmpDir); err != nil {
+		return "", "", fmt.Errorf("解压失败: %w", err)
+	}
+	root, mf, err := locateExtractedPlugin(tmpDir)
+	if err != nil {
+		return "", "", err
+	}
+	exeName := mf.ID
+	if runtime.GOOS == "windows" {
+		exeName += ".exe"
+	}
+	if st, err := os.Stat(filepath.Join(root, exeName)); err != nil || st.IsDir() {
+		return "", "", fmt.Errorf("包内缺少可执行文件 %s", exeName)
+	}
+	if mf.MinHost != "" && compareVersion(AppVersion, mf.MinHost) < 0 {
+		return "", "", fmt.Errorf("插件 %s 需要宿主 >= %s, 当前 %s", mf.ID, mf.MinHost, AppVersion)
+	}
+
+	s.mu.Lock()
+	old := s.instances[mf.ID]
+	s.mu.Unlock()
+	if old != nil {
+		s.stopInstance(old)
+	}
+	finalDir := filepath.Join(PluginsDir(), mf.ID)
+	if err := swapPluginDir(mf.ID, root); err != nil {
+		return "", "", err
+	}
+	cand := pluginCandidate{id: mf.ID, dir: finalDir,
+		exePath: filepath.Join(finalDir, exeName), manifest: *mf}
+	if !s.cfg.PluginEnabled(mf.ID) {
+		s.mu.Lock()
+		s.instances[mf.ID] = &pluginInstance{
+			id: cand.id, dir: cand.dir, exePath: cand.exePath,
+			manifest: cand.manifest, status: pluginStatusDisabled,
+			done: make(chan struct{}), startedAt: time.Now(),
+		}
+		s.mu.Unlock()
+		return mf.ID, mf.Version, nil
+	}
+	if err := s.launch(cand); err != nil {
+		return "", "", fmt.Errorf("安装成功但启动失败: %w", err)
+	}
+	s.emitInvalidated(mf.ID, "update")
+	return mf.ID, mf.Version, nil
 }
 
 // parseGitHubTarget 解析安装输入。
@@ -261,6 +365,72 @@ func downloadFile(ctx context.Context, f *os.File, rawURL string) error {
 	return err
 }
 
+// ==================== SHA256 校验 ====================
+// release 提供 checksums 文件时强制校验下载的 zip; 未提供时降级记日志放行。
+// 校验文件格式为 sha256sum 输出: "<64位hex>  <文件名>" 每行一条。
+
+// pickChecksumAsset 挑选 release 资产中的校验文件。匹配名称含 "checksum"
+// 或 "sha256sum" 的资产(大小写不敏感, 覆盖 checksums.txt / SHA256SUMS 等常见命名)。
+func pickChecksumAsset(assets []ghAsset) *ghAsset {
+	for i := range assets {
+		n := strings.ToLower(assets[i].Name)
+		if strings.Contains(n, "checksum") || strings.Contains(n, "sha256sum") {
+			return &assets[i]
+		}
+	}
+	return nil
+}
+
+// fetchChecksums 下载并解析校验文件为 {文件名: hex哈希}。
+func fetchChecksums(ctx context.Context, rawURL string) (map[string]string, error) {
+	cctx, cancel := context.WithTimeout(ctx, ghAPITimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(cctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "AceShell/"+AppVersion)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("下载校验文件返回 %d", resp.StatusCode)
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]string{}
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(strings.TrimSpace(line))
+		if len(fields) >= 2 && len(fields[0]) == 64 {
+			out[filepath.Base(fields[1])] = fields[0]
+		}
+	}
+	return out, nil
+}
+
+// matchChecksum 查文件名对应的哈希(fetchChecksums 已按 base 名归一)。
+func matchChecksum(checksums map[string]string, name string) string {
+	return checksums[filepath.Base(name)]
+}
+
+// fileSHA256 计算文件 SHA256 的十六进制摘要。
+func fileSHA256(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
 // unzipTo 解压 zip 到目标目录(防路径穿越)。
 func unzipTo(zipPath, destDir string) error {
 	r, err := zip.OpenReader(zipPath)
@@ -341,9 +511,11 @@ func readManifest(path string) (*pluginManifest, error) {
 }
 
 // compareVersion 语义化版本比较(仅数字段): a<b → -1, a>b → 1, 相等 → 0。
+// 预发布号(如 1.2.3-beta)在截断后按 1.2.3 参与 —— 数字段比较无法理解
+// "beta < 正式版", 带着尾巴比只会产生随机结果。
 func compareVersion(a, b string) int {
-	as := strings.Split(strings.TrimPrefix(a, "v"), ".")
-	bs := strings.Split(strings.TrimPrefix(b, "v"), ".")
+	as := strings.Split(trimVersionSuffix(a), ".")
+	bs := strings.Split(trimVersionSuffix(b), ".")
 	for i := 0; i < len(as) || i < len(bs); i++ {
 		var ai, bi int
 		if i < len(as) {
@@ -360,4 +532,13 @@ func compareVersion(a, b string) int {
 		}
 	}
 	return 0
+}
+
+// trimVersionSuffix 去掉 v 前缀并截断预发布号: "v1.2.3-beta.2" → "1.2.3"。
+func trimVersionSuffix(v string) string {
+	v = strings.TrimPrefix(strings.TrimSpace(v), "v")
+	if i := strings.Index(v, "-"); i >= 0 {
+		v = v[:i]
+	}
+	return v
 }

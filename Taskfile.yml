@@ -15,6 +15,11 @@ includes:
   android: ./build/android/Taskfile.yml
 
 tasks:
+  proto:gen:
+    summary: 重新生成插件协议 pb.go (仅 proto/aceshell.proto 变更时; 需 buf + protoc-gen-go[-grpc])
+    cmds:
+      - buf generate proto
+
   build:
     summary: Builds the application (先构建捆绑插件载荷再编译主程序)
     deps:

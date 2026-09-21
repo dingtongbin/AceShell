@@ -3,7 +3,7 @@ import { NIcon, NTooltip } from 'naive-ui'
 import {
   FolderOutline,
   FolderOpenOutline,
-  HelpCircleOutline,
+  ExtensionPuzzleOutline,
   SettingsOutline,
 } from '@vicons/ionicons5'
 import { useI18n } from 'vue-i18n'
@@ -13,16 +13,19 @@ const { t } = useI18n()
 
 defineProps<{
   showSession: boolean
-  showHelp: boolean
+  /** 插件管理面板是否打开 */
+  showPlugins: boolean
   /** 已启用插件注册的侧栏视图(运行中插件) */
   pluginViews: PluginToolbarView[]
   /** 当前激活的插件视图标识 pluginID:viewID(null=未激活) */
   activePluginView: string | null
+  /** 当前激活标签页的协议(声明了 viewClickRpc 的插件: 图标高亮跟随工具标签页) */
+  activeTabProtocol: string | null
 }>()
 
 const emit = defineEmits<{
   (e: 'toggle-session'): void
-  (e: 'open-help'): void
+  (e: 'toggle-plugins'): void
   (e: 'open-settings'): void
   (e: 'toggle-plugin-view', view: PluginToolbarView): void
 }>()
@@ -39,10 +42,21 @@ const emit = defineEmits<{
         </template>
         {{ t('common.explorer') }}
       </n-tooltip>
-      <!-- 插件注册的侧栏视图图标(像 VSCode 活动栏) -->
+      <!-- 插件管理器(VSCode 扩展视图风格) -->
+      <n-tooltip placement="right" trigger="hover" :delay="300">
+        <template #trigger>
+          <div class="ltb-item" :class="{ active: showPlugins }" @click="emit('toggle-plugins')">
+            <n-icon :size="24" :component="ExtensionPuzzleOutline" />
+          </div>
+        </template>
+        {{ t('plugins.managerTitle') }}
+      </n-tooltip>
+      <!-- 插件注册的侧栏视图图标(像 VSCode 活动栏);
+           声明了 viewClickRpc 的插件点击打开/定位工具标签页, 图标高亮跟随标签页激活态 -->
       <n-tooltip v-for="view in pluginViews" :key="view.pluginID + ':' + view.viewID" placement="right" trigger="hover" :delay="300">
         <template #trigger>
-          <div class="ltb-item" :class="{ active: activePluginView === view.pluginID + ':' + view.viewID }"
+          <div class="ltb-item"
+            :class="{ active: activePluginView === view.pluginID + ':' + view.viewID || activeTabProtocol === view.pluginID }"
             @click="emit('toggle-plugin-view', view)">
             <img class="ltb-plugin-icon" :src="view.icon" alt="" />
           </div>
@@ -51,14 +65,6 @@ const emit = defineEmits<{
       </n-tooltip>
     </div>
     <div class="ltb-bottom">
-      <n-tooltip v-if="showHelp" placement="right" trigger="hover" :delay="300">
-        <template #trigger>
-          <div class="ltb-item" @click="emit('open-help')">
-            <n-icon :size="24" :component="HelpCircleOutline" />
-          </div>
-        </template>
-        {{ t('common.help') }}
-      </n-tooltip>
       <n-tooltip placement="right" trigger="hover" :delay="300">
         <template #trigger>
           <div class="ltb-item" @click="emit('open-settings')">

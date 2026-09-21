@@ -17,9 +17,9 @@ import (
 
 func TestParseGitHubTarget(t *testing.T) {
 	cases := []struct {
-		in                       string
-		owner, repo, tag         string
-		wantErr                  bool
+		in               string
+		owner, repo, tag string
+		wantErr          bool
 	}{
 		{"dingtongbin/aceshell-plugin-hello", "dingtongbin", "aceshell-plugin-hello", "", false},
 		{"dingtongbin/hello@v1.2.3", "dingtongbin", "hello", "v1.2.3", false},
@@ -87,6 +87,11 @@ func TestCompareVersion(t *testing.T) {
 		{"0.2.3", "0.2.4", -1},
 		{"v1.0.0", "0.9.9", 1},
 		{"0.2", "0.2.0", 0},
+		// 预发布号截断后按数字段比较
+		{"1.2.3-beta", "1.2.3", 0},
+		{"1.2.3-beta.2", "1.2.4", -1},
+		{"v2.0.0-rc1", "1.9.9", 1},
+		{"1.2.3-beta", "1.2.3-beta.7", 0},
 	}
 	for _, c := range cases {
 		if got := compareVersion(c.a, c.b); got != c.want {
@@ -177,6 +182,54 @@ func TestPluginAssetHandler(t *testing.T) {
 	}
 }
 
+func TestPickChecksumAsset(t *testing.T) {
+	assets := []ghAsset{{Name: "checksums.txt"}, {Name: "hello.zip"}}
+	if got := pickChecksumAsset(assets); got == nil || got.Name != "checksums.txt" {
+		t.Fatalf("应命中 checksums.txt: %+v", got)
+	}
+	assets2 := []ghAsset{{Name: "SHA256SUMS"}, {Name: "hello.zip"}}
+	if got := pickChecksumAsset(assets2); got == nil || got.Name != "SHA256SUMS" {
+		t.Fatalf("大小写不敏感应命中: %+v", got)
+	}
+	if got := pickChecksumAsset([]ghAsset{{Name: "hello.zip"}}); got != nil {
+		t.Fatalf("无校验文件应返回 nil: %+v", got)
+	}
+}
+
+func TestFetchChecksumsAndMatch(t *testing.T) {
+	body := "abc  hello.zip\n" + // 哈希长度不足, 忽略
+		"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  aceshell-hello-windows-amd64.zip\n" +
+		"# comment\nshort  x.zip\n"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(body))
+	}))
+	defer srv.Close()
+	checksums, err := fetchChecksums(context.Background(), srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+	if got := matchChecksum(checksums, "aceshell-hello-windows-amd64.zip"); got != want {
+		t.Fatalf("matchChecksum = %q, 期望 %q", got, want)
+	}
+	if got := matchChecksum(checksums, "missing.zip"); got != "" {
+		t.Fatalf("缺失文件应返回空串: %q", got)
+	}
+}
+
+func TestFileSHA256(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "hello.txt")
+	if err := os.WriteFile(p, []byte("hello"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := fileSHA256(p)
+	// sha256("hello") 的已知摘要
+	want := "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+	if err != nil || got != want {
+		t.Fatalf("fileSHA256 = %q, %v, 期望 %q", got, err, want)
+	}
+}
+
 func TestPluginTabIDDeterministic(t *testing.T) {
 	if got := pluginTabID("hello", "demo"); got != "plugin://hello/demo" {
 		t.Fatalf("pluginTabID = %q", got)
@@ -242,6 +295,54 @@ func TestPluginManifestAndInfoRoundTrip(t *testing.T) {
 	svc.mu.Unlock()
 	if len(snap) != 1 || snap[0].DisplayName != "Hello 插件" || len(snap[0].Views) != 1 || snap[0].Views[0].ComponentID != "panel" {
 		t.Fatalf("注册表快照异常: %+v", snap)
+	}
+}
+
+// TestSnapshotLockedWithNilInfo 回归: disabled/error 状态的实例从未经过 Info
+// 握手, info 为 nil。曾因 snapshotLocked 无条件解引用 inst.info.Capabilities
+// 在注册表 emit 时 panic(应用启动即崩)。此测试保证这三类实例都能过快照。
+func TestSnapshotLockedWithNilInfo(t *testing.T) {
+	mf := pluginManifest{ID: "x", Name: "X", Version: "0.1.0"}
+	svc := NewPluginService(&ConfigService{}, &SessionFileService{}, "")
+	svc.instances = map[string]*pluginInstance{
+		"disabled": {id: "disabled", manifest: mf, status: pluginStatusDisabled},
+		"error":    {id: "error", manifest: mf, status: pluginStatusError, errMsg: "握手失败"},
+		"running":  {id: "running", manifest: mf, status: pluginStatusRunning},
+	}
+	svc.mu.Lock()
+	snap := svc.snapshotLocked()
+	svc.mu.Unlock()
+	if len(snap) != 3 {
+		t.Fatalf("应输出 3 个实例, 得到 %d", len(snap))
+	}
+	byID := map[string]pluginSummary{}
+	for _, s := range snap {
+		byID[s.ID] = s
+	}
+	for id, wantStatus := range map[string]string{
+		"disabled": pluginStatusDisabled,
+		"error":    pluginStatusError,
+		"running":  pluginStatusRunning,
+	} {
+		s, ok := byID[id]
+		if !ok {
+			t.Fatalf("缺少实例 %s", id)
+		}
+		if s.Status != wantStatus {
+			t.Errorf("%s status = %q, 期望 %q", id, s.Status, wantStatus)
+		}
+		if len(s.Capabilities) != 0 {
+			t.Errorf("%s info 为 nil 时 Capabilities 应为空, 得到 %v", id, s.Capabilities)
+		}
+		if len(s.Views) != 0 {
+			t.Errorf("%s info 为 nil 时 Views 应为空, 得到 %v", id, s.Views)
+		}
+		if s.DisplayName != "X" {
+			t.Errorf("%s 应回落 manifest.Name, 得到 %q", id, s.DisplayName)
+		}
+	}
+	if byID["error"].Error != "握手失败" {
+		t.Errorf("error 实例的错误信息应保留, 得到 %q", byID["error"].Error)
 	}
 }
 

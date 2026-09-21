@@ -5,7 +5,7 @@ import { ref, watch, onErrorCaptured, computed, type Component } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { NIcon } from 'naive-ui'
 import { CloseOutline } from '@vicons/ionicons5'
-import { loadPluginComponent, getPluginCtx, getPluginLoadError, type PluginToolbarView } from '../composables/usePluginBridge'
+import { loadPluginComponent, getPluginCtx, getPluginLoadError, pluginEpoch, isPluginAlive, type PluginToolbarView } from '../composables/usePluginBridge'
 
 const props = defineProps<{
   view: PluginToolbarView
@@ -28,18 +28,36 @@ const crashMsg = ref('')
 // 插件组件在面板隐藏时保持挂载(保活), active 仅用于可见性
 const renderKey = computed(() => `${props.view.pluginID}:${props.view.viewID}`)
 
-let loaded = false
+// 已加载到的代次(替代布尔守卫): 插件重载/更新后代次递增, 面板自动换新模块
+const loadedEpoch = ref(-1)
 async function ensureLoaded() {
-  if (loaded) return
-  loaded = true
+  const ep = pluginEpoch(props.view.pluginID)
+  if (loadedEpoch.value === ep && comp.value) return
+  loadedEpoch.value = ep
   comp.value = await loadPluginComponent(props.view.pluginID, props.view.componentId)
   loadFailed.value = comp.value === null
   failDetail.value = getPluginLoadError(props.view.pluginID, props.view.componentId)
 }
 
-watch(() => props.active, v => {
+watch(() => props.active, () => {
   void ensureLoaded()
 }, { immediate: true })
+
+// 插件失效(重载/更新): 复位崩溃态并按新代次重新加载。
+// 卸载/禁用不重新加载 —— 文件已不在, 加载只会得到 404 失败闪屏;
+// 面板本身随即被注册表驱动的卸载流程拆掉, 这里只把内容清空。
+watch(() => pluginEpoch(props.view.pluginID), () => {
+  crashed.value = false
+  crashMsg.value = ''
+  loadFailed.value = false
+  failDetail.value = ''
+  if (!isPluginAlive(props.view.pluginID)) {
+    loadedEpoch.value = -1
+    comp.value = null
+    return
+  }
+  void ensureLoaded()
+})
 
 // 显隐上报(仅向运行中插件; 首次激活上报 visible)
 watch(() => props.active, async v => {

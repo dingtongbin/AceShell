@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -42,23 +43,19 @@ const (
 	mcpStateRunning = "running"
 	mcpStatePaused  = "paused"
 
-	mcpDefaultPort     = 8940
-	mcpPortRetryMax    = 10
-	mcpCmdTimeout      = 60 * time.Second
-	mcpOpenTimeout     = 90 * time.Second // open_session 含交互式认证等待
-	mcpApprovalTimeout = 60 * time.Second
-	mcpOutBufCap       = 64 * 1024 // 每标签页输出环形缓冲上限(有界)
-	mcpReadMax         = 32 * 1024 // terminal_read 单次返回上限
-	mcpBatchMax        = 50        // batch_execute 单批命令上限(有界)
+	mcpDefaultPort  = 8940
+	mcpPortRetryMax = 10
+	mcpCmdTimeout   = 60 * time.Second
+	mcpOpenTimeout  = 90 * time.Second // open_session 含交互式认证等待
+	mcpOutBufCap    = 64 * 1024        // 每标签页输出环形缓冲上限(有界)
+	mcpReadMax      = 32 * 1024        // terminal_read 单次返回上限
+	mcpBatchMax     = 50               // batch_execute 单批命令上限(有界)
 
 	// 仲裁执行车道: 外部智能体的标签页操作单车道串行。
 	// 用户(P0)不走队列,键盘抢占直接挂起 MCP。
 	mcpPrioExternal = 1 // 外部智能体(HTTP MCP 客户端)
 
 	mcpArbQCap = 48 // 仲裁队列容量(有界)
-
-	McpModeManual = "manual" // 默认: confirm 级操作需用户手动授权
-	McpModeAuto   = "auto"   // 自动审批: confirm 级操作由 AI 判定放行
 )
 
 // MainMcpService 全局 MCP 服务实例(readLoop 输出 tap 使用,nil 时零开销)。
@@ -70,10 +67,18 @@ type mcpArbItem struct {
 	done chan error
 }
 
-// mcpApprovalDecision 审批决策(含永久授权标记)。
-type mcpApprovalDecision struct {
-	Approved  bool
-	Permanent bool // 批准且永久授权(命令+路径写授权库)
+// mcpPollCmd 待前端领取的命令(轮询通道,与 mcp-command 事件双轨)。
+type mcpPollCmd struct {
+	RequestID string         `json:"requestId"`
+	Type      string         `json:"type"`
+	Payload   map[string]any `json:"payload"`
+}
+
+// mcpCriticalEntry 绝对危险拦截告警(轮询通道增量下发,前端按 ID 去重弹窗)。
+type mcpCriticalEntry struct {
+	ID      int64  `json:"id"`
+	Command string `json:"command"`
+	Reason  string `json:"reason"`
 }
 
 // execOpts 工具执行选项(内外智能体共享同一实现,行为差异由此控制)。
@@ -83,27 +88,33 @@ type execOpts struct {
 }
 
 // McpService MCP 集成服务。
+//
+// 安全模型(2026-09 简化): 移除人工审批与永久授权机制。
+// 分级引擎保留三级语义 —— blocked 级照旧拦截+自动挂起;confirm 级不再弹窗,
+// 经"可控操作延迟"(opDelayMs,前端执行前等待)放行,用户可在延迟窗口内
+// 通过挂起/停止 MCP 干预;auto 级照旧直行。页面交互式执行(mcp-command
+// → 前端经用户同款 UI 路径)不变。
 type McpService struct {
 	app         *application.App
 	sessionFile *SessionFileService
 	cfg         *ConfigService
 
-	mu         sync.Mutex
-	audit      *McpAuditService
-	grants     *mcpGrantStore
-	server     *http.Server
-	listener   net.Listener
-	token      string
-	state      string
-	busy       bool                          // 工具调用进行中(槽占用或任一工具活动,驱动前端"执行中"遮罩)
-	slotBusy   bool                          // 仲裁执行槽占用中
-	activeCnt  int                           // 槽外进行中的工具调用数(含审批等待/输出回读/只读工具)
-	pendingCmd map[string]chan mcpCmdResult  // requestId → 结果通道
-	approvals  map[string]*mcpApproval       // approvalId → 审批请求
-	outBuf     map[string][]byte             // tabId → 原始输出缓冲
-	outCursor  map[string]int                // tabId → terminal_read 游标
-	reqSeq     int64
-	apprSeq    int64
+	mu          sync.Mutex
+	audit       *McpAuditService
+	server      *http.Server
+	listener    net.Listener
+	token       string
+	state       string
+	busy        bool                         // 工具调用进行中(槽占用或任一工具活动,驱动前端"执行中"遮罩)
+	slotBusy    bool                         // 仲裁执行槽占用中
+	activeCnt   int                          // 槽外进行中的工具调用数(含输出回读/只读工具)
+	pendingCmd  map[string]chan mcpCmdResult // requestId → 结果通道
+	pollQueue   []mcpPollCmd                 // 待前端领取的命令(轮询通道,领取即删)
+	outBuf      map[string][]byte            // tabId → 原始输出缓冲
+	outCursor   map[string]int               // tabId → terminal_read 游标
+	reqSeq      int64
+	criticalSeq int64              // 拦截告警自增 ID
+	criticals   []mcpCriticalEntry // 拦截告警环形缓冲(容量 16)
 
 	// 全局串行仲裁器: 所有标签页操作(外部智能体)单车道执行
 	arbQueue chan *mcpArbItem // 外部智能体队列
@@ -170,19 +181,6 @@ type mcpCmdResult struct {
 	Err    string // 错误信息
 }
 
-// mcpApproval 待审批请求。
-type mcpApproval struct {
-	ID        string    `json:"id"`
-	Action    string    `json:"action"`
-	Summary   string    `json:"summary"`
-	Detail    string    `json:"detail"`
-	Risk      string    `json:"risk"`
-	Command   string    `json:"command"`           // 原始命令(永久授权用)
-	Paths     []string `json:"paths"`              // 命令涉及路径(永久授权+展示用)
-	ExpiresAt time.Time `json:"expiresAt"`
-	ch        chan mcpApprovalDecision
-}
-
 // NewMcpService 创建 MCP 服务。
 func NewMcpService(cfg *ConfigService, sessionFile *SessionFileService) *McpService {
 	s := &McpService{
@@ -190,7 +188,6 @@ func NewMcpService(cfg *ConfigService, sessionFile *SessionFileService) *McpServ
 		sessionFile: sessionFile,
 		state:       mcpStateStopped,
 		pendingCmd:  make(map[string]chan mcpCmdResult),
-		approvals:   make(map[string]*mcpApproval),
 		outBuf:      make(map[string][]byte),
 		outCursor:   make(map[string]int),
 		arbQueue:    make(chan *mcpArbItem, mcpArbQCap),
@@ -199,8 +196,7 @@ func NewMcpService(cfg *ConfigService, sessionFile *SessionFileService) *McpServ
 		sessNames:   make(map[string]mcpSessInfo),
 	}
 	s.audit = NewMcpAuditService(McpAuditDir())
-	s.grants = newMcpGrantStore(DataDir())
-	RefreshCustomRules(cfg.McpCustomRules())
+	SetDangerousPatternsJSON(cfg.McpDangerousPatterns())
 	s.startArbiter()
 	return s
 }
@@ -306,22 +302,18 @@ func (s *McpService) SetApp(app *application.App) {
 		if s.app == nil {
 			return
 		}
-		if data, err := json.Marshal(entry); err == nil {
-			s.app.Event.Emit("mcp-audit-appended", string(data))
-		}
+		// 载荷直接传结构体: Event.Emit 内部序列化, 传预序列化 string 会双重编码,
+		// 前端 JSON.parse 一次得到的是字符串而非对象, 事件被静默丢弃(与插件注册表同款坑)。
+		s.app.Event.Emit("mcp-audit-appended", entry)
 	})
 }
 
-// emit 安全发送事件(锁外调用)。
+// emit 安全发送事件(锁外调用)。payload 必须传 map/struct, 禁止传预序列化 JSON 字符串。
 func (s *McpService) emit(name string, payload any) {
 	if s.app == nil {
 		return
 	}
-	data, err := json.Marshal(payload)
-	if err != nil {
-		return
-	}
-	s.app.Event.Emit(name, string(data))
+	s.app.Event.Emit(name, payload)
 }
 
 // ==================== 生命周期 ====================
@@ -380,12 +372,11 @@ func (s *McpService) Start() error {
 			s.mu.Lock()
 			s.state = mcpStateStopped
 			s.mu.Unlock()
-			s.audit.Append("system", "error", "server", "", "HTTP 服务异常退出: "+err.Error(), "-", "-", false)
+			CollectError("mcp", "server", fmt.Errorf("HTTP 服务异常退出: %w", err))
 			s.emitStatus()
 		}
 	}()
 
-	s.audit.Append("system", "system", "start", "", fmt.Sprintf("MCP 服务已启动,监听 127.0.0.1:%d", port), "-", "-", false)
 	s.emitStatus()
 	return nil
 }
@@ -410,12 +401,11 @@ func (s *McpService) Stop() {
 		defer cancel()
 		server.Shutdown(ctx)
 	}
-	s.audit.Append("system", "system", "stop", "", "MCP 服务已停止", "-", "-", false)
 	s.emitStatus()
 }
 
 // Pause 挂起: 拒绝新请求、取消在途请求,端口与 Token 保留。
-func (s *McpService) Pause(byUser bool) {
+func (s *McpService) Pause() {
 	s.mu.Lock()
 	if s.state != mcpStateRunning {
 		s.mu.Unlock()
@@ -426,7 +416,6 @@ func (s *McpService) Pause(byUser bool) {
 	s.mu.Unlock()
 	s.clearAgentLock() // 挂起即归还操作权,恢复后各智能体重新竞争
 
-	s.audit.Append("system", "system", "pause", "", "MCP 已挂起,拒绝新请求", "-", "-", byUser)
 	s.emitStatus()
 }
 
@@ -440,11 +429,10 @@ func (s *McpService) Resume() {
 	s.state = mcpStateRunning
 	s.mu.Unlock()
 
-	s.audit.Append("system", "system", "resume", "", "MCP 已恢复运行", "-", "-", true)
 	s.emitStatus()
 }
 
-// cancelPendingLocked 取消全部在途命令与审批(调用方持锁)。
+// cancelPendingLocked 取消全部在途命令(调用方持锁)。
 func (s *McpService) cancelPendingLocked(reason string) {
 	for id, ch := range s.pendingCmd {
 		select {
@@ -453,43 +441,23 @@ func (s *McpService) cancelPendingLocked(reason string) {
 		}
 		delete(s.pendingCmd, id)
 	}
-	for id, ap := range s.approvals {
-		select {
-		case ap.ch <- mcpApprovalDecision{}:
-		default:
-		}
-		delete(s.approvals, id)
-		s.emit("mcp-approval-removed", map[string]any{"id": id, "reason": reason})
-	}
+	s.pollQueue = nil // 轮询队列一并作废
 }
 
-// acquireAgentLock 获取智能体操作权并记录审计/推送状态(同主续期静默)。
+// acquireAgentLock 获取智能体操作权并推送状态(同主续期静默)。
 func (s *McpService) acquireAgentLock(ctx context.Context, key, label string, prio int) error {
-	acq, err := s.agentLock.acquire(ctx, key, label, prio)
-	if err != nil {
+	if _, err := s.agentLock.acquire(ctx, key, label, prio); err != nil {
 		return err
-	}
-	switch acq.Kind {
-	case mcpAcqNew:
-		s.audit.Append("system", "system", "lock", key, fmt.Sprintf("MCP 操作权已授予 %s", label), "-", "-", false)
-	case mcpAcqPreempt:
-		s.audit.Append("system", "system", "lock", key, fmt.Sprintf("%s 抢占了 %s 的 MCP 操作权", label, acq.Prev), "-", "-", false)
-	case mcpAcqTakeover:
-		s.audit.Append("system", "system", "lock", key, fmt.Sprintf("%s 空闲超时,MCP 操作权被 %s 接管", acq.Prev, label), "-", "-", false)
-	default:
-		return nil
 	}
 	s.emitStatus()
 	return nil
 }
 
-func (s *McpService) clearAgentLock() string {
+func (s *McpService) clearAgentLock() {
 	prev := s.agentLock.clear()
 	if prev != "" {
-		s.audit.Append("system", "system", "lock", "", "MCP 已挂起/停止,释放 "+prev+" 的操作权", "-", "-", false)
 		s.emitStatus()
 	}
-	return prev
 }
 
 // authMiddleware Bearer Token 鉴权中间件,并向请求上下文注入客户端身份
@@ -506,7 +474,9 @@ func (s *McpService) authMiddleware(next http.Handler) http.Handler {
 			return
 		}
 		auth := r.Header.Get("Authorization")
-		if auth != "Bearer "+token {
+		// 常量时间比较: 防止普通字符串比较随首字节不匹配提前返回,
+		// 被用于逐字节探测令牌的计时侧信道。
+		if subtle.ConstantTimeCompare([]byte(auth), []byte("Bearer "+token)) != 1 {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -609,7 +579,6 @@ func (s *McpService) forgetMcpSession(sid string) {
 		return
 	}
 	if s.agentLock.release(info.id.key) {
-		s.audit.Append("system", "system", "lock", info.id.key, "外部会话已关闭,MCP 操作权已释放", "-", "-", false)
 		s.emitStatus()
 	}
 }
@@ -664,23 +633,19 @@ func (s *McpService) statusMap() map[string]any {
 	defer s.mu.Unlock()
 	port := s.cfg.McpPort()
 	enabled := s.cfg.McpEnabled()
-	mode := s.cfg.McpMode()
 	ballX, ballY := s.cfg.McpBallPos()
 	return map[string]any{
 		"enabled":            enabled,
 		"state":              s.state,
 		"busy":               s.busy,
 		"lock":               s.agentLock.snapshot(), // 智能体独占锁持有者(nil=空闲)
-		"mode":               mode,
 		"url":                fmt.Sprintf("http://127.0.0.1:%d/mcp", port),
 		"token":              s.token,
 		"port":               port,
-		"pendingApprovals":   len(s.approvals),
 		"ballX":              ballX,
 		"ballY":              ballY,
 		"opDelayMs":          s.cfg.McpOpDelayMs(),
 		"batchIntervalMs":    s.cfg.McpBatchIntervalMs(),
-		"grantsEnabled":      s.cfg.McpGrantsEnabled(),
 		"auditRetentionDays": s.cfg.McpAuditRetentionDays(),
 		"terminalReadMax":    s.cfg.McpTerminalReadMax(),
 	}
@@ -868,9 +833,9 @@ func (s *McpService) registerTools(server *mcp.Server) {
 		IntervalMs int      `json:"interval_ms,omitempty" jsonschema:"命令间隔毫秒(默认 300,最小 50)"`
 	}
 	type batchOut struct {
-		Ok      bool   `json:"ok"`
-		Count   int    `json:"count"`
-		Note    string `json:"note,omitempty"`
+		Ok    bool   `json:"ok"`
+		Count int    `json:"count"`
+		Note  string `json:"note,omitempty"`
 	}
 	addTrackedTool(s, server, &mcp.Tool{
 		Name:        "batch_execute",
@@ -982,7 +947,7 @@ func (s *McpService) toolOpenSession(ctx context.Context, opts execOpts, session
 	}, mcpOpenTimeout, RiskAuto, "open_session:"+sessionPath, opts.source)
 }
 
-// toolTerminalSend 终端输入(分级 → 永久授权 → 审批 → 仲裁执行)。
+// toolTerminalSend 终端输入(分级 → 可控延迟放行 → 仲裁执行)。
 func (s *McpService) toolTerminalSend(ctx context.Context, opts execOpts, tabID, text string) (string, error) {
 	if err := s.checkRunning(); err != nil {
 		return "", err
@@ -991,54 +956,27 @@ func (s *McpService) toolTerminalSend(ctx context.Context, opts execOpts, tabID,
 	if g.Risk == RiskBlocked {
 		s.audit.Append(opts.source, "blocked", "terminal_send", tabID, text, RiskBlocked, "rejected", false)
 		s.emit("mcp-critical-blocked", map[string]any{"command": firstLine(text), "reason": g.Reason})
-		go s.Pause(false)
+		s.recordCritical(firstLine(text), g.Reason)
+		go s.Pause()
 		return "", fmt.Errorf("绝对危险指令已被拦截: %s。MCP 已自动挂起,需用户手动恢复", g.Reason)
 	}
-	manual := s.cfg.McpMode() == McpModeManual
 	multiline := strings.Contains(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
-	needPasteConfirm := multiline && manual
 
-	if g.Risk == RiskConfirm {
-		if manual && !needPasteConfirm {
-			// 永久授权(命令+路径双精确)命中则免审批
-			if s.cfg.McpGrantsEnabled() && s.grants.Match(text, g.Paths) != "" {
-				s.audit.Append(opts.source, "confirm", "terminal_send", tabID, text, RiskConfirm, "granted", false)
-			} else {
-				dec, err := s.requestApproval(opts.source, "terminal_send", summarizeText(text), text, RiskConfirm, text, g.Paths)
-				if err != nil {
-					return "", err
-				}
-				if !dec.Approved {
-					s.audit.Append(opts.source, "confirm", "terminal_send", tabID, text, RiskConfirm, "denied", true)
-					return "", fmt.Errorf("用户拒绝了本次输入")
-				}
-				s.audit.Append(opts.source, "confirm", "terminal_send", tabID, text, RiskConfirm, "approved", true)
-			}
-		} else if manual && needPasteConfirm {
-			// 多行手动模式(外部客户端): 前端多行粘贴确认弹窗承担人工授权
-			s.audit.Append(opts.source, "confirm", "terminal_send", tabID, summarizeText(text), RiskConfirm, "pending", false)
-		} else {
-			// 自动审批模式: AI 已判定放行
-			s.audit.Append(opts.source, "confirm", "terminal_send", tabID, text, RiskConfirm, "approved", false)
-		}
-	} else {
-		s.audit.Append(opts.source, "info", "terminal_send", tabID, text, RiskAuto, "executed", false)
-	}
+	s.audit.Append(opts.source, "info", "terminal_send", tabID, text, RiskAuto, "executed", false)
 
 	// 基线在发送前建立: 之后缓冲增长均为命令回显+执行结果
 	base := s.alignCursor(tabID)
 	res, err := s.execRouted(ctx, "terminal_send", map[string]any{
-		"tabId":            tabID,
-		"text":             text,
-		"multiline":        multiline,
-		"needPasteConfirm": needPasteConfirm,
-	}, mcpApprovalTimeout+mcpCmdTimeout, g.Risk, "terminal_send:"+tabID, opts.source)
+		"tabId":     tabID,
+		"text":      text,
+		"multiline": multiline,
+	}, mcpCmdTimeout, g.Risk, "terminal_send:"+tabID, opts.source)
 	if err != nil {
 		return "", err
 	}
 	// 单行命令: 自动等待并带回新增输出(命令回显+执行结果),
 	// 免去 AI 二次 terminal_read;多行/粘贴确认流程不回读。
-	if !multiline && !needPasteConfirm {
+	if !multiline {
 		if output := s.waitNewOutput(ctx, tabID, base); output != "" {
 			var out map[string]any
 			if json.Unmarshal([]byte(res), &out) == nil && out != nil {
@@ -1121,35 +1059,16 @@ func (s *McpService) toolBatchExecute(ctx context.Context, opts execOpts, tabID 
 	if intervalMs > 10000 {
 		intervalMs = 10000
 	}
-	// 逐条分级: 任一 blocked 整批拒绝;任一 confirm 整批按 confirm 审批
-	overall := RiskAuto
-	var allPaths []string
-	var listPreview []string
+	// 逐条分级: 任一命中绝对危险字典,整批拒绝并挂起 MCP
 	for _, c := range commands {
-		listPreview = append(listPreview, firstLine(c))
 		g := GradeCommandEx(c)
 		if g.Risk == RiskBlocked {
 			s.audit.Append(opts.source, "blocked", "batch_execute", tabID, firstLine(c), RiskBlocked, "rejected", false)
 			s.emit("mcp-critical-blocked", map[string]any{"command": firstLine(c), "reason": g.Reason})
-			go s.Pause(false)
+			s.recordCritical(firstLine(c), g.Reason)
+			go s.Pause()
 			return "", fmt.Errorf("批量中含绝对危险指令,整批已拒绝并挂起 MCP: %s", g.Reason)
 		}
-		if g.Risk == RiskConfirm {
-			overall = RiskConfirm
-		}
-		allPaths = append(allPaths, g.Paths...)
-	}
-	if overall == RiskConfirm && (s.cfg.McpMode() == McpModeManual) {
-		detail := strings.Join(listPreview, "\n")
-		dec, err := s.requestApproval(opts.source, "batch_execute", fmt.Sprintf("批量执行 %d 条命令(含需确认项)", len(commands)), detail, RiskConfirm, "", nil)
-		if err != nil {
-			return "", err
-		}
-		if !dec.Approved {
-			s.audit.Append(opts.source, "confirm", "batch_execute", tabID, detail, RiskConfirm, "denied", true)
-			return "", fmt.Errorf("用户拒绝了本批量执行")
-		}
-		s.audit.Append(opts.source, "confirm", "batch_execute", tabID, detail, RiskConfirm, "approved", true)
 	}
 	batchID := fmt.Sprintf("b-%d-%d", time.Now().UnixMilli(), len(commands))
 	// 批量超时 = 命令数 × (间隔 + 余量)
@@ -1158,13 +1077,13 @@ func (s *McpService) toolBatchExecute(ctx context.Context, opts execOpts, tabID 
 		"tabId":      tabID,
 		"commands":   commands,
 		"intervalMs": intervalMs,
-	}, timeout, overall, "batch_execute:"+tabID, opts.source)
+	}, timeout, RiskAuto, "batch_execute:"+tabID, opts.source)
 	if err != nil {
 		return "", err
 	}
 	// 逐条审计(关联 batchID)
 	for _, c := range commands {
-		s.audit.AppendBatch(opts.source, "info", "batch_execute", tabID, firstLine(c), overall, "executed", false, batchID)
+		s.audit.AppendBatch(opts.source, "info", "batch_execute", tabID, firstLine(c), RiskAuto, "executed", false, batchID)
 	}
 	return res, nil
 }
@@ -1179,56 +1098,27 @@ func (s *McpService) toolOpenScript(ctx context.Context, opts execOpts, filePath
 	}, mcpCmdTimeout, RiskAuto, "open_script:"+filePath, opts.source)
 }
 
-// toolScriptWrite 写脚本(审批在槽外,执行在车道内)。
+// toolScriptWrite 写脚本(执行在车道内, 经可控延迟放行)。
 func (s *McpService) toolScriptWrite(ctx context.Context, opts execOpts, filePath, content string) (string, error) {
 	if err := s.checkRunning(); err != nil {
 		return "", err
 	}
 	preview := previewContent(content)
-	if s.cfg.McpMode() == McpModeManual {
-		// 脚本写入的永久授权: 命令为 script_write:<path>,路径集合为 [path]
-		grantCmd := "script_write:" + filePath
-		if s.cfg.McpGrantsEnabled() && s.grants.Match(grantCmd, []string{filePath}) != "" {
-			s.audit.Append(opts.source, "confirm", "script_write", filePath, preview, RiskConfirm, "granted", false)
-		} else {
-			dec, err := s.requestApproval(opts.source, "script_write", filePath+" ("+fmt.Sprintf("%d 字节", len(content))+")", preview, RiskConfirm, grantCmd, []string{filePath})
-			if err != nil {
-				return "", err
-			}
-			if !dec.Approved {
-				s.audit.Append(opts.source, "confirm", "script_write", filePath, preview, RiskConfirm, "denied", true)
-				return "", fmt.Errorf("用户拒绝了本次写入")
-			}
-			s.audit.Append(opts.source, "confirm", "script_write", filePath, preview, RiskConfirm, "approved", true)
-		}
-	} else {
-		s.audit.Append(opts.source, "confirm", "script_write", filePath, preview, RiskConfirm, "approved", false)
-	}
+	s.audit.Append(opts.source, "info", "script_write", filePath, preview, RiskAuto, "executed", false)
 	return s.execRouted(ctx, "script_write", map[string]any{
 		"filePath": filePath,
 		"content":  content,
-	}, mcpCmdTimeout, RiskConfirm, "script_write:"+filePath, opts.source)
+	}, mcpCmdTimeout, RiskAuto, "script_write:"+filePath, opts.source)
 }
 
-// toolCloseTab 关闭标签页(审批在槽外,执行在车道内)。
+// toolCloseTab 关闭标签页(执行在车道内, 经可控延迟放行)。
 func (s *McpService) toolCloseTab(ctx context.Context, opts execOpts, tabID string) (string, error) {
 	if err := s.checkRunning(); err != nil {
 		return "", err
 	}
-	if s.cfg.McpMode() == McpModeManual {
-		dec, err := s.requestApproval(opts.source, "close_tab", tabID, "关闭标签页 "+tabID, RiskConfirm, "", nil)
-		if err != nil {
-			return "", err
-		}
-		if !dec.Approved {
-			s.audit.Append(opts.source, "confirm", "close_tab", tabID, "关闭标签页", RiskConfirm, "denied", true)
-			return "", fmt.Errorf("用户拒绝了关闭操作")
-		}
-		s.audit.Append(opts.source, "confirm", "close_tab", tabID, "关闭标签页", RiskConfirm, "approved", true)
-	}
 	return s.execRouted(ctx, "close_tab", map[string]any{
 		"tabId": tabID,
-	}, mcpCmdTimeout, RiskConfirm, "close_tab:"+tabID, opts.source)
+	}, mcpCmdTimeout, RiskAuto, "close_tab:"+tabID, opts.source)
 }
 
 // checkRunning 服务可用性检查(拒绝 stopped/paused 请求)。
@@ -1338,6 +1228,8 @@ func (s *McpService) execRoutedRaw(ctx context.Context, cmdType string, payload 
 }
 
 // routeCommand 下发命令到前端并等待回执。
+// 双通道下发: "mcp-command" 事件(推送,部分 WebView 环境不可达) +
+// 轮询队列(前端 McpPoll 领取即删,主通道)。二者按 requestId 幂等。
 func (s *McpService) routeCommand(ctx context.Context, cmdType string, payload map[string]any, timeout time.Duration, risk string, subject string, source string) (string, error) {
 	s.mu.Lock()
 	if s.state != mcpStateRunning {
@@ -1348,6 +1240,7 @@ func (s *McpService) routeCommand(ctx context.Context, cmdType string, payload m
 	reqID := fmt.Sprintf("r-%d", s.reqSeq)
 	ch := make(chan mcpCmdResult, 1)
 	s.pendingCmd[reqID] = ch
+	s.pollQueue = append(s.pollQueue, mcpPollCmd{RequestID: reqID, Type: cmdType, Payload: payload})
 	s.mu.Unlock()
 
 	cmdPayload := map[string]any{
@@ -1363,76 +1256,68 @@ func (s *McpService) routeCommand(ctx context.Context, cmdType string, payload m
 	select {
 	case res := <-ch:
 		if res.Err != "" {
+			// 前端执行失败也留痕: 超时/取消都有审计, 独缺这条会话路径,
+			// 会让面板上的失败统计与真实执行结果对不上。
+			s.audit.Append(source, "error", cmdType, subject, res.Err, risk, "failed", false)
+			CollectError("mcp", cmdType, fmt.Errorf("%s (source=%s)", res.Err, source))
 			return "", fmt.Errorf("%s", res.Err)
 		}
 		return res.Result, nil
 	case <-timer.C:
 		s.mu.Lock()
 		delete(s.pendingCmd, reqID)
+		s.dropPollLocked(reqID)
 		s.mu.Unlock()
 		s.audit.Append(source, "error", cmdType, subject, "等待前端执行超时", risk, "timeout", false)
 		return "", fmt.Errorf("命令执行超时(%s)", cmdType)
 	case <-ctx.Done():
 		s.mu.Lock()
 		delete(s.pendingCmd, reqID)
+		s.dropPollLocked(reqID)
 		s.mu.Unlock()
 		return "", fmt.Errorf("客户端已取消请求")
 	}
 }
 
-// requestApproval 发起人工审批并等待决策(手动模式)。
-// command/paths 非空时,用户可选"永久授权"(命令+路径写入授权库)。
-func (s *McpService) requestApproval(source, action, summary, detail, risk, command string, paths []string) (mcpApprovalDecision, error) {
-	s.mu.Lock()
-	if s.state != mcpStateRunning {
-		s.mu.Unlock()
-		return mcpApprovalDecision{}, fmt.Errorf("MCP 已被挂起或停止")
-	}
-	s.apprSeq++
-	ap := &mcpApproval{
-		ID:        fmt.Sprintf("ap-%d", s.apprSeq),
-		Action:    action,
-		Summary:   summary,
-		Detail:    detail,
-		Risk:      risk,
-		Command:   command,
-		Paths:     paths,
-		ExpiresAt: time.Now().Add(mcpApprovalTimeout),
-		ch:        make(chan mcpApprovalDecision, 1),
-	}
-	s.approvals[ap.ID] = ap
-	s.mu.Unlock()
-
-	s.emit("mcp-approval-requested", ap)
-	s.audit.Append(source, "confirm", action, summary, detail, risk, "pending", false)
-
-	timer := time.NewTimer(mcpApprovalTimeout)
-	defer timer.Stop()
-	select {
-	case dec := <-ap.ch:
-		s.mu.Lock()
-		delete(s.approvals, ap.ID)
-		s.mu.Unlock()
-		s.emitStatus()
-		// 批准且勾选永久授权: 命令+路径写入授权库(仅 confirm 级)
-		if dec.Approved && dec.Permanent && command != "" && s.cfg.McpGrantsEnabled() {
-			if _, err := s.grants.Add(command, paths); err != nil {
-				// 授权库写满等失败不影响本次执行,仅记录
-				s.audit.Append("system", "system", "grant_add", command, err.Error(), risk, "-", false)
-			} else {
-				s.audit.Append("system", "system", "grant_add", command, strings.Join(paths, ", "), risk, "granted", true)
-			}
+// dropPollLocked 从轮询队列移除指定命令(超时/取消时调用,调用方持锁)。
+func (s *McpService) dropPollLocked(reqID string) {
+	for i, c := range s.pollQueue {
+		if c.RequestID == reqID {
+			s.pollQueue = append(s.pollQueue[:i], s.pollQueue[i+1:]...)
+			return
 		}
-		return dec, nil
-	case <-timer.C:
-		s.mu.Lock()
-		delete(s.approvals, ap.ID)
-		s.mu.Unlock()
-		s.emit("mcp-approval-removed", map[string]any{"id": ap.ID, "reason": "timeout"})
-		s.emitStatus()
-		s.audit.Append(source, "confirm", action, summary, detail, risk, "timeout", false)
-		return mcpApprovalDecision{}, fmt.Errorf("等待用户授权超时(60 秒),已自动拒绝")
 	}
+}
+
+// recordCritical 记录绝对危险拦截告警(轮询通道增量下发,环形有界)。
+func (s *McpService) recordCritical(command, reason string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.criticalSeq++
+	s.criticals = append(s.criticals, mcpCriticalEntry{ID: s.criticalSeq, Command: command, Reason: reason})
+	if len(s.criticals) > 16 {
+		s.criticals = s.criticals[len(s.criticals)-16:]
+	}
+}
+
+// McpPoll 前端轮询通道: 一次返回服务状态快照 + 待执行命令(领取即删) +
+// 自 lastCriticalID 之后的拦截告警。binding 轮询为命令下发主通道
+// (事件推送在部分 WebView 环境不可达),响应同时用于前端状态兜底刷新。
+func (s *McpService) McpPoll(lastCriticalID int64) string {
+	s.mu.Lock()
+	cmds := s.pollQueue
+	s.pollQueue = nil
+	crits := make([]mcpCriticalEntry, 0, len(s.criticals))
+	for _, c := range s.criticals {
+		if c.ID > lastCriticalID {
+			crits = append(crits, c)
+		}
+	}
+	s.mu.Unlock()
+	resp := s.statusMap() // 内部自带取锁
+	resp["commands"] = cmds
+	resp["criticals"] = crits
+	return marshalJSON(resp)
 }
 
 // ==================== 前端绑定方法 ====================
@@ -1448,7 +1333,6 @@ func (s *McpService) SetMcpEnabled(enabled bool) string {
 	s.cfg.SetMcpEnabled(enabled)
 	if enabled {
 		if err := s.Start(); err != nil {
-			s.audit.Append("system", "error", "start", "", err.Error(), "-", "-", false)
 			return marshalJSON(map[string]string{"error": err.Error()})
 		}
 	} else {
@@ -1458,20 +1342,9 @@ func (s *McpService) SetMcpEnabled(enabled bool) string {
 	return string(data)
 }
 
-// SetMcpMode 设置审批模式(manual / auto)。
-func (s *McpService) SetMcpMode(mode string) string {
-	if mode != McpModeManual && mode != McpModeAuto {
-		mode = McpModeManual
-	}
-	s.cfg.SetMcpMode(mode)
-	s.audit.Append("system", "system", "mode", "", "审批模式切换为 "+mode, "-", "-", true)
-	data, _ := json.Marshal(s.statusMap())
-	return string(data)
-}
-
 // McpPause 挂起 MCP(用户手动)。
 func (s *McpService) McpPause() string {
-	s.Pause(true)
+	s.Pause()
 	data, _ := json.Marshal(s.statusMap())
 	return string(data)
 }
@@ -1481,25 +1354,6 @@ func (s *McpService) McpResume() string {
 	s.Resume()
 	data, _ := json.Marshal(s.statusMap())
 	return string(data)
-}
-
-// McpResolveApproval 前端回执审批决策。
-// permanent=true 且 approved=true 时,命令+路径写入永久授权库。
-func (s *McpService) McpResolveApproval(approvalID string, approved bool, permanent bool) string {
-	s.mu.Lock()
-	ap := s.approvals[approvalID]
-	if ap != nil {
-		delete(s.approvals, approvalID)
-	}
-	s.mu.Unlock()
-	if ap == nil {
-		return `{"ok":false}`
-	}
-	select {
-	case ap.ch <- mcpApprovalDecision{Approved: approved, Permanent: permanent}:
-	default:
-	}
-	return `{"ok":true}`
 }
 
 // McpResolveCommand 前端回执命令执行结果。
@@ -1526,7 +1380,7 @@ func (s *McpService) McpNotifyPreemption() string {
 		return `{"ok":false}`
 	}
 	s.state = mcpStatePaused
-	// 抢占: 全部在途命令以 USER_PREEMPTED 拒绝,审批视同拒绝
+	// 抢占: 全部在途命令以 USER_PREEMPTED 拒绝
 	for id, ch := range s.pendingCmd {
 		select {
 		case ch <- mcpCmdResult{Err: "USER_PREEMPTED: 用户已手动接管终端,本次操作被中断"}:
@@ -1534,18 +1388,10 @@ func (s *McpService) McpNotifyPreemption() string {
 		}
 		delete(s.pendingCmd, id)
 	}
-	for id, ap := range s.approvals {
-		select {
-		case ap.ch <- mcpApprovalDecision{}:
-		default:
-		}
-		delete(s.approvals, id)
-	}
 	s.mu.Unlock()
 
 	// 用户抢占:归还操作权,MCP 自动挂起(用户优先)
 	s.clearAgentLock()
-	s.audit.Append("system", "system", "preempt", "", "检测到用户键盘输入,MCP 已自动挂起(用户优先)", "-", "preempted", true)
 	s.emitStatus()
 	return `{"ok":true}`
 }
@@ -1572,48 +1418,22 @@ func (s *McpService) ResetMcpToken() string {
 	s.mu.Lock()
 	s.token = plain
 	s.mu.Unlock()
-	s.audit.Append("system", "system", "reset_token", "", "访问令牌已重置", "-", "-", true)
 	data, _ := json.Marshal(s.statusMap())
 	return string(data)
 }
 
 // ==================== 永久授权管理(前端绑定) ====================
 
-// GetMcpGrants 返回永久授权规则列表 JSON。
-func (s *McpService) GetMcpGrants() string {
-	data, _ := json.Marshal(s.grants.List())
-	return string(data)
+// SetMcpExecTuning 持久化执行参数(时延/批量间隔/审计保留/读取上限)。
+func (s *McpService) SetMcpExecTuning(opDelayMs int, batchIntervalMs int, auditRetentionDays int, terminalReadMax int) string {
+	return s.cfg.SetMcpExecTuning(opDelayMs, batchIntervalMs, auditRetentionDays, terminalReadMax)
 }
 
-// RemoveMcpGrant 删除指定永久授权规则。
-func (s *McpService) RemoveMcpGrant(id string) string {
-	ok := s.grants.Remove(id)
-	if ok {
-		s.audit.Append("system", "system", "grant_remove", id, "永久授权规则已删除", "-", "-", true)
-	}
-	return fmt.Sprintf(`{"ok":%t}`, ok)
-}
-
-// ClearMcpGrants 清空全部永久授权规则。
-func (s *McpService) ClearMcpGrants() string {
-	s.grants.Clear()
-	s.audit.Append("system", "system", "grant_clear", "", "全部永久授权规则已清空", "-", "-", true)
-	return `{"ok":true}`
-}
-
-// SetMcpExecTuning 持久化执行参数(时延/批量间隔/授权开关/审计保留/读取上限)。
-func (s *McpService) SetMcpExecTuning(opDelayMs int, batchIntervalMs int, grantsEnabled bool, auditRetentionDays int, terminalReadMax int) string {
-	res := s.cfg.SetMcpExecTuning(opDelayMs, batchIntervalMs, grantsEnabled, auditRetentionDays, terminalReadMax)
-	s.audit.Append("system", "system", "exec_tuning", "", fmt.Sprintf("时延=%dms 批量间隔=%dms 授权开关=%t", opDelayMs, batchIntervalMs, grantsEnabled), "-", "-", true)
-	return res
-}
-
-// SetMcpCustomRules 持久化自定义分级规则并即时生效。
-func (s *McpService) SetMcpCustomRules(jsonStr string) string {
-	res := s.cfg.SetMcpCustomRules(jsonStr)
+// SetMcpDangerousPatterns 持久化绝对危险指令字典并即时生效。
+func (s *McpService) SetMcpDangerousPatterns(jsonStr string) string {
+	res := s.cfg.SetMcpDangerousPatterns(jsonStr)
 	if !strings.Contains(res, `"error"`) {
-		RefreshCustomRules(s.cfg.McpCustomRules())
-		s.audit.Append("system", "system", "custom_rules", "", "自定义分级规则已更新并生效", "-", "-", true)
+		SetDangerousPatternsJSON(s.cfg.McpDangerousPatterns())
 	}
 	return res
 }

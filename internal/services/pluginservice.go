@@ -66,11 +66,13 @@ type PluginService struct {
 	// hostVueShim 宿主 Vue shim 源码(main.go 从内嵌前端产物注入;
 	// 插件 ESM 经 import map 引用, 保证全页面唯一 Vue 实例)。
 	hostVueShim string
-	hostAddr  string
-	assetLn   net.Listener
-	logFile   *os.File
-	logMu     sync.Mutex
-	stopped   bool
+	hostAddr    string
+	assetLn     net.Listener
+	logFile     *os.File
+	logMu       sync.Mutex
+	stopped     bool
+	// crashAttempts 插件连续意外崩溃计数(用于自愈退避; 稳定运行 90s 自动清零)。
+	crashAttempts map[string]int
 }
 
 type pluginInstance struct {
@@ -84,6 +86,8 @@ type pluginInstance struct {
 	status   string
 	errMsg   string
 	done     chan struct{}
+	// startedAt 本次进程拉起时间(崩溃自愈: 稳定运行超过 90s 的崩溃重新计数)
+	startedAt time.Time
 }
 
 // pluginManifest 安装清单(安装期校验 + 元数据兜底;运行期真值以握手 Info() 为准)。
@@ -92,6 +96,14 @@ type pluginManifest struct {
 	Name    string `json:"name"`
 	Version string `json:"version"`
 	MinHost string `json:"minHost"`
+	// Docs 文档钩子: locale → 插件目录内相对路径(md); "default" 为无匹配语言时的兜底。
+	// 例: {"default":"docs/README.md","en-US":"docs/README.en-US.md"}
+	// 文件经插件资产服务同源伺服(/plugins/<id>/<路径>), 由详情页按当前语言拉取渲染。
+	Docs map[string]string `json:"docs,omitempty"`
+	// ViewClickRPC 视图点击钩子(可选): 声明后, 点击活动栏该插件图标将调用此 RPC
+	// (约定动作 = 打开/定位该插件的工具标签页), 而不是展开侧栏面板。
+	// 例: ping 声明 "history.open" —— 图标点击直达工作台标签页。
+	ViewClickRPC string `json:"viewClickRpc,omitempty"`
 }
 
 type pluginCandidate struct {
@@ -103,15 +115,18 @@ type pluginCandidate struct {
 
 // pluginSummary 注册表快照条目(前端消费)。
 type pluginSummary struct {
-	ID          string              `json:"id"`
-	DisplayName string              `json:"displayName"`
-	Version     string              `json:"version"`
-	Icon        string              `json:"icon,omitempty"`
-	AccentColor string              `json:"accentColor,omitempty"`
-	Status      string              `json:"status"`
-	Error       string              `json:"error,omitempty"`
-	Bundled     bool                `json:"bundled"`
-	Views       []pluginViewSummary `json:"views,omitempty"`
+	ID           string              `json:"id"`
+	DisplayName  string              `json:"displayName"`
+	Version      string              `json:"version"`
+	Icon         string              `json:"icon,omitempty"`
+	AccentColor  string              `json:"accentColor,omitempty"`
+	Status       string              `json:"status"`
+	Error        string              `json:"error,omitempty"`
+	Bundled      bool                `json:"bundled"`
+	Docs         map[string]string   `json:"docs,omitempty"`
+	ViewClickRPC string              `json:"viewClickRpc,omitempty"`
+	Capabilities []string            `json:"capabilities,omitempty"`
+	Views        []pluginViewSummary `json:"views,omitempty"`
 }
 
 type pluginViewSummary struct {
@@ -141,6 +156,11 @@ func (s *PluginService) SetApp(app *app.App) { s.app = app }
 // StartAll 启动反向服务并加载全部插件。单插件失败不阻塞其余插件与主窗口。
 func (s *PluginService) StartAll() {
 	_ = os.MkdirAll(PluginsDir(), 0700)
+
+	// 清理上次进程崩溃/文件锁未及时释放留下的残留(.old-* / .install-*), 须在扫描之前
+	if n := cleanupStalePluginDirs(); n > 0 {
+		s.logLine(fmt.Sprintf("清理插件目录残留 %d 项", n))
+	}
 
 	// 捆绑插件落盘/升级(须在扫描之前)
 	s.ensureBundledPlugins()
@@ -183,7 +203,9 @@ func (s *PluginService) StartAll() {
 		wg.Add(1)
 		go func(c pluginCandidate) {
 			defer wg.Done()
-			_ = s.launch(c)
+			if err := s.launch(c); err != nil {
+				CollectError("plugin:"+c.id, "start-all", err)
+			}
 		}(cand)
 	}
 	wg.Wait()
@@ -535,7 +557,7 @@ func (s *PluginService) launch(cand pluginCandidate) error {
 	inst := &pluginInstance{
 		id: cand.id, dir: cand.dir, exePath: cand.exePath,
 		manifest: cand.manifest, status: pluginStatusStarting,
-		done: make(chan struct{}),
+		done: make(chan struct{}), startedAt: time.Now(),
 	}
 
 	fail := func(err error) error {
@@ -561,7 +583,7 @@ func (s *PluginService) launch(cand pluginCandidate) error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	info, err := api.Info(ctx)
+	info, err := api.Info(ctx, s.cfg.GetLanguage())
 	if err != nil {
 		return fail(fmt.Errorf("Info 失败: %w", err))
 	}
@@ -612,16 +634,31 @@ func (s *PluginService) launch(cand pluginCandidate) error {
 
 	// 进程退出监视: 非受控退出标记错误并刷新注册表(图标随视图消失)
 	// (受控停止时 status 已先行置为 stopped/error 之外的值, 见 stopInstance)
+	// 崩溃自愈: 非受控退出后按指数退避自动重启(2s/4s/8s/16s, 最多 4 次);
+	// 稳定运行 90s 以上的崩溃重新计数, 避免坏插件造成无限重启循环。
 	go func() {
 		select {
 		case <-api.Dead():
+			attempts := -1
 			s.mu.Lock()
 			if inst.status == pluginStatusRunning || inst.status == pluginStatusStarting {
 				inst.status = pluginStatusError
 				inst.errMsg = "插件进程意外退出"
+				if s.crashAttempts == nil {
+					s.crashAttempts = make(map[string]int)
+				}
+				if time.Since(inst.startedAt) > 90*time.Second {
+					s.crashAttempts[cand.id] = 0
+				}
+				s.crashAttempts[cand.id]++
+				attempts = s.crashAttempts[cand.id]
 			}
 			s.mu.Unlock()
 			s.emitRegistry()
+			if attempts > 0 {
+				CollectErrorMsg("plugin:"+cand.id, "crash", "插件进程意外退出")
+				s.scheduleRestart(cand.id, attempts)
+			}
 		case <-inst.done:
 		}
 	}()
@@ -667,6 +704,46 @@ func (s *PluginService) stopInstance(inst *pluginInstance) {
 	s.mu.Unlock()
 }
 
+// scheduleRestart 崩溃自愈调度: 指数退避(2s/4s/8s/16s, 最多 4 次重试)后重新拉起。
+// 放弃条件(任一): 服务已停 / 当前实例被替换或删除(重载/安装/卸载) / 已受控停止或禁用 /
+// 插件被禁用 / 重试次数耗尽。重启失败会继续退避(计数来自 crashAttempts)。
+func (s *PluginService) scheduleRestart(pluginID string, attempts int) {
+	const maxRetries = 4
+	if attempts > maxRetries {
+		s.logLine(fmt.Sprintf("%s: 连续崩溃 %d 次, 停止自动重启 (修复问题后手动重载可恢复)", pluginID, attempts))
+		return
+	}
+	delay := time.Duration(1<<uint(attempts-1)) * 2 * time.Second
+	s.logLine(fmt.Sprintf("%s: %v 后自动重启 (第 %d/%d 次尝试)", pluginID, delay, attempts, maxRetries))
+	time.AfterFunc(delay, func() {
+		s.mu.Lock()
+		if s.stopped {
+			s.mu.Unlock()
+			return
+		}
+		cur := s.instances[pluginID]
+		if cur == nil || cur.status != pluginStatusError {
+			// 已被重载/替换/卸载或受控停止: 现状比自愈动作更新, 不干预
+			s.mu.Unlock()
+			return
+		}
+		enabled := s.cfg.PluginEnabled(pluginID)
+		s.mu.Unlock()
+		if !enabled {
+			return
+		}
+		cand := s.rescanCandidate(cur)
+		if err := s.launch(cand); err != nil {
+			// 重启失败(常见: 二进制损坏/握手失败): 计数续增, 继续退避
+			s.mu.Lock()
+			next := s.crashAttempts[pluginID] + 1
+			s.crashAttempts[pluginID] = next
+			s.mu.Unlock()
+			s.scheduleRestart(pluginID, next)
+		}
+	})
+}
+
 // ==================== 注册表与事件 ====================
 
 // snapshot 注册表快照(调用方持锁)。已卸载的捆绑插件以 "uninstalled" 伪状态出现,
@@ -674,13 +751,23 @@ func (s *PluginService) stopInstance(inst *pluginInstance) {
 func (s *PluginService) snapshotLocked() []pluginSummary {
 	out := make([]pluginSummary, 0, len(s.instances))
 	for _, inst := range s.instances {
+		// info 为 nil 的实例真实存在(disabled/error 状态未经 Info 握手),
+		// 可变字段的读取必须先判空 —— 此处曾因在字面量里无条件解引用
+		// inst.info.Capabilities 导致注册表 emit 时 panic(应用启动崩溃)。
+		var caps []string
+		if inst.info != nil {
+			caps = inst.info.Capabilities
+		}
 		sum := pluginSummary{
-			ID:          inst.id,
-			DisplayName: inst.manifest.Name,
-			Version:     inst.manifest.Version,
-			Status:      inst.status,
-			Error:       inst.errMsg,
-			Bundled:     s.isBundled(inst.id),
+			ID:           inst.id,
+			DisplayName:  inst.manifest.Name,
+			Version:      inst.manifest.Version,
+			Status:       inst.status,
+			Error:        inst.errMsg,
+			Bundled:      s.isBundled(inst.id),
+			Docs:         inst.manifest.Docs,
+			ViewClickRPC: inst.manifest.ViewClickRPC,
+			Capabilities: caps,
 		}
 		if inst.info != nil {
 			sum.DisplayName = firstNonEmpty(inst.info.DisplayName, sum.DisplayName)
@@ -703,7 +790,7 @@ func (s *PluginService) snapshotLocked() []pluginSummary {
 		}
 		out = append(out, pluginSummary{
 			ID: mf.ID, DisplayName: mf.Name, Version: mf.Version,
-			Status: "uninstalled", Bundled: true,
+			Status: "uninstalled", Bundled: true, Docs: mf.Docs, ViewClickRPC: mf.ViewClickRPC,
 		})
 	}
 	return out
@@ -715,6 +802,7 @@ func (s *PluginService) PluginLoadReport(pluginID string, componentID string, ok
 		s.logLine(fmt.Sprintf("component %s/%s -> ok", pluginID, componentID))
 	} else {
 		s.logLine(fmt.Sprintf("component %s/%s -> FAIL: %s", pluginID, componentID, errMsg))
+		CollectErrorMsg("plugin:"+pluginID, "component-load-fail:"+componentID, errMsg)
 	}
 	return "{}"
 }
@@ -728,13 +816,21 @@ func (s *PluginService) PluginList() string {
 }
 
 // emitRegistry 推送注册表变更。
+// 载荷必须是 map: emit 内部会对 payload 再做一次 json.Marshal, 若传 string
+// 会双重编码 —— 前端 JSON.parse 一次后得到的是字符串而非对象, data.plugins
+// 恒为 undefined, 处理器静默丢弃, 注册表事件永远不生效(工具栏/面板不跟随)。
 func (s *PluginService) emitRegistry() {
 	s.mu.Lock()
-	data, err := json.Marshal(map[string]any{"plugins": s.snapshotLocked()})
+	snapshot := s.snapshotLocked()
 	s.mu.Unlock()
-	if err == nil {
-		s.emit("plugin-registry-changed", string(data))
-	}
+	s.emit("plugin-registry-changed", map[string]any{"plugins": snapshot})
+}
+
+// emitInvalidated 通知前端某插件已失效(重载/更新/禁用/卸载), 触发前端失效协议:
+// 组件缓存/ctx/订阅清空、标签页就地重建、注入样式移除。
+// 刻意不用注册表 diff 让前端猜语义 —— 宿主在每个失效点本来就知道答案。
+func (s *PluginService) emitInvalidated(pluginID, reason string) {
+	s.emit("plugin-invalidated", map[string]any{"id": pluginID, "reason": reason})
 }
 
 // emit 事件推送(拷贝自 McpService 的房式约定)。
@@ -753,13 +849,13 @@ func (s *PluginService) emit(name string, payload any) {
 
 // PluginCall 转发插件前端 → 插件后端的业务调用 (30s 超时)。
 func (s *PluginService) PluginCall(pluginID string, method string, argsJSON string) string {
-	inst := s.getInstance(pluginID)
-	if inst == nil || inst.api == nil || inst.status != pluginStatusRunning {
-		return `{"error":"插件未运行: ` + pluginID + `"}`
+	snap := s.getSnapshot(pluginID)
+	if snap == nil || snap.api == nil || snap.status != pluginStatusRunning {
+		return `{"error":` + mustJSONString("插件未运行: "+pluginID) + `}`
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	result, err := inst.api.Rpc(ctx, method, argsJSON)
+	result, err := snap.api.Rpc(ctx, method, argsJSON)
 	if err != nil {
 		return `{"error":` + mustJSONString(err.Error()) + `}`
 	}
@@ -771,9 +867,9 @@ func (s *PluginService) PluginCall(pluginID string, method string, argsJSON stri
 
 // PluginOpenTab 插件前端直达开签页入口 (与 HostService.OpenTab 同路)。
 func (s *PluginService) PluginOpenTab(pluginID string, specJSON string) string {
-	inst := s.getInstance(pluginID)
-	if inst == nil || inst.status != pluginStatusRunning {
-		return `{"error":"插件未运行: ` + pluginID + `"}`
+	snap := s.getSnapshot(pluginID)
+	if snap == nil || snap.status != pluginStatusRunning {
+		return `{"error":` + mustJSONString("插件未运行: "+pluginID) + `}`
 	}
 	var spec struct {
 		TabKey      string         `json:"tabKey"`
@@ -786,24 +882,29 @@ func (s *PluginService) PluginOpenTab(pluginID string, specJSON string) string {
 	if err := json.Unmarshal([]byte(specJSON), &spec); err != nil || spec.TabKey == "" || spec.ComponentID == "" {
 		return `{"error":"spec 无效: 需要 tabKey 与 componentId"}`
 	}
+	displayName, accent := pluginID, ""
+	if snap.info != nil {
+		displayName = snap.info.DisplayName
+		accent = snap.info.AccentColor
+	}
 	tabID := pluginTabID(pluginID, spec.TabKey)
 	s.emit("plugin-open-tab", map[string]any{
 		"pluginID":    pluginID,
 		"tabId":       tabID,
 		"tabKey":      spec.TabKey,
-		"title":       firstNonEmpty(spec.Title, inst.info.DisplayName),
+		"title":       firstNonEmpty(spec.Title, displayName),
 		"componentId": spec.ComponentID,
 		"props":       spec.Props,
 		"icon":        spec.Icon,
-		"color":       firstNonEmpty(spec.Color, inst.info.AccentColor),
+		"color":       firstNonEmpty(spec.Color, accent),
 	})
 	return mustJSON(map[string]any{"tabId": tabID})
 }
 
 // PluginNotifyTabEvent 前端回传标签页生命周期事件 (opened/activated/closed)。
 func (s *PluginService) PluginNotifyTabEvent(pluginID string, tabKey string, kind string) string {
-	inst := s.getInstance(pluginID)
-	if inst == nil || inst.api == nil || inst.status != pluginStatusRunning || tabKey == "" {
+	snap := s.getSnapshot(pluginID)
+	if snap == nil || snap.api == nil || snap.status != pluginStatusRunning || tabKey == "" {
 		return "{}"
 	}
 	switch kind {
@@ -814,24 +915,24 @@ func (s *PluginService) PluginNotifyTabEvent(pluginID string, tabKey string, kin
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		_ = inst.api.OnTabEvent(ctx, &pluginsdk.TabEvent{TabKey: tabKey, Kind: kind})
+		_ = snap.api.OnTabEvent(ctx, &pluginsdk.TabEvent{TabKey: tabKey, Kind: kind})
 	}()
 	return "{}"
 }
 
 // PluginSetViewVisible 侧栏面板显隐上报。
 func (s *PluginService) PluginSetViewVisible(pluginID string, viewID string, visible bool) string {
-	inst := s.getInstance(pluginID)
-	if inst == nil || inst.api == nil || inst.status != pluginStatusRunning || viewID == "" {
+	snap := s.getSnapshot(pluginID)
+	if snap == nil || snap.api == nil || snap.status != pluginStatusRunning || viewID == "" {
 		return "{}"
 	}
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if visible {
-			_ = inst.api.OnViewVisible(ctx, viewID)
+			_ = snap.api.OnViewVisible(ctx, viewID)
 		} else {
-			_ = inst.api.OnViewHidden(ctx, viewID)
+			_ = snap.api.OnViewHidden(ctx, viewID)
 		}
 	}()
 	return "{}"
@@ -841,13 +942,16 @@ func (s *PluginService) PluginSetViewVisible(pluginID string, viewID string, vis
 func (s *PluginService) PluginSetEnabled(pluginID string, enabled bool) string {
 	inst := s.getInstance(pluginID)
 	if inst == nil {
-		return `{"error":"未知插件: ` + pluginID + `"}`
+		return `{"error":` + mustJSONString("未知插件: "+pluginID) + `}`
 	}
 	out := s.cfg.SetPluginEnabled(pluginID, enabled)
 	if enabled {
 		cand := pluginCandidate{id: inst.id, dir: inst.dir, exePath: inst.exePath, manifest: inst.manifest}
 		go func() {
-			_ = s.launch(cand)
+			if err := s.launch(cand); err != nil {
+				// 用户点"启用"但拉起失败: 此前完全无痕, 注册表只显示 error 却查不到原因
+				CollectError("plugin:"+pluginID, "enable-launch", err)
+			}
 			s.emitRegistry()
 		}()
 	} else {
@@ -858,27 +962,62 @@ func (s *PluginService) PluginSetEnabled(pluginID string, enabled bool) string {
 		s.mu.Unlock()
 		s.stopInstance(inst)
 		s.emitRegistry()
+		s.emitInvalidated(pluginID, "disable")
 	}
 	return out
 }
 
 // PluginReload 重载单个插件(开发调试用)。
+// 先按磁盘现状刷新元数据再重启 —— 开发时插件目录常被外部脚本整体替换,
+// 沿用实例缓存值会让"重载"变成重启同一个旧二进制。
 func (s *PluginService) PluginReload(pluginID string) string {
 	inst := s.getInstance(pluginID)
 	if inst == nil {
-		return `{"error":"未知插件: ` + pluginID + `"}`
+		return `{"error":` + mustJSONString("未知插件: "+pluginID) + `}`
 	}
-	cand := pluginCandidate{id: inst.id, dir: inst.dir, exePath: inst.exePath, manifest: inst.manifest}
+	cand := s.rescanCandidate(inst)
+	if cand.manifest.Version != inst.manifest.Version {
+		s.logLine(fmt.Sprintf("重载 %s: 版本 %s → %s", pluginID, inst.manifest.Version, cand.manifest.Version))
+	}
 	s.stopInstance(inst)
 	if !s.cfg.PluginEnabled(pluginID) {
 		s.emitRegistry()
 		return "{}"
 	}
 	go func() {
-		_ = s.launch(cand)
+		err := s.launch(cand)
 		s.emitRegistry()
+		if err == nil {
+			// 重载成功: 通知前端换代(清缓存/重建标签页), 这是"热"的另一半
+			s.emitInvalidated(pluginID, "reload")
+		}
 	}()
 	return "{}"
+}
+
+// rescanCandidate 以磁盘现状刷新插件元数据(热加载用)。
+// 目录或清单不可用时退回实例缓存值 —— 宁可重启一个元数据陈旧的插件,
+// 也不要在重载时把插件判死(损坏的清单不该让用户失去一个还能跑的插件)。
+func (s *PluginService) rescanCandidate(inst *pluginInstance) pluginCandidate {
+	cand := pluginCandidate{id: inst.id, dir: inst.dir, exePath: inst.exePath, manifest: inst.manifest}
+	raw, err := os.ReadFile(filepath.Join(inst.dir, "plugin.json"))
+	if err != nil {
+		s.logLine(inst.id + ": 重载时读取 plugin.json 失败, 沿用缓存元数据: " + err.Error())
+		return cand
+	}
+	var mf pluginManifest
+	if json.Unmarshal(raw, &mf) != nil || mf.ID != inst.id || !pluginIDRe.MatchString(mf.ID) {
+		s.logLine(inst.id + ": 重载时 plugin.json 无效或 ID 不符, 沿用缓存元数据")
+		return cand
+	}
+	exeName := inst.id + exeSuffix()
+	if st, serr := os.Stat(filepath.Join(inst.dir, exeName)); serr != nil || st.IsDir() {
+		s.logLine(inst.id + ": 重载时缺少可执行文件 " + exeName + ", 沿用缓存元数据")
+		return cand
+	}
+	cand.manifest = mf
+	cand.exePath = filepath.Join(inst.dir, exeName)
+	return cand
 }
 
 // PluginOpenDir 打开插件安装目录(资源管理器)。
@@ -889,10 +1028,40 @@ func (s *PluginService) PluginOpenDir() string {
 }
 
 // getInstance 取运行中实例(快照)。
+// 仅限需要原地变更实例(stopInstance 等, 内部自持锁)或读取创建后不可变字段
+// (id/dir/exePath/manifest)的路径; 读可变字段(status/api/info)一律走 getSnapshot。
 func (s *PluginService) getInstance(pluginID string) *pluginInstance {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.instances[pluginID]
+}
+
+// pluginSnap 实例可变字段的锁内快照。
+// status/api/info 会被 launch/stopInstance 并发变更, 读路径若在锁外直取实例
+// 字段存在数据竞争(极端时序下对已置 nil 的 api 调方法会 panic)。
+type pluginSnap struct {
+	id       string
+	dir      string
+	exePath  string
+	manifest pluginManifest
+	api      *pluginsdk.PluginClient
+	status   string
+	info     *pluginsdk.PluginInfo
+}
+
+// getSnapshot 取实例快照(可变字段在锁内读取; 局部引用在实例停止后仍可安全
+// 发起调用 —— 命中已 Kill 的连接只会得到错误, 不会 nil panic)。
+func (s *PluginService) getSnapshot(pluginID string) *pluginSnap {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	inst := s.instances[pluginID]
+	if inst == nil {
+		return nil
+	}
+	return &pluginSnap{
+		id: inst.id, dir: inst.dir, exePath: inst.exePath, manifest: inst.manifest,
+		api: inst.api, status: inst.status, info: inst.info,
+	}
 }
 
 // ==================== 宿主反向能力服务 ====================
@@ -936,7 +1105,10 @@ func (h *hostServiceServer) OpenTab(ctx context.Context, req *pb.OpenTabRequest)
 	title := spec.GetTitle()
 	color := spec.GetColor()
 	var props map[string]any
-	_ = json.Unmarshal([]byte(spec.GetPropsJson()), &props)
+	if err := json.Unmarshal([]byte(spec.GetPropsJson()), &props); err != nil && strings.TrimSpace(spec.GetPropsJson()) != "" {
+		// 插件传了非法 props JSON: 视图照开但参数丢失, 属插件侧缺陷信号
+		CollectError("plugin:"+pluginID, "open-tab-props", err)
+	}
 	h.svc.mu.Lock()
 	if inst := h.svc.instances[pluginID]; inst != nil && inst.info != nil {
 		if title == "" {
@@ -1011,6 +1183,51 @@ func (h *hostServiceServer) EmitUIEvent(ctx context.Context, req *pb.EmitUIEvent
 	return &pb.EmitUIEventResponse{}, nil
 }
 
+// PluginNotifyLocale 界面语言变更广播: 对每个运行中插件调用 OnLocaleChanged
+// (旧版插件返回 UNIMPLEMENTED 时静默忽略), 并以新语言重新拉取 Info 刷新注册表,
+// 使显示名/视图标题即时本地化。前端在 SetLanguage 之后调用。
+func (s *PluginService) PluginNotifyLocale(locale string) string {
+	if strings.TrimSpace(locale) == "" {
+		return `{"error":"locale 必填"}`
+	}
+	s.mu.Lock()
+	insts := make([]*pluginInstance, 0, len(s.instances))
+	for _, inst := range s.instances {
+		if inst.status == pluginStatusRunning && inst.api != nil {
+			insts = append(insts, inst)
+		}
+	}
+	s.mu.Unlock()
+	// 并发广播: 单个插件卡死(5s 超时)不该拖慢其余插件的语言切换。
+	// 每实例独立超时, OnLocaleChanged 与 Info 各自一次, 互不挤占预算。
+	var wg sync.WaitGroup
+	for _, inst := range insts {
+		wg.Add(1)
+		go func(inst *pluginInstance) {
+			defer wg.Done()
+			nctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			if err := inst.api.OnLocaleChanged(nctx, locale); err != nil {
+				// 旧版插件未实现该 RPC: 静默忽略; 其余错误记日志
+				if !strings.Contains(err.Error(), "Unimplemented") && !strings.Contains(err.Error(), "unknown method") {
+					s.logLine(inst.id + ": OnLocaleChanged 失败: " + err.Error())
+					CollectError("plugin:"+inst.id, "on-locale-changed", err)
+				}
+			}
+			cancel()
+			ictx, icancel := context.WithTimeout(context.Background(), 5*time.Second)
+			if info, err := inst.api.Info(ictx, locale); err == nil {
+				s.mu.Lock()
+				inst.info = info
+				s.mu.Unlock()
+			}
+			icancel()
+		}(inst)
+	}
+	wg.Wait()
+	s.emitRegistry()
+	return "{}"
+}
+
 // pluginTabID 确定性标签页 ID: tabKey 即幂等键。
 func pluginTabID(pluginID, tabKey string) string {
 	return "plugin://" + pluginID + "/" + tabKey
@@ -1054,6 +1271,10 @@ func (s *PluginService) FrontendDiagLog(msg string) {
 		msg = msg[:4096]
 	}
 	s.logLine("[frontend] " + msg)
+	// 前端诊断中的失败/卡死信号同步进错误收集器
+	if strings.Contains(msg, "FAIL") || strings.Contains(msg, "HUNG") {
+		CollectErrorMsg("frontend", "diag", msg)
+	}
 }
 
 func randomToken() (string, error) {
