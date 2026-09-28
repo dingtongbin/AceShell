@@ -49,8 +49,18 @@ jobs:
       - name: 安装 wails3 与 task 工具
         shell: bash
         run: |
-          go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.3
-          go install github.com/go-task/task/v3/cmd/task@latest
+          # go install 编译工具链需访问 sum.golang.org 校验依赖, runner 上偶发
+          # HTTP/2 stream error(INTERNAL_ERROR) 瞬态故障, 加重试兜底。
+          retry() {
+            for i in 1 2 3; do
+              if "$@"; then return 0; fi
+              echo "install failed, retry $i/3: $*"
+              sleep 5
+            done
+            "$@"
+          }
+          retry go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.3
+          retry go install github.com/go-task/task/v3/cmd/task@latest
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
       - name: 生成 bindings
