@@ -8,13 +8,12 @@ import { NIcon, NTag, NSwitch, NButton, NPopconfirm, useMessage } from 'naive-ui
 import {
   ReloadOutline,
   TrashOutline,
-  RefreshCircleOutline,
   PulseOutline,
   DocumentTextOutline,
 } from '@vicons/ionicons5'
 import { useI18n } from 'vue-i18n'
 import { usePlugins, type PluginSummary } from '../composables/usePluginBridge'
-import { PluginSetEnabled, PluginReload, PluginUninstall, PluginRestoreBundled } from '../../bindings/changeme/internal/services/pluginservice.js'
+import { PluginSetEnabled, PluginReload, PluginUninstall } from '../../bindings/changeme/internal/services/pluginservice.js'
 import { renderMd } from '../utils/markdown'
 import { debounceClick } from '../utils/debounce'
 
@@ -29,7 +28,6 @@ const busy = ref<string>('')
 // 按钮统一 300ms 防抖
 const dReload = debounceClick(() => doReload())
 const dUninstall = debounceClick(() => doUninstall())
-const dRestore = debounceClick(() => doRestore())
 
 const summary = computed<PluginSummary | undefined>(() =>
   plugins.value.find(p => p.id === props.pluginID))
@@ -37,7 +35,7 @@ const summary = computed<PluginSummary | undefined>(() =>
 const views = computed(() => summary.value?.views ?? [])
 
 function statusText(p: PluginSummary): string {
-  const key = { running: 'plugins.statusRunning', starting: 'plugins.statusStarting', stopped: 'plugins.statusStopped', error: 'plugins.statusError', disabled: 'plugins.statusDisabled', uninstalled: 'plugins.statusUninstalled' }[p.status] || 'plugins.statusStopped'
+  const key = { running: 'plugins.statusRunning', starting: 'plugins.statusStarting', stopped: 'plugins.statusStopped', error: 'plugins.statusError', disabled: 'plugins.statusDisabled' }[p.status] || 'plugins.statusStopped'
   const text = t(key)
   return p.error ? `${text} · ${p.error}` : text
 }
@@ -72,14 +70,6 @@ function doUninstall() {
     const res = JSON.parse(await PluginUninstall(props.pluginID))
     if (res?.error) { message.error(String(res.error)); return }
     message.success(t('plugins.uninstalledOk', { id: props.pluginID }))
-  })
-}
-
-function doRestore() {
-  withBusy('restore', async () => {
-    const res = JSON.parse(await PluginRestoreBundled(props.pluginID))
-    if (res?.error) { message.error(String(res.error)); return }
-    message.success(t('plugins.restoredOk', { id: props.pluginID }))
   })
 }
 
@@ -139,7 +129,6 @@ watch([docPath, locale], loadDoc, { immediate: true })
         <div class="pdetail-name">
           {{ summary.displayName }}
           <n-tag size="tiny" :bordered="false">v{{ summary.version || '-' }}</n-tag>
-          <n-tag v-if="summary.bundled" size="tiny" :bordered="false" type="info">{{ t('plugins.bundled') }}</n-tag>
           <n-tag v-for="c in summary.capabilities || []" :key="c" size="tiny" :bordered="false" type="warning">{{ c }}</n-tag>
         </div>
           <div class="pdetail-id">{{ summary.id }}</div>
@@ -147,31 +136,23 @@ watch([docPath, locale], loadDoc, { immediate: true })
       </div>
 
       <div class="pdetail-actions">
-        <template v-if="summary.status === 'uninstalled'">
-          <n-button size="small" type="primary" :loading="busy === 'restore'" @click="dRestore">
-            <template #icon><n-icon :component="RefreshCircleOutline" /></template>
-            {{ t('plugins.restore') }}
-          </n-button>
-        </template>
-        <template v-else>
-          <div class="pdetail-switch">
-            <span class="pdetail-switch-label">{{ t('plugins.enabled') }}</span>
-            <n-switch size="small" :loading="busy === 'toggle'" :value="summary.status !== 'disabled'" @update:value="toggleEnabled" />
-          </div>
-          <n-button size="small" :loading="busy === 'reload'" :disabled="summary.status === 'disabled'" @click="dReload">
-            <template #icon><n-icon :component="ReloadOutline" /></template>
-            {{ t('plugins.reload') }}
-          </n-button>
-          <n-popconfirm placement="bottom" :width="260" :show-icon="false" @positive-click="dUninstall">
-            <template #trigger>
-              <n-button size="small" type="error" ghost :loading="busy === 'uninstall'">
-                <template #icon><n-icon :component="TrashOutline" /></template>
-                {{ t('plugins.uninstall') }}
-              </n-button>
-            </template>
-            {{ t('plugins.uninstallConfirm', { id: summary.id }) }}
-          </n-popconfirm>
-        </template>
+        <div class="pdetail-switch">
+          <span class="pdetail-switch-label">{{ t('plugins.enabled') }}</span>
+          <n-switch size="small" :loading="busy === 'toggle'" :value="summary.status !== 'disabled'" @update:value="toggleEnabled" />
+        </div>
+        <n-button size="small" :loading="busy === 'reload'" :disabled="summary.status === 'disabled'" @click="dReload">
+          <template #icon><n-icon :component="ReloadOutline" /></template>
+          {{ t('plugins.reload') }}
+        </n-button>
+        <n-popconfirm placement="bottom" :width="260" :show-icon="false" @positive-click="dUninstall">
+          <template #trigger>
+            <n-button size="small" type="error" ghost :loading="busy === 'uninstall'">
+              <template #icon><n-icon :component="TrashOutline" /></template>
+              {{ t('plugins.uninstall') }}
+            </n-button>
+          </template>
+          {{ t('plugins.uninstallConfirm', { id: summary.id }) }}
+        </n-popconfirm>
       </div>
 
       <div class="pdetail-status" :class="{ 'pdetail-status-error': summary.status === 'error' }">

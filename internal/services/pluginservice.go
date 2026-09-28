@@ -14,6 +14,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -39,7 +40,15 @@ import (
 //   - 插件前端产物(dist/)由本服务的资产处理器同源伺服 /plugins/<id>/..., 宿主前端动态 import
 const (
 	pluginAssetPort = 8941 // 插件资产回环端口(dev 下 Vite 代理指向此端口), 与 MCP 8940 同风格固定
+	// pluginEventMaxBytes 插件 → 前端事件/props 的单条载荷上限。
+	// 防失控/恶意插件用超大 payload 冲击前端事件通道。
+	pluginEventMaxBytes = 256 << 10
+	// pluginLogMaxBytes 插件运行日志(plugin-runs.log)单文件上限, 超过即轮转留档。
+	pluginLogMaxBytes = 5 << 20
 )
+
+// pluginRunsLogName 插件运行日志文件名(StartAll 打开与轮转共用, 避免两处字面量漂移)。
+const pluginRunsLogName = "plugin-runs.log"
 
 // 插件状态。
 const (
@@ -70,7 +79,9 @@ type PluginService struct {
 	assetLn     net.Listener
 	logFile     *os.File
 	logMu       sync.Mutex
-	stopped     bool
+	// logWritten 本轮轮转以来写入日志文件的字节数(近似大小, 达到上限即轮转)。
+	logWritten int
+	stopped    bool
 	// crashAttempts 插件连续意外崩溃计数(用于自愈退避; 稳定运行 90s 自动清零)。
 	crashAttempts map[string]int
 }
@@ -122,7 +133,6 @@ type pluginSummary struct {
 	AccentColor  string              `json:"accentColor,omitempty"`
 	Status       string              `json:"status"`
 	Error        string              `json:"error,omitempty"`
-	Bundled      bool                `json:"bundled"`
 	Docs         map[string]string   `json:"docs,omitempty"`
 	ViewClickRPC string              `json:"viewClickRpc,omitempty"`
 	Capabilities []string            `json:"capabilities,omitempty"`
@@ -162,9 +172,6 @@ func (s *PluginService) StartAll() {
 		s.logLine(fmt.Sprintf("清理插件目录残留 %d 项", n))
 	}
 
-	// 捆绑插件落盘/升级(须在扫描之前)
-	s.ensureBundledPlugins()
-
 	// 宿主反向能力服务(HostService): loopback 随机端口, 每插件独立令牌
 	if lis, err := net.Listen("tcp", "127.0.0.1:0"); err == nil {
 		s.hostSrv = grpc.NewServer(grpc.UnaryInterceptor(s.authInterceptor))
@@ -183,7 +190,11 @@ func (s *PluginService) StartAll() {
 		s.logLine(fmt.Sprintf("资产端口 %d 占用, dev 代理不可用: %v", pluginAssetPort, err))
 	}
 
-	if f, err := os.OpenFile(filepath.Join(DataDir(), "plugin-runs.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600); err == nil {
+	if f, err := os.OpenFile(filepath.Join(DataDir(), pluginRunsLogName), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600); err == nil {
+		// 以现有文件大小初始化计数, 跨启动持续遵守轮转上限
+		if st, serr := f.Stat(); serr == nil {
+			s.logWritten = int(st.Size())
+		}
 		s.logFile = f
 	}
 
@@ -746,8 +757,7 @@ func (s *PluginService) scheduleRestart(pluginID string, attempts int) {
 
 // ==================== 注册表与事件 ====================
 
-// snapshot 注册表快照(调用方持锁)。已卸载的捆绑插件以 "uninstalled" 伪状态出现,
-// 供设置页展示"恢复"入口。
+// snapshot 注册表快照(调用方持锁)。
 func (s *PluginService) snapshotLocked() []pluginSummary {
 	out := make([]pluginSummary, 0, len(s.instances))
 	for _, inst := range s.instances {
@@ -764,7 +774,6 @@ func (s *PluginService) snapshotLocked() []pluginSummary {
 			Version:      inst.manifest.Version,
 			Status:       inst.status,
 			Error:        inst.errMsg,
-			Bundled:      s.isBundled(inst.id),
 			Docs:         inst.manifest.Docs,
 			ViewClickRPC: inst.manifest.ViewClickRPC,
 			Capabilities: caps,
@@ -779,19 +788,6 @@ func (s *PluginService) snapshotLocked() []pluginSummary {
 			}
 		}
 		out = append(out, sum)
-	}
-	// 已卸载捆绑插件(目录已删, 元数据来自内置载荷)
-	for _, mf := range bundledManifests() {
-		if _, alive := s.instances[mf.ID]; alive {
-			continue
-		}
-		if !s.cfg.BundledUninstalled(mf.ID) {
-			continue
-		}
-		out = append(out, pluginSummary{
-			ID: mf.ID, DisplayName: mf.Name, Version: mf.Version,
-			Status: "uninstalled", Bundled: true, Docs: mf.Docs, ViewClickRPC: mf.ViewClickRPC,
-		})
 	}
 	return out
 }
@@ -878,6 +874,10 @@ func (s *PluginService) PluginOpenTab(pluginID string, specJSON string) string {
 		Props       map[string]any `json:"props"`
 		Icon        string         `json:"icon"`
 		Color       string         `json:"color"`
+	}
+	// spec 整体限长(props 是其大头): 与 EmitUIEvent 同一上限, 防超大 payload 冲击前端。
+	if len(specJSON) > pluginEventMaxBytes {
+		return `{"error":` + mustJSONString("spec 过大") + `}`
 	}
 	if err := json.Unmarshal([]byte(specJSON), &spec); err != nil || spec.TabKey == "" || spec.ComponentID == "" {
 		return `{"error":"spec 无效: 需要 tabKey 与 componentId"}`
@@ -1020,11 +1020,33 @@ func (s *PluginService) rescanCandidate(inst *pluginInstance) pluginCandidate {
 	return cand
 }
 
-// PluginOpenDir 打开插件安装目录(资源管理器)。
+// PluginOpenDir 打开插件安装目录(资源管理器/访达/文件管理器)。
+// 启动失败返回 error 而非静默: 用户点"打开目录"无任何反馈曾导致疑难排查。
 func (s *PluginService) PluginOpenDir() string {
 	_ = os.MkdirAll(PluginsDir(), 0700)
-	exec.Command("explorer.exe", PluginsDir()).Start()
+	if err := openPluginsDir(); err != nil {
+		CollectError("plugin-dir", "open-dir", err)
+		return `{"error":` + mustJSONString(err.Error()) + `}`
+	}
 	return "{}"
+}
+
+// openPluginsDir 跨平台打开插件目录(不硬编码 explorer.exe)。
+func openPluginsDir() error {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "windows":
+		cmd = exec.Command("explorer.exe", PluginsDir())
+	case "darwin":
+		cmd = exec.Command("open", PluginsDir())
+	default:
+		cmd = exec.Command("xdg-open", PluginsDir())
+	}
+	HideWindow(cmd)
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("打开插件目录失败: %w", err)
+	}
+	return nil
 }
 
 // getInstance 取运行中实例(快照)。
@@ -1100,6 +1122,9 @@ func (h *hostServiceServer) OpenTab(ctx context.Context, req *pb.OpenTabRequest)
 	if spec.GetTabKey() == "" || spec.GetComponentId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "tabKey 与 componentId 必填")
 	}
+	if len(spec.GetPropsJson()) > pluginEventMaxBytes {
+		return nil, status.Error(codes.InvalidArgument, "props 过大")
+	}
 	pluginID := callerID(ctx)
 	tabID := pluginTabID(pluginID, spec.GetTabKey())
 	title := spec.GetTitle()
@@ -1172,8 +1197,8 @@ func (h *hostServiceServer) EmitUIEvent(ctx context.Context, req *pb.EmitUIEvent
 	if strings.TrimSpace(req.GetPayloadJson()) == "" {
 		return nil, status.Error(codes.InvalidArgument, "payloadJson 必填")
 	}
-	// payload 原样透传(限长 256KB + 必须合法 JSON, 防误用拖垮前端事件通道)
-	if len(req.GetPayloadJson()) > 256<<10 {
+	// payload 原样透传(限长 + 必须合法 JSON, 防误用拖垮前端事件通道)
+	if len(req.GetPayloadJson()) > pluginEventMaxBytes {
 		return nil, status.Error(codes.InvalidArgument, "payload 过大")
 	}
 	if !json.Valid([]byte(req.GetPayloadJson())) {
@@ -1236,6 +1261,7 @@ func pluginTabID(pluginID, tabKey string) string {
 // ==================== 杂项 ====================
 
 // pluginLogWriter 插件 stdout/stderr → 数据目录 plugin-runs.log。
+// 写满 pluginLogMaxBytes 即轮转(旧文件留档 plugin-runs.old.log), 防止长期运行无限增长。
 type pluginLogWriter struct {
 	svc    *PluginService
 	prefix string
@@ -1252,7 +1278,26 @@ func (w *pluginLogWriter) Write(p []byte) (int, error) {
 	if n, err := w.svc.logFile.WriteString(ts + " " + w.prefix + string(p)); err != nil {
 		return n, err
 	}
+	w.svc.logWritten += len(p)
+	if w.svc.logWritten >= pluginLogMaxBytes {
+		w.svc.rotateLogLocked()
+	}
 	return len(p), nil
+}
+
+// rotateLogLocked 轮转插件运行日志(调用方须持 logMu): 当前文件改名留档, 重新开新文件。
+// 轮转失败降级为关闭日志(后续写入静默丢弃), 不阻塞插件运行路径。
+func (s *PluginService) rotateLogLocked() {
+	name := filepath.Join(DataDir(), pluginRunsLogName)
+	old := filepath.Join(DataDir(), "plugin-runs.old.log")
+	_ = s.logFile.Close()
+	_ = os.Remove(old)
+	_ = os.Rename(name, old)
+	s.logFile = nil
+	s.logWritten = 0
+	if f, err := os.OpenFile(name, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600); err == nil {
+		s.logFile = f
+	}
 }
 
 func (s *PluginService) logLine(line string) {

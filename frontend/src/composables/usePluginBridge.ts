@@ -25,10 +25,8 @@ export interface PluginSummary {
   version: string
   icon?: string
   accentColor?: string
-  status: 'starting' | 'running' | 'stopped' | 'error' | 'disabled' | 'uninstalled'
+  status: 'starting' | 'running' | 'stopped' | 'error' | 'disabled'
   error?: string
-  /** 是否随主程序捆绑内置 */
-  bundled?: boolean
   /** 文档钩子: locale → 插件目录内相对路径(md); 'default' 为兜底 */
   docs?: Record<string, string>
   /** 视图点击钩子: 声明后点活动栏图标 = 调此 RPC(打开/定位工具标签页), 不展开侧栏 */

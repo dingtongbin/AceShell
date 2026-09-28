@@ -15,18 +15,20 @@ AceShell 插件 = 独立进程 + 自包含前端产物, 经 [hashicorp/go-plugin
 ```
 
 - 安装方式: 手动放置, 或设置-插件页输入 `owner/repo` 从 GitHub Release 拉取
-  (资产命名约定: `aceshell-<id>-windows-amd64.zip`)。
+  (资产命名约定: `aceshell-<id>-windows-amd64.zip`), 或从本地 zip 包安装。
 - 前端产物由宿主**同源**伺服 `/plugins/<id>/dist/...`(dev 环境经 Vite 代理到宿主 8941 端口),
   宿主动态 `import()` 后直挂侧栏面板与标签页, CSS 变量/暗色/强调色自动联动。
 
-## 捆绑发布(发版内置插件)
+## 开发与构建
 
-主程序支持把插件嵌入二进制随版本发布(类似 PyCharm bundled plugins), 用户可在
-设置-插件页卸载(记录持久化, 应用升级不复活)或随时恢复:
+插件为独立进程, 不随主程序捆绑发布。开发 ping 示例插件:
 
-1. 插件载荷放入 `internal/services/pluginbundle/<id>/`(`pluginsdk/ping/build.ps1` 会自动完成);
-2. `wails3 task build` 已依赖 `plugins:build` 任务, 构建时自动嵌入;
-3. 启动时宿主自动落盘: 目录缺失即复制, 磁盘版本旧于内置版本即升级(用户卸载过的跳过)。
+```
+powershell -NoProfile -ExecutionPolicy Bypass -File pluginsdk\ping\build.ps1
+```
+
+脚本会构建前端产物与二进制, 部署到平台用户插件目录(重启/重载即生效), 并打包
+`aceshell-ping-<goos>-<goarch>.zip` release 资产(供 GitHub 安装器使用)。
 
 ## Go 插件最小实现
 
@@ -60,7 +62,7 @@ func main() { pluginsdk.Serve(&myPlugin{}) }
 ```
 
 完整真实示例(流式探测/EmitUIEvent/HostClient/生命周期): [`ping/`](ping/) ——
-AceShell 自带的 Ping 工具插件, 也是捆绑发布的参考实现。
+Ping 工具插件, 也是构建/打包/安装全流程的参考实现。
 
 ## 前端契约
 

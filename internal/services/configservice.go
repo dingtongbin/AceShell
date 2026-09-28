@@ -37,12 +37,10 @@ type mainConfigFile struct {
 	Language    string            `toml:"language" json:"language"`
 }
 
-// PluginsConfig 插件配置: 显式禁用表(未出现的插件默认启用)与捆绑插件卸载记录。
+// PluginsConfig 插件配置: 显式禁用表(未出现的插件默认启用)。
 type PluginsConfig struct {
 	// Enabled 插件ID → 是否启用。nil/缺项 = 启用; 显式 false = 禁用。
 	Enabled map[string]bool `toml:"enabled" json:"enabled"`
-	// UninstalledBundled 用户已卸载的捆绑插件 ID(发版升级后不复活)。
-	UninstalledBundled []string `toml:"uninstalledBundled" json:"uninstalledBundled"`
 }
 
 // McpConfig MCP 服务配置(令牌密文经 encryptSecret 加密,不含明文)。
@@ -637,42 +635,6 @@ func (c *ConfigService) SetPluginEnabled(pluginID string, enabled bool) string {
 	}
 	c.save()
 	return c.configJSONLocked()
-}
-
-// BundledUninstalled 查询捆绑插件是否已被用户卸载。
-func (c *ConfigService) BundledUninstalled(pluginID string) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	for _, id := range c.config.Plugins.UninstalledBundled {
-		if id == pluginID {
-			return true
-		}
-	}
-	return false
-}
-
-// SetBundledUninstalled 记录/撤销捆绑插件卸载状态并持久化(调用方负责落盘插件目录)。
-func (c *ConfigService) SetBundledUninstalled(pluginID string, uninstalled bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	list := c.config.Plugins.UninstalledBundled
-	out := list[:0]
-	if uninstalled {
-		for _, id := range list {
-			if id != pluginID {
-				out = append(out, id)
-			}
-		}
-		c.config.Plugins.UninstalledBundled = append(out, pluginID)
-	} else {
-		for _, id := range list {
-			if id != pluginID {
-				out = append(out, id)
-			}
-		}
-		c.config.Plugins.UninstalledBundled = out
-	}
-	c.save()
 }
 
 // SetSerialConfig 更新串口配置并持久化。

@@ -5,11 +5,10 @@
 //   → 底部统计行。
 // 数据直读注册表 ref(随 plugin-registry-changed 与失效协议自动刷新)。
 import { ref, computed } from 'vue'
-import { NIcon, NTag, NSwitch, NInput, NButton, NPopconfirm, NTooltip, useMessage } from 'naive-ui'
+import { NIcon, NSwitch, NInput, NButton, NPopconfirm, NTooltip, useMessage } from 'naive-ui'
 import {
   ReloadOutline,
   TrashOutline,
-  RefreshCircleOutline,
   FolderOpenOutline,
   SearchOutline,
   CaretDownOutline,
@@ -19,7 +18,7 @@ import {
 } from '@vicons/ionicons5'
 import { useI18n } from 'vue-i18n'
 import { usePlugins, type PluginSummary } from '../composables/usePluginBridge'
-import { PluginList, PluginSetEnabled, PluginReload, PluginUninstall, PluginRestoreBundled, PluginInstallFromGitHub, PluginInstallZip, PluginOpenDir } from '../../bindings/changeme/internal/services/pluginservice.js'
+import { PluginList, PluginSetEnabled, PluginReload, PluginUninstall, PluginInstallFromGitHub, PluginInstallZip, PluginOpenDir } from '../../bindings/changeme/internal/services/pluginservice.js'
 import { OpenFileDialog } from '../../bindings/changeme/internal/services/windowservice.js'
 import { debounceClick } from '../utils/debounce'
 
@@ -45,7 +44,6 @@ const collapsed = ref<Record<string, boolean>>({})
 const dToggle = debounceClick((id: string, v: boolean) => toggleEnabled(id, v))
 const dReload = debounceClick((id: string) => reload(id))
 const dUninstall = debounceClick((id: string) => uninstall(id))
-const dRestore = debounceClick((id: string) => restore(id))
 const dOpenDetail = debounceClick((id: string) => openDetailById(id))
 
 const filtered = computed(() => {
@@ -55,8 +53,6 @@ const filtered = computed(() => {
     p.id.toLowerCase().includes(kw) || p.displayName.toLowerCase().includes(kw))
 })
 
-const installedList = computed(() => filtered.value.filter(p => p.status !== 'uninstalled'))
-const uninstalledList = computed(() => filtered.value.filter(p => p.status === 'uninstalled'))
 const runningCount = computed(() => plugins.value.filter(p => p.status === 'running').length)
 
 function toggleSection(key: string) {
@@ -74,7 +70,7 @@ function openDetailById(id: string) {
 }
 
 function statusText(p: PluginSummary): string {
-  const key = { running: 'plugins.statusRunning', starting: 'plugins.statusStarting', stopped: 'plugins.statusStopped', error: 'plugins.statusError', disabled: 'plugins.statusDisabled', uninstalled: 'plugins.statusUninstalled' }[p.status] || 'plugins.statusStopped'
+  const key = { running: 'plugins.statusRunning', starting: 'plugins.statusStarting', stopped: 'plugins.statusStopped', error: 'plugins.statusError', disabled: 'plugins.statusDisabled' }[p.status] || 'plugins.statusStopped'
   const text = t(key)
   return p.error ? `${text} · ${p.error}` : text
 }
@@ -104,19 +100,6 @@ function uninstall(id: string) {
       const res = JSON.parse(raw)
       if (res?.error) { message.error(String(res.error)); return }
       message.success(t('plugins.uninstalledOk', { id }))
-    })
-    .catch((e: any) => message.error(String(e?.message || e)))
-    .finally(() => setTimeout(() => { delete busy.value[id] }, 1000))
-}
-
-function restore(id: string) {
-  if (busy.value[id]) return
-  busy.value[id] = 'restore'
-  PluginRestoreBundled(id)
-    .then(raw => {
-      const res = JSON.parse(raw)
-      if (res?.error) { message.error(String(res.error)); return }
-      message.success(t('plugins.restoredOk', { id }))
     })
     .catch((e: any) => message.error(String(e?.message || e)))
     .finally(() => setTimeout(() => { delete busy.value[id] }, 1000))
@@ -214,80 +197,48 @@ function openDir() {
     </div>
 
     <div class="pmgr-list">
-      <template v-if="installedList.length === 0 && uninstalledList.length === 0">
+      <template v-if="filtered.length === 0">
         <div class="pmgr-empty">{{ t('plugins.empty') }}</div>
       </template>
       <template v-else>
-        <template v-if="installedList.length > 0">
-          <button class="pmgr-section" @click="toggleSection('installed')">
-            <n-icon :size="12" :component="collapsed['installed'] ? CaretForwardOutline : CaretDownOutline" />
-            <span>{{ t('plugins.sectionInstalled') }}</span>
-            <span class="pmgr-section-count">{{ installedList.length }}</span>
-          </button>
-          <template v-if="!collapsed['installed']">
-            <div v-for="p in installedList" :key="p.id"
-              class="pmgr-item" :class="{ selected: selectedId === p.id }"
-              @click="dOpenDetail(p.id)">
-              <img v-if="p.icon" class="pmgr-icon" :src="p.icon" alt="" />
-              <div v-else class="pmgr-icon pmgr-icon-ph">{{ p.displayName.slice(0, 1) }}</div>
-              <div class="pmgr-main">
-                <div class="pmgr-name">
-                  <span class="pmgr-name-text">{{ p.displayName }}</span>
-                  <span class="pmgr-ver">v{{ p.version || '-' }}</span>
-                  <n-tag v-if="p.bundled" size="tiny" :bordered="false" type="info">{{ t('plugins.bundled') }}</n-tag>
-                </div>
-                <div class="pmgr-status" :class="{ 'pmgr-status-error': p.status === 'error' }">{{ statusText(p) }}</div>
+        <button class="pmgr-section" @click="toggleSection('installed')">
+          <n-icon :size="12" :component="collapsed['installed'] ? CaretForwardOutline : CaretDownOutline" />
+          <span>{{ t('plugins.sectionInstalled') }}</span>
+          <span class="pmgr-section-count">{{ filtered.length }}</span>
+        </button>
+        <template v-if="!collapsed['installed']">
+          <div v-for="p in filtered" :key="p.id"
+            class="pmgr-item" :class="{ selected: selectedId === p.id }"
+            @click="dOpenDetail(p.id)">
+            <img v-if="p.icon" class="pmgr-icon" :src="p.icon" alt="" />
+            <div v-else class="pmgr-icon pmgr-icon-ph">{{ p.displayName.slice(0, 1) }}</div>
+            <div class="pmgr-main">
+              <div class="pmgr-name">
+                <span class="pmgr-name-text">{{ p.displayName }}</span>
+                <span class="pmgr-ver">v{{ p.version || '-' }}</span>
               </div>
-              <div class="pmgr-actions" @click.stop>
-                <n-switch size="small" :loading="busy[p.id] === 'toggle'" :value="p.status !== 'disabled'" @update:value="(v: boolean) => dToggle(p.id, v)" />
-                <n-tooltip placement="bottom" trigger="hover" :delay="300">
-                  <template #trigger>
-                    <button class="pmgr-icon-btn" :disabled="busy[p.id] === 'reload' || p.status === 'disabled'" @click="dReload(p.id)">
-                      <n-icon :size="14" :component="ReloadOutline" />
-                    </button>
-                  </template>
-                  {{ t('plugins.reload') }}
-                </n-tooltip>
-                <n-popconfirm placement="bottom" :width="260" :show-icon="false" @positive-click="dUninstall(p.id)">
-                  <template #trigger>
-                    <button class="pmgr-icon-btn pmgr-danger" :disabled="busy[p.id] === 'uninstall'">
-                      <n-icon :size="14" :component="TrashOutline" />
-                    </button>
-                  </template>
-                  {{ t('plugins.uninstallConfirm', { id: p.id }) }}
-                </n-popconfirm>
-              </div>
+              <div class="pmgr-status" :class="{ 'pmgr-status-error': p.status === 'error' }">{{ statusText(p) }}</div>
             </div>
-          </template>
-        </template>
-
-        <template v-if="uninstalledList.length > 0">
-          <button class="pmgr-section" @click="toggleSection('uninstalled')">
-            <n-icon :size="12" :component="collapsed['uninstalled'] ? CaretForwardOutline : CaretDownOutline" />
-            <span>{{ t('plugins.sectionUninstalled') }}</span>
-            <span class="pmgr-section-count">{{ uninstalledList.length }}</span>
-          </button>
-          <template v-if="!collapsed['uninstalled']">
-            <div v-for="p in uninstalledList" :key="p.id"
-              class="pmgr-item pmgr-item-uninstalled" :class="{ selected: selectedId === p.id }"
-              @click="dOpenDetail(p.id)">
-              <img v-if="p.icon" class="pmgr-icon" :src="p.icon" alt="" />
-              <div v-else class="pmgr-icon pmgr-icon-ph">{{ p.displayName.slice(0, 1) }}</div>
-              <div class="pmgr-main">
-                <div class="pmgr-name">
-                  <span class="pmgr-name-text">{{ p.displayName }}</span>
-                  <span class="pmgr-ver">v{{ p.version || '-' }}</span>
-                </div>
-                <div class="pmgr-status">{{ statusText(p) }}</div>
-              </div>
-              <div class="pmgr-actions pmgr-actions-visible" @click.stop>
-                <n-button size="tiny" type="primary" quaternary :loading="busy[p.id] === 'restore'" @click="dRestore(p.id)">
-                  <template #icon><n-icon :component="RefreshCircleOutline" /></template>
-                  {{ t('plugins.restore') }}
-                </n-button>
-              </div>
+            <div class="pmgr-actions" @click.stop>
+              <n-switch size="small" :loading="busy[p.id] === 'toggle'" :value="p.status !== 'disabled'" @update:value="(v: boolean) => dToggle(p.id, v)" />
+              <n-tooltip placement="bottom" trigger="hover" :delay="300">
+                <template #trigger>
+                  <button class="pmgr-icon-btn" :disabled="busy[p.id] === 'reload' || p.status === 'disabled'" @click="dReload(p.id)">
+                    <n-icon :size="14" :component="ReloadOutline" />
+                  </button>
+                </template>
+                {{ t('plugins.reload') }}
+              </n-tooltip>
+              <n-popconfirm placement="bottom" :width="260" :show-icon="false" @positive-click="dUninstall(p.id)">
+                <template #trigger>
+                  <button class="pmgr-icon-btn pmgr-danger" :disabled="busy[p.id] === 'uninstall'">
+                    <n-icon :size="14" :component="TrashOutline" />
+                  </button>
+                </template>
+                {{ t('plugins.uninstallConfirm', { id: p.id }) }}
+              </n-popconfirm>
             </div>
-          </template>
+          </div>
         </template>
       </template>
     </div>
@@ -424,9 +375,6 @@ function openDir() {
 .pmgr-item.selected {
   border-color: var(--primary-color);
 }
-.pmgr-item-uninstalled {
-  opacity: 0.7;
-}
 
 .pmgr-icon {
   width: 40px;
@@ -487,9 +435,6 @@ function openDir() {
   opacity: 0;
   transition: opacity 0.12s;
   flex-shrink: 0;
-}
-.pmgr-actions-visible {
-  opacity: 1;
 }
 
 .pmgr-empty {
