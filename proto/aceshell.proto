@@ -34,9 +34,17 @@ service AcePlugin {
   rpc OnTabEvent(TabEvent) returns (TabEventResponse);
   // 通用业务通道: 插件前端 (经宿主转发) 与宿主扩展能力都走这里, JSON 进出。
   rpc Rpc(RpcRequest) returns (RpcResponse);
+  // 界面语言变更通知。宿主在用户切换语言后对每个运行中插件调用;
+  // 插件应更新自身展示文案, 宿主随后会以新 locale 重新拉取 Info 并刷新注册表。
+  // (旧版插件未实现本方法时宿主静默忽略 —— UNIMPLEMENTED 视为不支持。)
+  rpc OnLocaleChanged(LocaleChangedRequest) returns (LocaleChangedResponse);
 }
 
-message InfoRequest {}
+message InfoRequest {
+  // 宿主当前界面语言 (BCP-47, 如 zh-CN / en-US)。插件应据此返回本地化的
+  // display_name / views 标题; 不支持该语言时返回默认文案。
+  string locale = 1;
+}
 
 message PluginInfo {
   string id = 1;            // 插件唯一 ID (须与安装目录名一致), [a-z0-9-]
@@ -45,7 +53,14 @@ message PluginInfo {
   string icon = 4;          // 侧栏图标: SVG 文本或 dataURI (image/svg+xml / image/png)
   string accent_color = 5;  // 可选主题色 (CSS color), 用于标签页着色等
   repeated ViewInfo views = 6;
+  // 插件声明的能力标签 (可选, 如 "terminal" / "fs" / "net"), 供宿主展示与未来按能力门控。
+  repeated string capabilities = 7;
 }
+
+message LocaleChangedRequest {
+  string locale = 1; // 新界面语言 (BCP-47)
+}
+message LocaleChangedResponse {}
 
 message ViewInfo {
   string id = 1;           // 视图 ID (插件内唯一)

@@ -78,3 +78,45 @@
   font-size: 11px;
   color: var(--icon-color);
 }
+
+/* ---------- 工作台标签页(tool) ---------- */
+.aceshell-plugin-ping .ppt-form { flex-wrap: wrap; }
+.aceshell-plugin-ping .ppt-host { flex: 2; }
+.aceshell-plugin-ping .ppt-field { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--icon-color); }
+.aceshell-plugin-ping .ppt-num { width: 64px; }
+.aceshell-plugin-ping .ppt-cards { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+.aceshell-plugin-ping .ppt-card { border: 1px solid var(--border-color); border-radius: 6px; padding: 6px 8px; display: flex; flex-direction: column; gap: 2px; }
+.aceshell-plugin-ping .ppt-card span { font-size: 10px; color: var(--icon-color); }
+.aceshell-plugin-ping .ppt-card b { font-size: 14px; font-weight: 600; }
+.aceshell-plugin-ping .ppt-card b i { font-style: normal; font-size: 10px; color: var(--icon-color); margin-left: 2px; }
+.aceshell-plugin-ping .ppt-chartwrap { position: relative; height: 180px; border: 1px solid var(--border-color); border-radius: 6px; background: rgba(128, 128, 128, 0.06); overflow: hidden; flex-shrink: 0; }
+.aceshell-plugin-ping .ppt-chart { position: absolute; inset: 0; width: 100%; height: 100%; }
+.aceshell-plugin-ping .ppt-chart-labels { position: absolute; left: 0; top: 0; bottom: 0; width: 46px; pointer-events: none; }
+.aceshell-plugin-ping .ppt-chart-labels span { position: absolute; left: 4px; font-size: 9px; color: var(--icon-color); }
+.aceshell-plugin-ping .ppt-chart-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 11px; color: var(--icon-color); }
+.aceshell-plugin-ping .ppt-live-badge { position: absolute; top: 6px; right: 8px; font-size: 9px; font-weight: 700; letter-spacing: .1em; color: var(--danger-color); border: 1px solid var(--danger-color); border-radius: 4px; padding: 1px 5px; animation: ppt-pulse 1.2s ease-in-out infinite; }
+@keyframes ppt-pulse { 50% { opacity: .35; } }
+.aceshell-plugin-ping .ppt-record-bar { position: absolute; top: 0; left: 0; right: 0; display: flex; justify-content: space-between; align-items: center; padding: 4px 8px; background: rgba(128, 128, 128, 0.12); font-size: 11px; }
+.aceshell-plugin-ping .ppt-bottom { display: flex; gap: 8px; flex: 1; min-height: 0; }
+.aceshell-plugin-ping .ppt-log { flex: 1.4; }
+.aceshell-plugin-ping .ppt-history { flex: 1; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.aceshell-plugin-ping .ppt-hist-head { display: flex; justify-content: space-between; align-items: center; font-size: 11px; color: var(--icon-color); }
+.aceshell-plugin-ping .ppt-select { flex: 1; min-height: 0; border-radius: 6px; border: 1px solid var(--border-color); background: rgba(128, 128, 128, 0.06); color: var(--text-color); font-size: 11px; padding: 4px; outline: none; }
+.aceshell-plugin-ping .ppt-select option { background: var(--body-bg); color: var(--text-color); }
+.aceshell-plugin-ping .pp-warn { color: var(--warning-color, #e0a24b); }
+
+/* ---------- 侧栏历史面板(pph) 与公共按钮(pm-btn) ---------- */
+.aceshell-plugin-ping .pm-btn { height: 24px; padding: 0 10px; border: 1px solid var(--border-color); border-radius: 6px; background: transparent; color: var(--text-color); font-size: 11px; cursor: pointer; white-space: nowrap; transition: background .12s, border-color .12s; }
+.aceshell-plugin-ping .pm-btn:hover { background: rgba(128, 128, 128, 0.1); border-color: var(--primary-color); }
+.aceshell-plugin-ping .pm-btn.danger { color: var(--danger-color); border-color: var(--danger-color); }
+.aceshell-plugin-ping .pm-btn.danger:hover { background: rgba(226, 75, 75, 0.12); }
+.aceshell-plugin-ping .pph { gap: 8px; }
+.aceshell-plugin-ping .pph-head { display: flex; justify-content: space-between; align-items: center; }
+.aceshell-plugin-ping .pph-title { font-size: 12px; font-weight: 600; }
+.aceshell-plugin-ping .pph-list { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
+.aceshell-plugin-ping .pph-item { border: 1px solid var(--border-color); border-radius: 6px; padding: 7px 9px; cursor: pointer; transition: border-color .12s, background .12s; }
+.aceshell-plugin-ping .pph-item:hover { border-color: var(--primary-color); background: rgba(128, 128, 128, 0.06); }
+.aceshell-plugin-ping .pph-target { font-size: 12px; font-weight: 500; }
+.aceshell-plugin-ping .pph-meta { display: flex; gap: 8px; font-size: 10px; color: var(--icon-color); margin-top: 3px; flex-wrap: wrap; }
+.aceshell-plugin-ping .pph-clear { width: 100%; }
+.aceshell-plugin-ping .pph-clear.armed { color: var(--danger-color); border-color: var(--danger-color); }

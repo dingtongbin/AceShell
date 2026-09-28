@@ -4,6 +4,36 @@
 
 ## [Unreleased]
 
+### 新增
+
+- **MCP 危险指令字典可配置**：设置页 MCP 新增「危险指令字典」编辑区（每行一条正则），命中的指令即拦截并自动挂起 MCP；清空全部并保存即恢复内置默认字典（原三级分级中的 blocked 规则集）；配置逐条正则校验后持久化（`mcp.toml`），即时生效
+- **MCP 设置页 UI 重构**：对齐设置页其他标签页的设计语言——控件统一 `size="small"`、标签 13px/说明 11px/值 12-13px、`setting-item` 两端对齐布局与分组分隔线；危险字典改多行文本域编辑（等宽字体 + 规则计数），日志列表加高、过滤器精简为 全部/拦截/放行；消除此前字体过小、单行堆砌过多的问题
+- **全局错误收集器**：基于 `rs/zerolog`（结构化 JSON）+ `natefinch/lumberjack`（按大小轮转）新增错误日志服务——落盘 `<数据目录>/errors/errors.log`（10MB 轮转、保留 7 份 / 30 天）、内存环形缓冲 300 条供查询、新错误实时推送前端（`app-error-collected` 事件）；提供 `CollectError`/`CollectErrorMsg`/`CollectPanic` 包级入口（nil 容忍零开销），并已接入插件启动/崩溃/自愈放弃、插件安装/卸载、MCP 命令执行失败与审计落盘失败、宿主 gRPC/资产端口、RDP/VNC 桥、主密钥迁移写回、前端诊断 FAIL/HUNG 等此前被静默吞掉的错误路径
+- **GitHub 插件安装 SHA256 强校验**：Release 附带 checksums 文件（`checksums.txt` / `SHA256SUMS` 等命名）时下载后强制核对哈希，不匹配或缺失条目即拒绝安装；未提供 checksums 时降级记日志放行
+
+### 变更
+
+- **MCP 分级简化为两级模型**：移除 confirm/safe 白名单与敏感路径升级逻辑，仅保留「绝对危险拦截 + 其余放行」；未知命令不再默认要求确认，统一经可控操作时延放行（延迟窗口内可随时挂起/抢占）；`Pause()` 不再区分触发来源；删除死事件注册 `mcp-approval-requested`/`mcp-approval-removed`
+- **MCP 审计日志只记录智能体执行**：移除全部 system 来源的生命周期记录（启停/挂起恢复/操作权授予抢占/令牌重置/参数变更等 15 处），日志过滤器同步移除来源维度；HTTP 服务异常退出改走错误收集器
+- **移除自定义分级规则功能**：删除三级分级中的用户自定义规则（优先级/风险值/备注逐行编辑）与全部 confirm 人工审批遗留；`mcp.toml` 旧 `customRules` 节自动失效，无兼容包袱
+
+### 安全加固
+
+- **MCP Bearer Token 常量时间比较**：鉴权改用 `crypto/subtle`，防计时侧信道逐字节探测令牌
+- **MCP HTTP 服务超时**：`http.Server` 增加 `ReadHeaderTimeout`(10s) 与 `IdleTimeout`(120s)，不设 Read/WriteTimeout 以保长流式响应
+- **事件载荷 JSON 注入收尾**：插件未启动/未知插件等动态 pluginID 的错误响应全部改 `mustJSONString` 转义，杜绝引号注入
+
+### 缺陷修复
+
+- **MCP 控制按钮伪错误提示**：开关/挂起/恢复/重置令牌/保存参数/保存危险字典一律把成功响应（statusMap/配置 JSON）误判为错误弹出 `[object Object]`；统一改为仅 `{"error":...}` 才提示，成功即时用返回状态刷新本地 UI（不再依赖事件时序），恢复令牌/保存参数的成功提示得以正常显示
+- **MCP 开关行按钮精简**：移除与开关关闭完全等价的「停止」按钮，保留 状态标签 + 开关 + 挂起/恢复（挂起为独立语义：保留端口令牌但拒绝新请求）
+- **插件注册表空指针崩溃(P0)**：`snapshotLocked` 无条件解引用 `inst.info.Capabilities`，disabled/error 状态实例（未经 Info 握手）触发注册表 emit 时 panic 致应用启动即崩；改为判空取值并补回归测试
+- **插件服务锁外读竞态**：`PluginCall`/`PluginOpenTab`/`PluginNotifyTabEvent`/`PluginSetViewVisible` 改为锁内快照读取 status/api，消除与启停并发时的数据竞争
+- **语言广播串行阻塞**：`PluginNotifyLocale` 改并发广播（每插件独立 5s 超时），单个插件卡死不再拖慢整体语言切换；OnLocaleChanged 失败接入错误收集
+- **版本比较预发布号**：`compareVersion` 截断 `-` 后预发布号（`1.2.3-beta` 按 `1.2.3` 比较），修复捆绑插件升级判定随机结果
+- **MCP 前端执行失败漏审计**：命令执行失败（`res.Err`）补审计条目（decision=failed）并接入错误收集，面板失败统计与真实结果对齐
+- **审计落盘失败静默**：审计文件打开/轮转/写入失败接入错误收集，写失败后重置句柄下条自动重开
+
 ## [0.2.3] - 2026-08-29
 
 ### 变更

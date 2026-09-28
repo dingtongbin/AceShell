@@ -34,7 +34,12 @@ const DispenseName = "plugin"
 // AcePlugin 插件实现的完整钩子集。
 type AcePlugin interface {
 	// Info 返回插件元数据与侧栏视图注册清单。宿主握手后立即调用。
-	Info(ctx context.Context) (*PluginInfo, error)
+	// locale 为宿主当前界面语言 (BCP-47, 如 zh-CN/en-US); 应据此返回本地化文案,
+	// 不支持该语言时返回默认文案。宿主语言切换后会重新调用 Info 并刷新注册表。
+	Info(ctx context.Context, locale string) (*PluginInfo, error)
+	// OnLocaleChanged 用户切换界面语言 (宿主对每个运行中插件调用)。
+	// 插件应更新自身展示文案; 宿主随后重新拉取 Info。
+	OnLocaleChanged(ctx context.Context, locale string) error
 	// Start 生命周期开始; host 携带宿主版本、插件私有数据目录与 HostService 端点/令牌。
 	Start(ctx context.Context, host *HostContext) error
 	// Shutdown 生命周期结束 (宿主退出/插件禁用/更新前), 应尽快收尾返回。
@@ -50,12 +55,13 @@ type AcePlugin interface {
 
 // PluginInfo 插件元数据 (注册侧栏图标/视图)。
 type PluginInfo struct {
-	ID          string     `json:"id"`
-	DisplayName string     `json:"displayName"`
-	Version     string     `json:"version"`
-	Icon        string     `json:"icon,omitempty"`        // SVG 文本或 dataURI
-	AccentColor string     `json:"accentColor,omitempty"` // 可选主题色 (CSS color)
-	Views       []ViewInfo `json:"views,omitempty"`
+	ID           string     `json:"id"`
+	DisplayName  string     `json:"displayName"`
+	Version      string     `json:"version"`
+	Icon         string     `json:"icon,omitempty"`        // SVG 文本或 dataURI
+	AccentColor  string     `json:"accentColor,omitempty"` // 可选主题色 (CSS color)
+	Views        []ViewInfo `json:"views,omitempty"`
+	Capabilities []string   `json:"capabilities,omitempty"` // 能力标签声明 (供宿主展示/门控)
 }
 
 // ViewInfo 侧栏视图注册项。
@@ -104,8 +110,8 @@ type pbServer struct {
 	impl AcePlugin
 }
 
-func (s *pbServer) Info(ctx context.Context, _ *pb.InfoRequest) (*pb.PluginInfo, error) {
-	info, err := s.impl.Info(ctx)
+func (s *pbServer) Info(ctx context.Context, req *pb.InfoRequest) (*pb.PluginInfo, error) {
+	info, err := s.impl.Info(ctx, req.GetLocale())
 	if err != nil {
 		return nil, err
 	}
@@ -115,11 +121,17 @@ func (s *pbServer) Info(ctx context.Context, _ *pb.InfoRequest) (*pb.PluginInfo,
 		Version:     info.Version,
 		Icon:        info.Icon,
 		AccentColor: info.AccentColor,
+		Capabilities: info.Capabilities,
 	}
 	for _, v := range info.Views {
 		out.Views = append(out.Views, &pb.ViewInfo{Id: v.ID, Title: v.Title, Icon: v.Icon, ComponentId: v.ComponentID})
 	}
 	return out, nil
+}
+
+func (s *pbServer) OnLocaleChanged(ctx context.Context, req *pb.LocaleChangedRequest) (*pb.LocaleChangedResponse, error) {
+	err := s.impl.OnLocaleChanged(ctx, req.GetLocale())
+	return &pb.LocaleChangedResponse{}, err
 }
 
 func (s *pbServer) Start(ctx context.Context, req *pb.StartRequest) (*pb.StartResponse, error) {

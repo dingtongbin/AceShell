@@ -37,7 +37,10 @@ const (
 )
 
 type InfoRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 宿主当前界面语言 (BCP-47, 如 zh-CN / en-US)。插件应据此返回本地化的
+	// display_name / views 标题; 不支持该语言时返回默认文案。
+	Locale        string `protobuf:"bytes,1,opt,name=locale,proto3" json:"locale,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -72,14 +75,23 @@ func (*InfoRequest) Descriptor() ([]byte, []int) {
 	return file_aceshell_proto_rawDescGZIP(), []int{0}
 }
 
+func (x *InfoRequest) GetLocale() string {
+	if x != nil {
+		return x.Locale
+	}
+	return ""
+}
+
 type PluginInfo struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`                                      // 插件唯一 ID (须与安装目录名一致), [a-z0-9-]
-	DisplayName   string                 `protobuf:"bytes,2,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"` // 显示名
-	Version       string                 `protobuf:"bytes,3,opt,name=version,proto3" json:"version,omitempty"`
-	Icon          string                 `protobuf:"bytes,4,opt,name=icon,proto3" json:"icon,omitempty"`                                  // 侧栏图标: SVG 文本或 dataURI (image/svg+xml / image/png)
-	AccentColor   string                 `protobuf:"bytes,5,opt,name=accent_color,json=accentColor,proto3" json:"accent_color,omitempty"` // 可选主题色 (CSS color), 用于标签页着色等
-	Views         []*ViewInfo            `protobuf:"bytes,6,rep,name=views,proto3" json:"views,omitempty"`
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	Id          string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`                                      // 插件唯一 ID (须与安装目录名一致), [a-z0-9-]
+	DisplayName string                 `protobuf:"bytes,2,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"` // 显示名
+	Version     string                 `protobuf:"bytes,3,opt,name=version,proto3" json:"version,omitempty"`
+	Icon        string                 `protobuf:"bytes,4,opt,name=icon,proto3" json:"icon,omitempty"`                                  // 侧栏图标: SVG 文本或 dataURI (image/svg+xml / image/png)
+	AccentColor string                 `protobuf:"bytes,5,opt,name=accent_color,json=accentColor,proto3" json:"accent_color,omitempty"` // 可选主题色 (CSS color), 用于标签页着色等
+	Views       []*ViewInfo            `protobuf:"bytes,6,rep,name=views,proto3" json:"views,omitempty"`
+	// 插件声明的能力标签 (可选, 如 "terminal" / "fs" / "net"), 供宿主展示与未来按能力门控。
+	Capabilities  []string `protobuf:"bytes,7,rep,name=capabilities,proto3" json:"capabilities,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -156,6 +168,93 @@ func (x *PluginInfo) GetViews() []*ViewInfo {
 	return nil
 }
 
+func (x *PluginInfo) GetCapabilities() []string {
+	if x != nil {
+		return x.Capabilities
+	}
+	return nil
+}
+
+type LocaleChangedRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Locale        string                 `protobuf:"bytes,1,opt,name=locale,proto3" json:"locale,omitempty"` // 新界面语言 (BCP-47)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *LocaleChangedRequest) Reset() {
+	*x = LocaleChangedRequest{}
+	mi := &file_aceshell_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *LocaleChangedRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*LocaleChangedRequest) ProtoMessage() {}
+
+func (x *LocaleChangedRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_aceshell_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use LocaleChangedRequest.ProtoReflect.Descriptor instead.
+func (*LocaleChangedRequest) Descriptor() ([]byte, []int) {
+	return file_aceshell_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *LocaleChangedRequest) GetLocale() string {
+	if x != nil {
+		return x.Locale
+	}
+	return ""
+}
+
+type LocaleChangedResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *LocaleChangedResponse) Reset() {
+	*x = LocaleChangedResponse{}
+	mi := &file_aceshell_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *LocaleChangedResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*LocaleChangedResponse) ProtoMessage() {}
+
+func (x *LocaleChangedResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_aceshell_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use LocaleChangedResponse.ProtoReflect.Descriptor instead.
+func (*LocaleChangedResponse) Descriptor() ([]byte, []int) {
+	return file_aceshell_proto_rawDescGZIP(), []int{3}
+}
+
 type ViewInfo struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`                                      // 视图 ID (插件内唯一)
@@ -168,7 +267,7 @@ type ViewInfo struct {
 
 func (x *ViewInfo) Reset() {
 	*x = ViewInfo{}
-	mi := &file_aceshell_proto_msgTypes[2]
+	mi := &file_aceshell_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -180,7 +279,7 @@ func (x *ViewInfo) String() string {
 func (*ViewInfo) ProtoMessage() {}
 
 func (x *ViewInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_aceshell_proto_msgTypes[2]
+	mi := &file_aceshell_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -193,7 +292,7 @@ func (x *ViewInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ViewInfo.ProtoReflect.Descriptor instead.
 func (*ViewInfo) Descriptor() ([]byte, []int) {
-	return file_aceshell_proto_rawDescGZIP(), []int{2}
+	return file_aceshell_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *ViewInfo) GetId() string {
@@ -236,7 +335,7 @@ type StartRequest struct {
 
 func (x *StartRequest) Reset() {
 	*x = StartRequest{}
-	mi := &file_aceshell_proto_msgTypes[3]
+	mi := &file_aceshell_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -248,7 +347,7 @@ func (x *StartRequest) String() string {
 func (*StartRequest) ProtoMessage() {}
 
 func (x *StartRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_aceshell_proto_msgTypes[3]
+	mi := &file_aceshell_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -261,7 +360,7 @@ func (x *StartRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StartRequest.ProtoReflect.Descriptor instead.
 func (*StartRequest) Descriptor() ([]byte, []int) {
-	return file_aceshell_proto_rawDescGZIP(), []int{3}
+	return file_aceshell_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *StartRequest) GetHostVersion() string {
@@ -300,7 +399,7 @@ type StartResponse struct {
 
 func (x *StartResponse) Reset() {
 	*x = StartResponse{}
-	mi := &file_aceshell_proto_msgTypes[4]
+	mi := &file_aceshell_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -312,7 +411,7 @@ func (x *StartResponse) String() string {
 func (*StartResponse) ProtoMessage() {}
 
 func (x *StartResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_aceshell_proto_msgTypes[4]
+	mi := &file_aceshell_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -325,7 +424,7 @@ func (x *StartResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StartResponse.ProtoReflect.Descriptor instead.
 func (*StartResponse) Descriptor() ([]byte, []int) {
-	return file_aceshell_proto_rawDescGZIP(), []int{4}
+	return file_aceshell_proto_rawDescGZIP(), []int{6}
 }
 
 type ShutdownRequest struct {
@@ -336,7 +435,7 @@ type ShutdownRequest struct {
 
 func (x *ShutdownRequest) Reset() {
 	*x = ShutdownRequest{}
-	mi := &file_aceshell_proto_msgTypes[5]
+	mi := &file_aceshell_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -348,7 +447,7 @@ func (x *ShutdownRequest) String() string {
 func (*ShutdownRequest) ProtoMessage() {}
 
 func (x *ShutdownRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_aceshell_proto_msgTypes[5]
+	mi := &file_aceshell_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -361,7 +460,7 @@ func (x *ShutdownRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ShutdownRequest.ProtoReflect.Descriptor instead.
 func (*ShutdownRequest) Descriptor() ([]byte, []int) {
-	return file_aceshell_proto_rawDescGZIP(), []int{5}
+	return file_aceshell_proto_rawDescGZIP(), []int{7}
 }
 
 type ShutdownResponse struct {
@@ -372,7 +471,7 @@ type ShutdownResponse struct {
 
 func (x *ShutdownResponse) Reset() {
 	*x = ShutdownResponse{}
-	mi := &file_aceshell_proto_msgTypes[6]
+	mi := &file_aceshell_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -384,7 +483,7 @@ func (x *ShutdownResponse) String() string {
 func (*ShutdownResponse) ProtoMessage() {}
 
 func (x *ShutdownResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_aceshell_proto_msgTypes[6]
+	mi := &file_aceshell_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -397,7 +496,7 @@ func (x *ShutdownResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ShutdownResponse.ProtoReflect.Descriptor instead.
 func (*ShutdownResponse) Descriptor() ([]byte, []int) {
-	return file_aceshell_proto_rawDescGZIP(), []int{6}
+	return file_aceshell_proto_rawDescGZIP(), []int{8}
 }
 
 type ViewVisibleRequest struct {
@@ -409,7 +508,7 @@ type ViewVisibleRequest struct {
 
 func (x *ViewVisibleRequest) Reset() {
 	*x = ViewVisibleRequest{}
-	mi := &file_aceshell_proto_msgTypes[7]
+	mi := &file_aceshell_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -421,7 +520,7 @@ func (x *ViewVisibleRequest) String() string {
 func (*ViewVisibleRequest) ProtoMessage() {}
 
 func (x *ViewVisibleRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_aceshell_proto_msgTypes[7]
+	mi := &file_aceshell_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -434,7 +533,7 @@ func (x *ViewVisibleRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ViewVisibleRequest.ProtoReflect.Descriptor instead.
 func (*ViewVisibleRequest) Descriptor() ([]byte, []int) {
-	return file_aceshell_proto_rawDescGZIP(), []int{7}
+	return file_aceshell_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *ViewVisibleRequest) GetViewId() string {
@@ -452,7 +551,7 @@ type ViewVisibleResponse struct {
 
 func (x *ViewVisibleResponse) Reset() {
 	*x = ViewVisibleResponse{}
-	mi := &file_aceshell_proto_msgTypes[8]
+	mi := &file_aceshell_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -464,7 +563,7 @@ func (x *ViewVisibleResponse) String() string {
 func (*ViewVisibleResponse) ProtoMessage() {}
 
 func (x *ViewVisibleResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_aceshell_proto_msgTypes[8]
+	mi := &file_aceshell_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -477,7 +576,7 @@ func (x *ViewVisibleResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ViewVisibleResponse.ProtoReflect.Descriptor instead.
 func (*ViewVisibleResponse) Descriptor() ([]byte, []int) {
-	return file_aceshell_proto_rawDescGZIP(), []int{8}
+	return file_aceshell_proto_rawDescGZIP(), []int{10}
 }
 
 type ViewHiddenRequest struct {
@@ -489,7 +588,7 @@ type ViewHiddenRequest struct {
 
 func (x *ViewHiddenRequest) Reset() {
 	*x = ViewHiddenRequest{}
-	mi := &file_aceshell_proto_msgTypes[9]
+	mi := &file_aceshell_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -501,7 +600,7 @@ func (x *ViewHiddenRequest) String() string {
 func (*ViewHiddenRequest) ProtoMessage() {}
 
 func (x *ViewHiddenRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_aceshell_proto_msgTypes[9]
+	mi := &file_aceshell_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -514,7 +613,7 @@ func (x *ViewHiddenRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ViewHiddenRequest.ProtoReflect.Descriptor instead.
 func (*ViewHiddenRequest) Descriptor() ([]byte, []int) {
-	return file_aceshell_proto_rawDescGZIP(), []int{9}
+	return file_aceshell_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *ViewHiddenRequest) GetViewId() string {
@@ -532,7 +631,7 @@ type ViewHiddenResponse struct {
 
 func (x *ViewHiddenResponse) Reset() {
 	*x = ViewHiddenResponse{}
-	mi := &file_aceshell_proto_msgTypes[10]
+	mi := &file_aceshell_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -544,7 +643,7 @@ func (x *ViewHiddenResponse) String() string {
 func (*ViewHiddenResponse) ProtoMessage() {}
 
 func (x *ViewHiddenResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_aceshell_proto_msgTypes[10]
+	mi := &file_aceshell_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -557,7 +656,7 @@ func (x *ViewHiddenResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ViewHiddenResponse.ProtoReflect.Descriptor instead.
 func (*ViewHiddenResponse) Descriptor() ([]byte, []int) {
-	return file_aceshell_proto_rawDescGZIP(), []int{10}
+	return file_aceshell_proto_rawDescGZIP(), []int{12}
 }
 
 type TabEvent struct {
@@ -570,7 +669,7 @@ type TabEvent struct {
 
 func (x *TabEvent) Reset() {
 	*x = TabEvent{}
-	mi := &file_aceshell_proto_msgTypes[11]
+	mi := &file_aceshell_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -582,7 +681,7 @@ func (x *TabEvent) String() string {
 func (*TabEvent) ProtoMessage() {}
 
 func (x *TabEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_aceshell_proto_msgTypes[11]
+	mi := &file_aceshell_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -595,7 +694,7 @@ func (x *TabEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TabEvent.ProtoReflect.Descriptor instead.
 func (*TabEvent) Descriptor() ([]byte, []int) {
-	return file_aceshell_proto_rawDescGZIP(), []int{11}
+	return file_aceshell_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *TabEvent) GetTabKey() string {
@@ -620,7 +719,7 @@ type TabEventResponse struct {
 
 func (x *TabEventResponse) Reset() {
 	*x = TabEventResponse{}
-	mi := &file_aceshell_proto_msgTypes[12]
+	mi := &file_aceshell_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -632,7 +731,7 @@ func (x *TabEventResponse) String() string {
 func (*TabEventResponse) ProtoMessage() {}
 
 func (x *TabEventResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_aceshell_proto_msgTypes[12]
+	mi := &file_aceshell_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -645,7 +744,7 @@ func (x *TabEventResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TabEventResponse.ProtoReflect.Descriptor instead.
 func (*TabEventResponse) Descriptor() ([]byte, []int) {
-	return file_aceshell_proto_rawDescGZIP(), []int{12}
+	return file_aceshell_proto_rawDescGZIP(), []int{14}
 }
 
 type RpcRequest struct {
@@ -658,7 +757,7 @@ type RpcRequest struct {
 
 func (x *RpcRequest) Reset() {
 	*x = RpcRequest{}
-	mi := &file_aceshell_proto_msgTypes[13]
+	mi := &file_aceshell_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -670,7 +769,7 @@ func (x *RpcRequest) String() string {
 func (*RpcRequest) ProtoMessage() {}
 
 func (x *RpcRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_aceshell_proto_msgTypes[13]
+	mi := &file_aceshell_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -683,7 +782,7 @@ func (x *RpcRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RpcRequest.ProtoReflect.Descriptor instead.
 func (*RpcRequest) Descriptor() ([]byte, []int) {
-	return file_aceshell_proto_rawDescGZIP(), []int{13}
+	return file_aceshell_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *RpcRequest) GetMethod() string {
@@ -710,7 +809,7 @@ type RpcResponse struct {
 
 func (x *RpcResponse) Reset() {
 	*x = RpcResponse{}
-	mi := &file_aceshell_proto_msgTypes[14]
+	mi := &file_aceshell_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -722,7 +821,7 @@ func (x *RpcResponse) String() string {
 func (*RpcResponse) ProtoMessage() {}
 
 func (x *RpcResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_aceshell_proto_msgTypes[14]
+	mi := &file_aceshell_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -735,7 +834,7 @@ func (x *RpcResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RpcResponse.ProtoReflect.Descriptor instead.
 func (*RpcResponse) Descriptor() ([]byte, []int) {
-	return file_aceshell_proto_rawDescGZIP(), []int{14}
+	return file_aceshell_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *RpcResponse) GetResultJson() string {
@@ -761,7 +860,7 @@ type OpenTabRequest struct {
 
 func (x *OpenTabRequest) Reset() {
 	*x = OpenTabRequest{}
-	mi := &file_aceshell_proto_msgTypes[15]
+	mi := &file_aceshell_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -773,7 +872,7 @@ func (x *OpenTabRequest) String() string {
 func (*OpenTabRequest) ProtoMessage() {}
 
 func (x *OpenTabRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_aceshell_proto_msgTypes[15]
+	mi := &file_aceshell_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -786,7 +885,7 @@ func (x *OpenTabRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OpenTabRequest.ProtoReflect.Descriptor instead.
 func (*OpenTabRequest) Descriptor() ([]byte, []int) {
-	return file_aceshell_proto_rawDescGZIP(), []int{15}
+	return file_aceshell_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *OpenTabRequest) GetSpec() *TabSpec {
@@ -805,7 +904,7 @@ type OpenTabResponse struct {
 
 func (x *OpenTabResponse) Reset() {
 	*x = OpenTabResponse{}
-	mi := &file_aceshell_proto_msgTypes[16]
+	mi := &file_aceshell_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -817,7 +916,7 @@ func (x *OpenTabResponse) String() string {
 func (*OpenTabResponse) ProtoMessage() {}
 
 func (x *OpenTabResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_aceshell_proto_msgTypes[16]
+	mi := &file_aceshell_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -830,7 +929,7 @@ func (x *OpenTabResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OpenTabResponse.ProtoReflect.Descriptor instead.
 func (*OpenTabResponse) Descriptor() ([]byte, []int) {
-	return file_aceshell_proto_rawDescGZIP(), []int{16}
+	return file_aceshell_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *OpenTabResponse) GetTabId() string {
@@ -854,7 +953,7 @@ type TabSpec struct {
 
 func (x *TabSpec) Reset() {
 	*x = TabSpec{}
-	mi := &file_aceshell_proto_msgTypes[17]
+	mi := &file_aceshell_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -866,7 +965,7 @@ func (x *TabSpec) String() string {
 func (*TabSpec) ProtoMessage() {}
 
 func (x *TabSpec) ProtoReflect() protoreflect.Message {
-	mi := &file_aceshell_proto_msgTypes[17]
+	mi := &file_aceshell_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -879,7 +978,7 @@ func (x *TabSpec) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TabSpec.ProtoReflect.Descriptor instead.
 func (*TabSpec) Descriptor() ([]byte, []int) {
-	return file_aceshell_proto_rawDescGZIP(), []int{17}
+	return file_aceshell_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *TabSpec) GetTabKey() string {
@@ -933,7 +1032,7 @@ type CloseTabRequest struct {
 
 func (x *CloseTabRequest) Reset() {
 	*x = CloseTabRequest{}
-	mi := &file_aceshell_proto_msgTypes[18]
+	mi := &file_aceshell_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -945,7 +1044,7 @@ func (x *CloseTabRequest) String() string {
 func (*CloseTabRequest) ProtoMessage() {}
 
 func (x *CloseTabRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_aceshell_proto_msgTypes[18]
+	mi := &file_aceshell_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -958,7 +1057,7 @@ func (x *CloseTabRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CloseTabRequest.ProtoReflect.Descriptor instead.
 func (*CloseTabRequest) Descriptor() ([]byte, []int) {
-	return file_aceshell_proto_rawDescGZIP(), []int{18}
+	return file_aceshell_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *CloseTabRequest) GetTabKey() string {
@@ -977,7 +1076,7 @@ type CloseTabResponse struct {
 
 func (x *CloseTabResponse) Reset() {
 	*x = CloseTabResponse{}
-	mi := &file_aceshell_proto_msgTypes[19]
+	mi := &file_aceshell_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -989,7 +1088,7 @@ func (x *CloseTabResponse) String() string {
 func (*CloseTabResponse) ProtoMessage() {}
 
 func (x *CloseTabResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_aceshell_proto_msgTypes[19]
+	mi := &file_aceshell_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1002,7 +1101,7 @@ func (x *CloseTabResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CloseTabResponse.ProtoReflect.Descriptor instead.
 func (*CloseTabResponse) Descriptor() ([]byte, []int) {
-	return file_aceshell_proto_rawDescGZIP(), []int{19}
+	return file_aceshell_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *CloseTabResponse) GetClosed() bool {
@@ -1022,7 +1121,7 @@ type SetTabTitleRequest struct {
 
 func (x *SetTabTitleRequest) Reset() {
 	*x = SetTabTitleRequest{}
-	mi := &file_aceshell_proto_msgTypes[20]
+	mi := &file_aceshell_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1034,7 +1133,7 @@ func (x *SetTabTitleRequest) String() string {
 func (*SetTabTitleRequest) ProtoMessage() {}
 
 func (x *SetTabTitleRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_aceshell_proto_msgTypes[20]
+	mi := &file_aceshell_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1047,7 +1146,7 @@ func (x *SetTabTitleRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetTabTitleRequest.ProtoReflect.Descriptor instead.
 func (*SetTabTitleRequest) Descriptor() ([]byte, []int) {
-	return file_aceshell_proto_rawDescGZIP(), []int{20}
+	return file_aceshell_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *SetTabTitleRequest) GetTabKey() string {
@@ -1072,7 +1171,7 @@ type SetTabTitleResponse struct {
 
 func (x *SetTabTitleResponse) Reset() {
 	*x = SetTabTitleResponse{}
-	mi := &file_aceshell_proto_msgTypes[21]
+	mi := &file_aceshell_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1084,7 +1183,7 @@ func (x *SetTabTitleResponse) String() string {
 func (*SetTabTitleResponse) ProtoMessage() {}
 
 func (x *SetTabTitleResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_aceshell_proto_msgTypes[21]
+	mi := &file_aceshell_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1097,7 +1196,7 @@ func (x *SetTabTitleResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetTabTitleResponse.ProtoReflect.Descriptor instead.
 func (*SetTabTitleResponse) Descriptor() ([]byte, []int) {
-	return file_aceshell_proto_rawDescGZIP(), []int{21}
+	return file_aceshell_proto_rawDescGZIP(), []int{23}
 }
 
 type ShowToastRequest struct {
@@ -1110,7 +1209,7 @@ type ShowToastRequest struct {
 
 func (x *ShowToastRequest) Reset() {
 	*x = ShowToastRequest{}
-	mi := &file_aceshell_proto_msgTypes[22]
+	mi := &file_aceshell_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1122,7 +1221,7 @@ func (x *ShowToastRequest) String() string {
 func (*ShowToastRequest) ProtoMessage() {}
 
 func (x *ShowToastRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_aceshell_proto_msgTypes[22]
+	mi := &file_aceshell_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1135,7 +1234,7 @@ func (x *ShowToastRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ShowToastRequest.ProtoReflect.Descriptor instead.
 func (*ShowToastRequest) Descriptor() ([]byte, []int) {
-	return file_aceshell_proto_rawDescGZIP(), []int{22}
+	return file_aceshell_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *ShowToastRequest) GetMessage() string {
@@ -1160,7 +1259,7 @@ type ShowToastResponse struct {
 
 func (x *ShowToastResponse) Reset() {
 	*x = ShowToastResponse{}
-	mi := &file_aceshell_proto_msgTypes[23]
+	mi := &file_aceshell_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1172,7 +1271,7 @@ func (x *ShowToastResponse) String() string {
 func (*ShowToastResponse) ProtoMessage() {}
 
 func (x *ShowToastResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_aceshell_proto_msgTypes[23]
+	mi := &file_aceshell_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1185,7 +1284,7 @@ func (x *ShowToastResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ShowToastResponse.ProtoReflect.Descriptor instead.
 func (*ShowToastResponse) Descriptor() ([]byte, []int) {
-	return file_aceshell_proto_rawDescGZIP(), []int{23}
+	return file_aceshell_proto_rawDescGZIP(), []int{25}
 }
 
 type ListSessionsRequest struct {
@@ -1196,7 +1295,7 @@ type ListSessionsRequest struct {
 
 func (x *ListSessionsRequest) Reset() {
 	*x = ListSessionsRequest{}
-	mi := &file_aceshell_proto_msgTypes[24]
+	mi := &file_aceshell_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1208,7 +1307,7 @@ func (x *ListSessionsRequest) String() string {
 func (*ListSessionsRequest) ProtoMessage() {}
 
 func (x *ListSessionsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_aceshell_proto_msgTypes[24]
+	mi := &file_aceshell_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1221,7 +1320,7 @@ func (x *ListSessionsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSessionsRequest.ProtoReflect.Descriptor instead.
 func (*ListSessionsRequest) Descriptor() ([]byte, []int) {
-	return file_aceshell_proto_rawDescGZIP(), []int{24}
+	return file_aceshell_proto_rawDescGZIP(), []int{26}
 }
 
 type ListSessionsResponse struct {
@@ -1233,7 +1332,7 @@ type ListSessionsResponse struct {
 
 func (x *ListSessionsResponse) Reset() {
 	*x = ListSessionsResponse{}
-	mi := &file_aceshell_proto_msgTypes[25]
+	mi := &file_aceshell_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1245,7 +1344,7 @@ func (x *ListSessionsResponse) String() string {
 func (*ListSessionsResponse) ProtoMessage() {}
 
 func (x *ListSessionsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_aceshell_proto_msgTypes[25]
+	mi := &file_aceshell_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1258,7 +1357,7 @@ func (x *ListSessionsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSessionsResponse.ProtoReflect.Descriptor instead.
 func (*ListSessionsResponse) Descriptor() ([]byte, []int) {
-	return file_aceshell_proto_rawDescGZIP(), []int{25}
+	return file_aceshell_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *ListSessionsResponse) GetSessionsJson() string {
@@ -1277,7 +1376,7 @@ type EmitUIEventRequest struct {
 
 func (x *EmitUIEventRequest) Reset() {
 	*x = EmitUIEventRequest{}
-	mi := &file_aceshell_proto_msgTypes[26]
+	mi := &file_aceshell_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1289,7 +1388,7 @@ func (x *EmitUIEventRequest) String() string {
 func (*EmitUIEventRequest) ProtoMessage() {}
 
 func (x *EmitUIEventRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_aceshell_proto_msgTypes[26]
+	mi := &file_aceshell_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1302,7 +1401,7 @@ func (x *EmitUIEventRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EmitUIEventRequest.ProtoReflect.Descriptor instead.
 func (*EmitUIEventRequest) Descriptor() ([]byte, []int) {
-	return file_aceshell_proto_rawDescGZIP(), []int{26}
+	return file_aceshell_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *EmitUIEventRequest) GetPayloadJson() string {
@@ -1320,7 +1419,7 @@ type EmitUIEventResponse struct {
 
 func (x *EmitUIEventResponse) Reset() {
 	*x = EmitUIEventResponse{}
-	mi := &file_aceshell_proto_msgTypes[27]
+	mi := &file_aceshell_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1332,7 +1431,7 @@ func (x *EmitUIEventResponse) String() string {
 func (*EmitUIEventResponse) ProtoMessage() {}
 
 func (x *EmitUIEventResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_aceshell_proto_msgTypes[27]
+	mi := &file_aceshell_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1345,15 +1444,16 @@ func (x *EmitUIEventResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EmitUIEventResponse.ProtoReflect.Descriptor instead.
 func (*EmitUIEventResponse) Descriptor() ([]byte, []int) {
-	return file_aceshell_proto_rawDescGZIP(), []int{27}
+	return file_aceshell_proto_rawDescGZIP(), []int{29}
 }
 
 var File_aceshell_proto protoreflect.FileDescriptor
 
 const file_aceshell_proto_rawDesc = "" +
 	"\n" +
-	"\x0eaceshell.proto\x12\x12aceshell.plugin.v1\"\r\n" +
-	"\vInfoRequest\"\xc4\x01\n" +
+	"\x0eaceshell.proto\x12\x12aceshell.plugin.v1\"%\n" +
+	"\vInfoRequest\x12\x16\n" +
+	"\x06locale\x18\x01 \x01(\tR\x06locale\"\xe8\x01\n" +
 	"\n" +
 	"PluginInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12!\n" +
@@ -1361,7 +1461,11 @@ const file_aceshell_proto_rawDesc = "" +
 	"\aversion\x18\x03 \x01(\tR\aversion\x12\x12\n" +
 	"\x04icon\x18\x04 \x01(\tR\x04icon\x12!\n" +
 	"\faccent_color\x18\x05 \x01(\tR\vaccentColor\x122\n" +
-	"\x05views\x18\x06 \x03(\v2\x1c.aceshell.plugin.v1.ViewInfoR\x05views\"g\n" +
+	"\x05views\x18\x06 \x03(\v2\x1c.aceshell.plugin.v1.ViewInfoR\x05views\x12\"\n" +
+	"\fcapabilities\x18\a \x03(\tR\fcapabilities\".\n" +
+	"\x14LocaleChangedRequest\x12\x16\n" +
+	"\x06locale\x18\x01 \x01(\tR\x06locale\"\x17\n" +
+	"\x15LocaleChangedResponse\"g\n" +
 	"\bViewInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12\x12\n" +
@@ -1422,7 +1526,7 @@ const file_aceshell_proto_rawDesc = "" +
 	"\rsessions_json\x18\x01 \x01(\tR\fsessionsJson\"7\n" +
 	"\x12EmitUIEventRequest\x12!\n" +
 	"\fpayload_json\x18\x01 \x01(\tR\vpayloadJson\"\x15\n" +
-	"\x13EmitUIEventResponse2\xd4\x04\n" +
+	"\x13EmitUIEventResponse2\xbc\x05\n" +
 	"\tAcePlugin\x12G\n" +
 	"\x04Info\x12\x1f.aceshell.plugin.v1.InfoRequest\x1a\x1e.aceshell.plugin.v1.PluginInfo\x12L\n" +
 	"\x05Start\x12 .aceshell.plugin.v1.StartRequest\x1a!.aceshell.plugin.v1.StartResponse\x12U\n" +
@@ -1431,7 +1535,8 @@ const file_aceshell_proto_rawDesc = "" +
 	"\fOnViewHidden\x12%.aceshell.plugin.v1.ViewHiddenRequest\x1a&.aceshell.plugin.v1.ViewHiddenResponse\x12P\n" +
 	"\n" +
 	"OnTabEvent\x12\x1c.aceshell.plugin.v1.TabEvent\x1a$.aceshell.plugin.v1.TabEventResponse\x12F\n" +
-	"\x03Rpc\x12\x1e.aceshell.plugin.v1.RpcRequest\x1a\x1f.aceshell.plugin.v1.RpcResponse2\xb5\x04\n" +
+	"\x03Rpc\x12\x1e.aceshell.plugin.v1.RpcRequest\x1a\x1f.aceshell.plugin.v1.RpcResponse\x12f\n" +
+	"\x0fOnLocaleChanged\x12(.aceshell.plugin.v1.LocaleChangedRequest\x1a).aceshell.plugin.v1.LocaleChangedResponse2\xb5\x04\n" +
 	"\vHostService\x12R\n" +
 	"\aOpenTab\x12\".aceshell.plugin.v1.OpenTabRequest\x1a#.aceshell.plugin.v1.OpenTabResponse\x12U\n" +
 	"\bCloseTab\x12#.aceshell.plugin.v1.CloseTabRequest\x1a$.aceshell.plugin.v1.CloseTabResponse\x12^\n" +
@@ -1452,68 +1557,72 @@ func file_aceshell_proto_rawDescGZIP() []byte {
 	return file_aceshell_proto_rawDescData
 }
 
-var file_aceshell_proto_msgTypes = make([]protoimpl.MessageInfo, 28)
+var file_aceshell_proto_msgTypes = make([]protoimpl.MessageInfo, 30)
 var file_aceshell_proto_goTypes = []any{
-	(*InfoRequest)(nil),          // 0: aceshell.plugin.v1.InfoRequest
-	(*PluginInfo)(nil),           // 1: aceshell.plugin.v1.PluginInfo
-	(*ViewInfo)(nil),             // 2: aceshell.plugin.v1.ViewInfo
-	(*StartRequest)(nil),         // 3: aceshell.plugin.v1.StartRequest
-	(*StartResponse)(nil),        // 4: aceshell.plugin.v1.StartResponse
-	(*ShutdownRequest)(nil),      // 5: aceshell.plugin.v1.ShutdownRequest
-	(*ShutdownResponse)(nil),     // 6: aceshell.plugin.v1.ShutdownResponse
-	(*ViewVisibleRequest)(nil),   // 7: aceshell.plugin.v1.ViewVisibleRequest
-	(*ViewVisibleResponse)(nil),  // 8: aceshell.plugin.v1.ViewVisibleResponse
-	(*ViewHiddenRequest)(nil),    // 9: aceshell.plugin.v1.ViewHiddenRequest
-	(*ViewHiddenResponse)(nil),   // 10: aceshell.plugin.v1.ViewHiddenResponse
-	(*TabEvent)(nil),             // 11: aceshell.plugin.v1.TabEvent
-	(*TabEventResponse)(nil),     // 12: aceshell.plugin.v1.TabEventResponse
-	(*RpcRequest)(nil),           // 13: aceshell.plugin.v1.RpcRequest
-	(*RpcResponse)(nil),          // 14: aceshell.plugin.v1.RpcResponse
-	(*OpenTabRequest)(nil),       // 15: aceshell.plugin.v1.OpenTabRequest
-	(*OpenTabResponse)(nil),      // 16: aceshell.plugin.v1.OpenTabResponse
-	(*TabSpec)(nil),              // 17: aceshell.plugin.v1.TabSpec
-	(*CloseTabRequest)(nil),      // 18: aceshell.plugin.v1.CloseTabRequest
-	(*CloseTabResponse)(nil),     // 19: aceshell.plugin.v1.CloseTabResponse
-	(*SetTabTitleRequest)(nil),   // 20: aceshell.plugin.v1.SetTabTitleRequest
-	(*SetTabTitleResponse)(nil),  // 21: aceshell.plugin.v1.SetTabTitleResponse
-	(*ShowToastRequest)(nil),     // 22: aceshell.plugin.v1.ShowToastRequest
-	(*ShowToastResponse)(nil),    // 23: aceshell.plugin.v1.ShowToastResponse
-	(*ListSessionsRequest)(nil),  // 24: aceshell.plugin.v1.ListSessionsRequest
-	(*ListSessionsResponse)(nil), // 25: aceshell.plugin.v1.ListSessionsResponse
-	(*EmitUIEventRequest)(nil),   // 26: aceshell.plugin.v1.EmitUIEventRequest
-	(*EmitUIEventResponse)(nil),  // 27: aceshell.plugin.v1.EmitUIEventResponse
+	(*InfoRequest)(nil),           // 0: aceshell.plugin.v1.InfoRequest
+	(*PluginInfo)(nil),            // 1: aceshell.plugin.v1.PluginInfo
+	(*LocaleChangedRequest)(nil),  // 2: aceshell.plugin.v1.LocaleChangedRequest
+	(*LocaleChangedResponse)(nil), // 3: aceshell.plugin.v1.LocaleChangedResponse
+	(*ViewInfo)(nil),              // 4: aceshell.plugin.v1.ViewInfo
+	(*StartRequest)(nil),          // 5: aceshell.plugin.v1.StartRequest
+	(*StartResponse)(nil),         // 6: aceshell.plugin.v1.StartResponse
+	(*ShutdownRequest)(nil),       // 7: aceshell.plugin.v1.ShutdownRequest
+	(*ShutdownResponse)(nil),      // 8: aceshell.plugin.v1.ShutdownResponse
+	(*ViewVisibleRequest)(nil),    // 9: aceshell.plugin.v1.ViewVisibleRequest
+	(*ViewVisibleResponse)(nil),   // 10: aceshell.plugin.v1.ViewVisibleResponse
+	(*ViewHiddenRequest)(nil),     // 11: aceshell.plugin.v1.ViewHiddenRequest
+	(*ViewHiddenResponse)(nil),    // 12: aceshell.plugin.v1.ViewHiddenResponse
+	(*TabEvent)(nil),              // 13: aceshell.plugin.v1.TabEvent
+	(*TabEventResponse)(nil),      // 14: aceshell.plugin.v1.TabEventResponse
+	(*RpcRequest)(nil),            // 15: aceshell.plugin.v1.RpcRequest
+	(*RpcResponse)(nil),           // 16: aceshell.plugin.v1.RpcResponse
+	(*OpenTabRequest)(nil),        // 17: aceshell.plugin.v1.OpenTabRequest
+	(*OpenTabResponse)(nil),       // 18: aceshell.plugin.v1.OpenTabResponse
+	(*TabSpec)(nil),               // 19: aceshell.plugin.v1.TabSpec
+	(*CloseTabRequest)(nil),       // 20: aceshell.plugin.v1.CloseTabRequest
+	(*CloseTabResponse)(nil),      // 21: aceshell.plugin.v1.CloseTabResponse
+	(*SetTabTitleRequest)(nil),    // 22: aceshell.plugin.v1.SetTabTitleRequest
+	(*SetTabTitleResponse)(nil),   // 23: aceshell.plugin.v1.SetTabTitleResponse
+	(*ShowToastRequest)(nil),      // 24: aceshell.plugin.v1.ShowToastRequest
+	(*ShowToastResponse)(nil),     // 25: aceshell.plugin.v1.ShowToastResponse
+	(*ListSessionsRequest)(nil),   // 26: aceshell.plugin.v1.ListSessionsRequest
+	(*ListSessionsResponse)(nil),  // 27: aceshell.plugin.v1.ListSessionsResponse
+	(*EmitUIEventRequest)(nil),    // 28: aceshell.plugin.v1.EmitUIEventRequest
+	(*EmitUIEventResponse)(nil),   // 29: aceshell.plugin.v1.EmitUIEventResponse
 }
 var file_aceshell_proto_depIdxs = []int32{
-	2,  // 0: aceshell.plugin.v1.PluginInfo.views:type_name -> aceshell.plugin.v1.ViewInfo
-	17, // 1: aceshell.plugin.v1.OpenTabRequest.spec:type_name -> aceshell.plugin.v1.TabSpec
+	4,  // 0: aceshell.plugin.v1.PluginInfo.views:type_name -> aceshell.plugin.v1.ViewInfo
+	19, // 1: aceshell.plugin.v1.OpenTabRequest.spec:type_name -> aceshell.plugin.v1.TabSpec
 	0,  // 2: aceshell.plugin.v1.AcePlugin.Info:input_type -> aceshell.plugin.v1.InfoRequest
-	3,  // 3: aceshell.plugin.v1.AcePlugin.Start:input_type -> aceshell.plugin.v1.StartRequest
-	5,  // 4: aceshell.plugin.v1.AcePlugin.Shutdown:input_type -> aceshell.plugin.v1.ShutdownRequest
-	7,  // 5: aceshell.plugin.v1.AcePlugin.OnViewVisible:input_type -> aceshell.plugin.v1.ViewVisibleRequest
-	9,  // 6: aceshell.plugin.v1.AcePlugin.OnViewHidden:input_type -> aceshell.plugin.v1.ViewHiddenRequest
-	11, // 7: aceshell.plugin.v1.AcePlugin.OnTabEvent:input_type -> aceshell.plugin.v1.TabEvent
-	13, // 8: aceshell.plugin.v1.AcePlugin.Rpc:input_type -> aceshell.plugin.v1.RpcRequest
-	15, // 9: aceshell.plugin.v1.HostService.OpenTab:input_type -> aceshell.plugin.v1.OpenTabRequest
-	18, // 10: aceshell.plugin.v1.HostService.CloseTab:input_type -> aceshell.plugin.v1.CloseTabRequest
-	20, // 11: aceshell.plugin.v1.HostService.SetTabTitle:input_type -> aceshell.plugin.v1.SetTabTitleRequest
-	22, // 12: aceshell.plugin.v1.HostService.ShowToast:input_type -> aceshell.plugin.v1.ShowToastRequest
-	24, // 13: aceshell.plugin.v1.HostService.ListSessions:input_type -> aceshell.plugin.v1.ListSessionsRequest
-	26, // 14: aceshell.plugin.v1.HostService.EmitUIEvent:input_type -> aceshell.plugin.v1.EmitUIEventRequest
-	1,  // 15: aceshell.plugin.v1.AcePlugin.Info:output_type -> aceshell.plugin.v1.PluginInfo
-	4,  // 16: aceshell.plugin.v1.AcePlugin.Start:output_type -> aceshell.plugin.v1.StartResponse
-	6,  // 17: aceshell.plugin.v1.AcePlugin.Shutdown:output_type -> aceshell.plugin.v1.ShutdownResponse
-	8,  // 18: aceshell.plugin.v1.AcePlugin.OnViewVisible:output_type -> aceshell.plugin.v1.ViewVisibleResponse
-	10, // 19: aceshell.plugin.v1.AcePlugin.OnViewHidden:output_type -> aceshell.plugin.v1.ViewHiddenResponse
-	12, // 20: aceshell.plugin.v1.AcePlugin.OnTabEvent:output_type -> aceshell.plugin.v1.TabEventResponse
-	14, // 21: aceshell.plugin.v1.AcePlugin.Rpc:output_type -> aceshell.plugin.v1.RpcResponse
-	16, // 22: aceshell.plugin.v1.HostService.OpenTab:output_type -> aceshell.plugin.v1.OpenTabResponse
-	19, // 23: aceshell.plugin.v1.HostService.CloseTab:output_type -> aceshell.plugin.v1.CloseTabResponse
-	21, // 24: aceshell.plugin.v1.HostService.SetTabTitle:output_type -> aceshell.plugin.v1.SetTabTitleResponse
-	23, // 25: aceshell.plugin.v1.HostService.ShowToast:output_type -> aceshell.plugin.v1.ShowToastResponse
-	25, // 26: aceshell.plugin.v1.HostService.ListSessions:output_type -> aceshell.plugin.v1.ListSessionsResponse
-	27, // 27: aceshell.plugin.v1.HostService.EmitUIEvent:output_type -> aceshell.plugin.v1.EmitUIEventResponse
-	15, // [15:28] is the sub-list for method output_type
-	2,  // [2:15] is the sub-list for method input_type
+	5,  // 3: aceshell.plugin.v1.AcePlugin.Start:input_type -> aceshell.plugin.v1.StartRequest
+	7,  // 4: aceshell.plugin.v1.AcePlugin.Shutdown:input_type -> aceshell.plugin.v1.ShutdownRequest
+	9,  // 5: aceshell.plugin.v1.AcePlugin.OnViewVisible:input_type -> aceshell.plugin.v1.ViewVisibleRequest
+	11, // 6: aceshell.plugin.v1.AcePlugin.OnViewHidden:input_type -> aceshell.plugin.v1.ViewHiddenRequest
+	13, // 7: aceshell.plugin.v1.AcePlugin.OnTabEvent:input_type -> aceshell.plugin.v1.TabEvent
+	15, // 8: aceshell.plugin.v1.AcePlugin.Rpc:input_type -> aceshell.plugin.v1.RpcRequest
+	2,  // 9: aceshell.plugin.v1.AcePlugin.OnLocaleChanged:input_type -> aceshell.plugin.v1.LocaleChangedRequest
+	17, // 10: aceshell.plugin.v1.HostService.OpenTab:input_type -> aceshell.plugin.v1.OpenTabRequest
+	20, // 11: aceshell.plugin.v1.HostService.CloseTab:input_type -> aceshell.plugin.v1.CloseTabRequest
+	22, // 12: aceshell.plugin.v1.HostService.SetTabTitle:input_type -> aceshell.plugin.v1.SetTabTitleRequest
+	24, // 13: aceshell.plugin.v1.HostService.ShowToast:input_type -> aceshell.plugin.v1.ShowToastRequest
+	26, // 14: aceshell.plugin.v1.HostService.ListSessions:input_type -> aceshell.plugin.v1.ListSessionsRequest
+	28, // 15: aceshell.plugin.v1.HostService.EmitUIEvent:input_type -> aceshell.plugin.v1.EmitUIEventRequest
+	1,  // 16: aceshell.plugin.v1.AcePlugin.Info:output_type -> aceshell.plugin.v1.PluginInfo
+	6,  // 17: aceshell.plugin.v1.AcePlugin.Start:output_type -> aceshell.plugin.v1.StartResponse
+	8,  // 18: aceshell.plugin.v1.AcePlugin.Shutdown:output_type -> aceshell.plugin.v1.ShutdownResponse
+	10, // 19: aceshell.plugin.v1.AcePlugin.OnViewVisible:output_type -> aceshell.plugin.v1.ViewVisibleResponse
+	12, // 20: aceshell.plugin.v1.AcePlugin.OnViewHidden:output_type -> aceshell.plugin.v1.ViewHiddenResponse
+	14, // 21: aceshell.plugin.v1.AcePlugin.OnTabEvent:output_type -> aceshell.plugin.v1.TabEventResponse
+	16, // 22: aceshell.plugin.v1.AcePlugin.Rpc:output_type -> aceshell.plugin.v1.RpcResponse
+	3,  // 23: aceshell.plugin.v1.AcePlugin.OnLocaleChanged:output_type -> aceshell.plugin.v1.LocaleChangedResponse
+	18, // 24: aceshell.plugin.v1.HostService.OpenTab:output_type -> aceshell.plugin.v1.OpenTabResponse
+	21, // 25: aceshell.plugin.v1.HostService.CloseTab:output_type -> aceshell.plugin.v1.CloseTabResponse
+	23, // 26: aceshell.plugin.v1.HostService.SetTabTitle:output_type -> aceshell.plugin.v1.SetTabTitleResponse
+	25, // 27: aceshell.plugin.v1.HostService.ShowToast:output_type -> aceshell.plugin.v1.ShowToastResponse
+	27, // 28: aceshell.plugin.v1.HostService.ListSessions:output_type -> aceshell.plugin.v1.ListSessionsResponse
+	29, // 29: aceshell.plugin.v1.HostService.EmitUIEvent:output_type -> aceshell.plugin.v1.EmitUIEventResponse
+	16, // [16:30] is the sub-list for method output_type
+	2,  // [2:16] is the sub-list for method input_type
 	2,  // [2:2] is the sub-list for extension type_name
 	2,  // [2:2] is the sub-list for extension extendee
 	0,  // [0:2] is the sub-list for field type_name
@@ -1530,7 +1639,7 @@ func file_aceshell_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_aceshell_proto_rawDesc), len(file_aceshell_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   28,
+			NumMessages:   30,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

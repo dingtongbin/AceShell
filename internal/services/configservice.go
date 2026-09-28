@@ -37,12 +37,10 @@ type mainConfigFile struct {
 	Language    string            `toml:"language" json:"language"`
 }
 
-// PluginsConfig 插件配置: 显式禁用表(未出现的插件默认启用)与捆绑插件卸载记录。
+// PluginsConfig 插件配置: 显式禁用表(未出现的插件默认启用)。
 type PluginsConfig struct {
 	// Enabled 插件ID → 是否启用。nil/缺项 = 启用; 显式 false = 禁用。
 	Enabled map[string]bool `toml:"enabled" json:"enabled"`
-	// UninstalledBundled 用户已卸载的捆绑插件 ID(发版升级后不复活)。
-	UninstalledBundled []string `toml:"uninstalledBundled" json:"uninstalledBundled"`
 }
 
 // McpConfig MCP 服务配置(令牌密文经 encryptSecret 加密,不含明文)。
@@ -50,28 +48,18 @@ type McpConfig struct {
 	Enabled  bool   `toml:"enabled" json:"enabled"`
 	Port     int    `toml:"port" json:"port"`
 	TokenEnc string `toml:"tokenEnc" json:"tokenEnc"`
-	Mode     string `toml:"mode" json:"mode"` // manual / auto
 	BallX    int    `toml:"ballX" json:"ballX"` // 悬浮球位置(-1 未初始化)
 	BallY    int    `toml:"ballY" json:"ballY"`
-	// 单操作可视时延(毫秒): 激活目标标签页后等待,让用户看清操作。0-10000。
+	// 单操作可视时延(毫秒): 激活目标标签页后等待,让用户看清操作并可抢占。0-10000。
 	OpDelayMs int `toml:"opDelayMs" json:"opDelayMs"`
 	// 批量执行命令间隔(毫秒)。
 	BatchIntervalMs int `toml:"batchIntervalMs" json:"batchIntervalMs"`
-	// 永久授权机制开关(命令+路径双精确匹配的免审批规则)。
-	GrantsEnabled bool `toml:"grantsEnabled" json:"grantsEnabled"`
 	// 审计日志磁盘保留天数。
 	AuditRetentionDays int `toml:"auditRetentionDays" json:"auditRetentionDays"`
 	// terminal_read 单次返回上限(字节)。
 	TerminalReadMaxBytes int `toml:"terminalReadMaxBytes" json:"terminalReadMaxBytes"`
-	// 用户自定义分级规则(正则),优先于内置规则。
-	CustomRules []McpCustomRule `toml:"customRules" json:"customRules"`
-}
-
-// McpCustomRule 用户自定义 MCP 分级规则。
-type McpCustomRule struct {
-	Pattern string `toml:"pattern" json:"pattern"` // 正则表达式
-	Risk    string `toml:"risk" json:"risk"`       // blocked / confirm / auto
-	Note    string `toml:"note" json:"note"`       // 备注说明
+	// 绝对危险指令字典(正则列表,命中即拦截并挂起 MCP)。空 = 使用内置默认字典。
+	DangerousPatterns []string `toml:"dangerousPatterns" json:"dangerousPatterns"`
 }
 
 type FileEditingConfig struct {
@@ -243,15 +231,13 @@ func (c *ConfigService) Init() {
 			AutoSave: true,
 		},
 		Mcp: McpConfig{
-			Enabled: false,
-			Port:    8940,
-			Mode:    "manual",
-			BallX:   -1,
-			BallY:   -1,
-			OpDelayMs:           1000,
-			BatchIntervalMs:     300,
-			GrantsEnabled:       true,
-			AuditRetentionDays:  30,
+			Enabled:              false,
+			Port:                 8940,
+			BallX:                -1,
+			BallY:                -1,
+			OpDelayMs:            1000,
+			BatchIntervalMs:      300,
+			AuditRetentionDays:   30,
 			TerminalReadMaxBytes: 32768,
 		},
 		// 插件默认全部启用(显式禁用记录于 Enabled[id]=false)
@@ -651,42 +637,6 @@ func (c *ConfigService) SetPluginEnabled(pluginID string, enabled bool) string {
 	return c.configJSONLocked()
 }
 
-// BundledUninstalled 查询捆绑插件是否已被用户卸载。
-func (c *ConfigService) BundledUninstalled(pluginID string) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	for _, id := range c.config.Plugins.UninstalledBundled {
-		if id == pluginID {
-			return true
-		}
-	}
-	return false
-}
-
-// SetBundledUninstalled 记录/撤销捆绑插件卸载状态并持久化(调用方负责落盘插件目录)。
-func (c *ConfigService) SetBundledUninstalled(pluginID string, uninstalled bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	list := c.config.Plugins.UninstalledBundled
-	out := list[:0]
-	if uninstalled {
-		for _, id := range list {
-			if id != pluginID {
-				out = append(out, id)
-			}
-		}
-		c.config.Plugins.UninstalledBundled = append(out, pluginID)
-	} else {
-		for _, id := range list {
-			if id != pluginID {
-				out = append(out, id)
-			}
-		}
-		c.config.Plugins.UninstalledBundled = out
-	}
-	c.save()
-}
-
 // SetSerialConfig 更新串口配置并持久化。
 func (c *ConfigService) SetSerialConfig(jsonStr string) string {
 	c.mu.Lock()
@@ -820,16 +770,6 @@ func (c *ConfigService) McpPort() int {
 	return c.config.Mcp.Port
 }
 
-// McpMode 返回审批模式(manual / auto,默认 manual)。
-func (c *ConfigService) McpMode() string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.config.Mcp.Mode != "manual" && c.config.Mcp.Mode != "auto" {
-		return "manual"
-	}
-	return c.config.Mcp.Mode
-}
-
 // McpTokenEnc 返回加密后的访问令牌密文。
 func (c *ConfigService) McpTokenEnc() string {
 	c.mu.Lock()
@@ -853,17 +793,6 @@ func (c *ConfigService) SetMcpPort(port int) {
 		port = 8940
 	}
 	c.config.Mcp.Port = port
-	c.save()
-}
-
-// SetMcpMode 设置审批模式并持久化。
-func (c *ConfigService) SetMcpMode(mode string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if mode != "manual" && mode != "auto" {
-		mode = "manual"
-	}
-	c.config.Mcp.Mode = mode
 	c.save()
 }
 
@@ -919,13 +848,6 @@ func (c *ConfigService) McpBatchIntervalMs() int {
 	return v
 }
 
-// McpGrantsEnabled 返回永久授权机制开关。
-func (c *ConfigService) McpGrantsEnabled() bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.config.Mcp.GrantsEnabled
-}
-
 // McpAuditRetentionDays 返回审计日志磁盘保留天数(默认 30,范围 1-365)。
 func (c *ConfigService) McpAuditRetentionDays() int {
 	c.mu.Lock()
@@ -954,17 +876,21 @@ func (c *ConfigService) McpTerminalReadMax() int {
 	return v
 }
 
-// McpCustomRules 返回用户自定义分级规则副本。
-func (c *ConfigService) McpCustomRules() []McpCustomRule {
+// McpDangerousPatterns 返回绝对危险指令字典 JSON(空配置时返回内置默认字典)。
+func (c *ConfigService) McpDangerousPatterns() string {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	out := make([]McpCustomRule, len(c.config.Mcp.CustomRules))
-	copy(out, c.config.Mcp.CustomRules)
-	return out
+	patterns := make([]string, len(c.config.Mcp.DangerousPatterns))
+	copy(patterns, c.config.Mcp.DangerousPatterns)
+	c.mu.Unlock()
+	if len(patterns) == 0 {
+		patterns = DefaultDangerousPatterns()
+	}
+	data, _ := json.Marshal(patterns)
+	return string(data)
 }
 
-// SetMcpExecTuning 持久化执行参数(时延/批量间隔/授权开关/审计保留天数)。
-func (c *ConfigService) SetMcpExecTuning(opDelayMs, batchIntervalMs int, grantsEnabled bool, auditRetentionDays, terminalReadMax int) string {
+// SetMcpExecTuning 持久化执行参数(时延/批量间隔/审计保留天数)。
+func (c *ConfigService) SetMcpExecTuning(opDelayMs, batchIntervalMs int, auditRetentionDays, terminalReadMax int) string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if opDelayMs < 0 {
@@ -993,7 +919,6 @@ func (c *ConfigService) SetMcpExecTuning(opDelayMs, batchIntervalMs int, grantsE
 	}
 	c.config.Mcp.OpDelayMs = opDelayMs
 	c.config.Mcp.BatchIntervalMs = batchIntervalMs
-	c.config.Mcp.GrantsEnabled = grantsEnabled
 	c.config.Mcp.AuditRetentionDays = auditRetentionDays
 	c.config.Mcp.TerminalReadMaxBytes = terminalReadMax
 	c.save()
@@ -1003,30 +928,25 @@ func (c *ConfigService) SetMcpExecTuning(opDelayMs, batchIntervalMs int, grantsE
 	return string(data)
 }
 
-// SetMcpCustomRules 持久化用户自定义分级规则(逐条校验正则与风险值)。
-func (c *ConfigService) SetMcpCustomRules(jsonStr string) string {
-	var rules []McpCustomRule
-	if err := json.Unmarshal([]byte(jsonStr), &rules); err != nil {
+// SetMcpDangerousPatterns 持久化绝对危险指令字典(逐条校验正则)。
+// 空列表 = 恢复内置默认字典。返回新配置 JSON 或 {"error":...}。
+func (c *ConfigService) SetMcpDangerousPatterns(jsonStr string) string {
+	var patterns []string
+	if err := json.Unmarshal([]byte(jsonStr), &patterns); err != nil {
 		return `{"error":"invalid json"}`
+	}
+	if len(patterns) > 100 { // 有界: 字典上限 100 条
+		patterns = patterns[:100]
+	}
+	for _, p := range patterns {
+		if _, err := regexp.Compile(p); err != nil {
+			return marshalJSON(map[string]string{"error": "invalid regex: " + p})
+		}
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if len(rules) > 100 { // 有界: 自定义规则上限 100 条
-		rules = rules[:100]
-	}
-	for i := range rules {
-		if _, err := regexp.Compile(rules[i].Pattern); err != nil {
-			return marshalJSON(map[string]string{"error": "invalid regex: " + rules[i].Pattern})
-		}
-		switch rules[i].Risk {
-		case RiskBlocked, RiskConfirm, RiskAuto:
-		default:
-			return marshalJSON(map[string]string{"error": "invalid risk: " + rules[i].Risk})
-		}
-		rules[i].Note = truncateUtf8(rules[i].Note, 100)
-	}
-	c.config.Mcp.CustomRules = rules
+	c.config.Mcp.DangerousPatterns = patterns
 	c.save()
-	data, _ := json.Marshal(rules)
+	data, _ := json.Marshal(patterns)
 	return string(data)
 }

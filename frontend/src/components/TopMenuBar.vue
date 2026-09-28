@@ -22,7 +22,7 @@ import {
 import { Window, Events } from '@wailsio/runtime'
 import { useTheme } from '../stores/theme'
 import { GetConfig, SetTheme, SetShowSerial, SetShowHelp, SetCustomTitlebar, SetCloseConfirm, SetFileEditingAutoSave, SetShowToolbar, SetTerminalConfig, SetShowAssistant } from '../../bindings/changeme/internal/services/configservice.js'
-import { SetMcpEnabled, McpResume, McpNotifyPreemption } from '../../bindings/changeme/internal/services/mcpservice.js'
+import { SetMcpEnabled, McpResume, McpNotifyPreemption, GetMcpStatus } from '../../bindings/changeme/internal/services/mcpservice.js'
 import { useMcpBridge } from '../composables/useMcpBridge'
 import { useI18n } from 'vue-i18n'
 import type { ActiveTabState } from './tabTypes'
@@ -246,12 +246,12 @@ const menus = computed<MenuEntry[]>(() => [
 
 // ==================== MCP 开关(顶栏右段) ====================
 
-// 四态:off 关闭 / idle 已开启空闲 / paused 已挂起 / busy 执行中(含等待审批)
+// 四态:off 关闭 / idle 已开启空闲 / paused 已挂起 / busy 执行中
 const mcpPhase = computed<'off' | 'idle' | 'paused' | 'busy'>(() => {
   const s = mcpStatus.value
   if (!s.enabled || s.state === 'stopped') return 'off'
   if (s.state === 'paused') return 'paused'
-  return (s.busy || s.pendingApprovals > 0) ? 'busy' : 'idle'
+  return s.busy ? 'busy' : 'idle'
 })
 
 const mcpTooltip = computed(() => {
@@ -270,23 +270,28 @@ const mcpTooltip = computed(() => {
 
 async function handleMcpToggle() {
   try {
+    let res: any = null
     switch (mcpPhase.value) {
       case 'off': {
-        const res = JSON.parse(await SetMcpEnabled(true))
+        res = JSON.parse(await SetMcpEnabled(true) || '{}')
         if (res?.error) message.error(t('topMenu.mcpStartFailed', { err: res.error }))
         break
       }
       case 'idle':
-        await SetMcpEnabled(false)
+        res = JSON.parse(await SetMcpEnabled(false) || '{}')
         break
       case 'paused':
-        await McpResume()
+        res = JSON.parse(await McpResume() || '{}')
         break
-      case 'busy':
+      case 'busy': {
         // 执行中点击 = 用户打断:挂起并取消在途操作(与键盘抢占同路径)
         await McpNotifyPreemption()
+        try { res = JSON.parse(await GetMcpStatus() || '{}') } catch {}
         break
+      }
     }
+    // 即时刷新: 控制接口返回最新状态,不依赖 mcp-status-changed 事件时序
+    if (res && typeof res === 'object' && res.state) Object.assign(mcpStatus.value, res)
   } catch (e: any) {
     message.error(t('topMenu.mcpStartFailed', { err: (e && e.message) || e }))
   }

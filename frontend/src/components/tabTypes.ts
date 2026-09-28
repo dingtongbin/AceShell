@@ -69,6 +69,8 @@ export interface ComponentTabOptions {
 
 export interface ComponentTabPatch {
   title?: string
+  /** 替换组件对象(插件热重载: 代次变化后用新模块重建标签页内容) */
+  component?: Component
   props?: Record<string, any>
   status?: 'idle' | 'connecting' | 'connected' | 'error'
   dirty?: boolean

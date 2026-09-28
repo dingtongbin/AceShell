@@ -32,19 +32,20 @@ func init() {
 	application.RegisterEvent[string]("sftp-files-dropped")
 	// MCP 服务
 	application.RegisterEvent[string]("mcp-command")
-	application.RegisterEvent[string]("mcp-approval-requested")
-	application.RegisterEvent[string]("mcp-approval-removed")
 	application.RegisterEvent[string]("mcp-audit-appended")
 	application.RegisterEvent[string]("mcp-status-changed")
 	application.RegisterEvent[string]("mcp-critical-blocked")
 	// 插件服务
 	application.RegisterEvent[string]("plugin-registry-changed")
+	application.RegisterEvent[string]("plugin-invalidated")
 	application.RegisterEvent[string]("plugin-status-changed")
 	application.RegisterEvent[string]("plugin-open-tab")
 	application.RegisterEvent[string]("plugin-tab-updated")
 	application.RegisterEvent[string]("plugin-tab-closed")
 	application.RegisterEvent[string]("plugin-toast")
 	application.RegisterEvent[string]("plugin-event")
+	// 全局错误收集器: 每条新错误实时推送前端
+	application.RegisterEvent[string]("app-error-collected")
 }
 
 // services 聚合所有后端服务实例，便于统一初始化和注入。
@@ -101,6 +102,7 @@ func setupCleanup(onExit func()) {
 		<-c
 		onExit()
 		killChildProcesses()
+		appservices.MainErrors.Close()
 		os.Exit(0)
 	}()
 }
@@ -110,6 +112,9 @@ func setupCleanup(onExit func()) {
 
 // initServices 创建并初始化所有后端服务实例。
 func initServices() *services {
+	// 错误收集器最先装配: 之后任何服务的启动失败都可被收集
+	// (CollectError nil 容忍, 但尽早初始化可覆盖启动期窗口)。
+	appservices.MainErrors = appservices.NewErrorCollector(appservices.ErrorLogDir())
 	svc := &services{
 		directTelnet: &appservices.DirectTelnetService{},
 		ssh:          &appservices.SSHService{},
@@ -226,6 +231,13 @@ func wireServices(svc *services, app *application.App) {
 	// 全局日志服务
 	appservices.MainLogService = svc.log
 
+	// 全局错误收集器: app 可用后装配前端实时推送
+	appservices.MainErrors.SetEmitter(func(e appservices.ErrorEntry) {
+		if data, err := json.Marshal(e); err == nil {
+			app.Event.Emit("app-error-collected", string(data))
+		}
+	})
+
 	appservices.AppServiceRegistry["telnet"] = svc.directTelnet
 	appservices.AppServiceRegistry["ssh"] = svc.ssh
 	appservices.AppServiceRegistry["serial"] = svc.serial
@@ -235,12 +247,14 @@ func wireServices(svc *services, app *application.App) {
 	svc.rdp.SetApp(app)
 	if _, err := svc.rdp.Start(); err != nil {
 		fmt.Printf("RDP bridge start failed: %v\n", err)
+		appservices.CollectError("rdp", "start", err)
 	}
 	svc.rdp.SetSessionFiles(svc.sessionFile)
 
 	// VNC 图形会话桥:同一 wsbridge 普通透传路径(仅 127.0.0.1)
 	if _, err := svc.vnc.Start(); err != nil {
 		fmt.Printf("VNC bridge start failed: %v\n", err)
+		appservices.CollectError("vnc", "start", err)
 	}
 	svc.vnc.SetSessionFiles(svc.sessionFile)
 
@@ -250,6 +264,7 @@ func wireServices(svc *services, app *application.App) {
 	if svc.config.McpEnabled() {
 		if err := svc.mcp.Start(); err != nil {
 			fmt.Printf("MCP service start failed: %v\n", err)
+			appservices.CollectError("mcp", "start", err)
 		}
 	}
 

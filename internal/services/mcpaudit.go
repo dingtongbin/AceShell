@@ -16,21 +16,21 @@ import (
 type McpAuditEntry struct {
 	ID       string `json:"id"`       // 条目唯一 ID(a-<seq>)
 	TS       string `json:"ts"`       // ISO 时间戳
-	Level    string `json:"level"`    // info / confirm / blocked / error / system
+	Level    string `json:"level"`    // info / blocked / error / confirm(历史)
 	Action   string `json:"action"`   // 工具名或动作名
 	Subject  string `json:"subject"`  // 操作对象(tabId / 会话路径 / 文件路径)
 	Detail   string `json:"detail"`   // 内容预览(截断,不含完整敏感内容)
-	Risk     string `json:"risk"`     // auto / confirm / blocked / -
-	Decision string `json:"decision"` // executed / rejected / approved / denied / timeout / preempted / granted / -
+	Risk     string `json:"risk"`     // auto / blocked / confirm(历史) / -
+	Decision string `json:"decision"` // executed / rejected / approved(历史) / timeout / preempted / granted(历史) / -
 	ByUser   bool   `json:"byUser"`   // 是否用户手动决策
-	Source   string `json:"source"`   // external(外部智能体) / embedded(内嵌智能体) / system
+	Source   string `json:"source"`   // external(外部智能体) / embedded(内嵌智能体)
 	BatchID  string `json:"batchId"`  // 批量执行关联 ID(非批量为空)
 }
 
 const (
-	mcpAuditMemCap   = 500              // 内存环形缓冲容量(有界,防无限增长)
-	mcpAuditFileMax  = 5 * 1024 * 1024  // 单文件 5MB 上限,超过轮转
-	mcpAuditKeepDays = 30               // 磁盘保留天数
+	mcpAuditMemCap   = 500             // 内存环形缓冲容量(有界,防无限增长)
+	mcpAuditFileMax  = 5 * 1024 * 1024 // 单文件 5MB 上限,超过轮转
+	mcpAuditKeepDays = 30              // 磁盘保留天数
 )
 
 // McpAuditService 审计日志服务。
@@ -122,6 +122,7 @@ func (s *McpAuditService) persistLocked(entry McpAuditEntry) {
 		f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 		if err != nil {
 			s.file = nil
+			CollectError("mcp-audit", "open", err)
 			return
 		}
 		s.file = f
@@ -130,10 +131,13 @@ func (s *McpAuditService) persistLocked(entry McpAuditEntry) {
 			f.Close()
 			old := path + ".old"
 			os.Remove(old)
-			os.Rename(path, old)
+			if rerr := os.Rename(path, old); rerr != nil {
+				CollectError("mcp-audit", "rotate", rerr)
+			}
 			f2, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 			if err != nil {
 				s.file = nil
+				CollectError("mcp-audit", "reopen", err)
 				return
 			}
 			s.file = f2
@@ -141,9 +145,14 @@ func (s *McpAuditService) persistLocked(entry McpAuditEntry) {
 	}
 	data, err := json.Marshal(entry)
 	if err != nil {
+		CollectError("mcp-audit", "marshal", err)
 		return
 	}
-	s.file.Write(append(data, '\n'))
+	if _, werr := s.file.Write(append(data, '\n')); werr != nil {
+		// 写失败后文件句柄状态不可信, 置空让下条审计重新打开
+		s.file = nil
+		CollectError("mcp-audit", "write", werr)
+	}
 }
 
 // loadRecent 启动时加载当日最近条目,供面板打开即有数据。

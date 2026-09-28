@@ -52,7 +52,10 @@ func loadMasterKey() ([]byte, error) {
 			// 写回失败不阻塞(下次加载再试),密钥内容不变。
 			if strings.HasPrefix(string(data), masterKeyV1Prefix) {
 				if blob, werr := wrapMasterKey(key); werr == nil && strings.HasPrefix(string(blob), masterKeyV2Prefix) {
-					_ = os.WriteFile(path, blob, 0600)
+					if werr := os.WriteFile(path, blob, 0600); werr != nil {
+						// 迁移写回失败不阻塞(下次加载再试), 但磁盘满/ACL 异常值得留痕
+						CollectError("app", "masterkey-migrate-write", werr)
+					}
 				}
 			}
 			masterKeyCacheDir = path

@@ -34,13 +34,14 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	AcePlugin_Info_FullMethodName          = "/aceshell.plugin.v1.AcePlugin/Info"
-	AcePlugin_Start_FullMethodName         = "/aceshell.plugin.v1.AcePlugin/Start"
-	AcePlugin_Shutdown_FullMethodName      = "/aceshell.plugin.v1.AcePlugin/Shutdown"
-	AcePlugin_OnViewVisible_FullMethodName = "/aceshell.plugin.v1.AcePlugin/OnViewVisible"
-	AcePlugin_OnViewHidden_FullMethodName  = "/aceshell.plugin.v1.AcePlugin/OnViewHidden"
-	AcePlugin_OnTabEvent_FullMethodName    = "/aceshell.plugin.v1.AcePlugin/OnTabEvent"
-	AcePlugin_Rpc_FullMethodName           = "/aceshell.plugin.v1.AcePlugin/Rpc"
+	AcePlugin_Info_FullMethodName            = "/aceshell.plugin.v1.AcePlugin/Info"
+	AcePlugin_Start_FullMethodName           = "/aceshell.plugin.v1.AcePlugin/Start"
+	AcePlugin_Shutdown_FullMethodName        = "/aceshell.plugin.v1.AcePlugin/Shutdown"
+	AcePlugin_OnViewVisible_FullMethodName   = "/aceshell.plugin.v1.AcePlugin/OnViewVisible"
+	AcePlugin_OnViewHidden_FullMethodName    = "/aceshell.plugin.v1.AcePlugin/OnViewHidden"
+	AcePlugin_OnTabEvent_FullMethodName      = "/aceshell.plugin.v1.AcePlugin/OnTabEvent"
+	AcePlugin_Rpc_FullMethodName             = "/aceshell.plugin.v1.AcePlugin/Rpc"
+	AcePlugin_OnLocaleChanged_FullMethodName = "/aceshell.plugin.v1.AcePlugin/OnLocaleChanged"
 )
 
 // AcePluginClient is the client API for AcePlugin service.
@@ -60,6 +61,10 @@ type AcePluginClient interface {
 	OnTabEvent(ctx context.Context, in *TabEvent, opts ...grpc.CallOption) (*TabEventResponse, error)
 	// 通用业务通道: 插件前端 (经宿主转发) 与宿主扩展能力都走这里, JSON 进出。
 	Rpc(ctx context.Context, in *RpcRequest, opts ...grpc.CallOption) (*RpcResponse, error)
+	// 界面语言变更通知。宿主在用户切换语言后对每个运行中插件调用;
+	// 插件应更新自身展示文案, 宿主随后会以新 locale 重新拉取 Info 并刷新注册表。
+	// (旧版插件未实现本方法时宿主静默忽略 —— UNIMPLEMENTED 视为不支持。)
+	OnLocaleChanged(ctx context.Context, in *LocaleChangedRequest, opts ...grpc.CallOption) (*LocaleChangedResponse, error)
 }
 
 type acePluginClient struct {
@@ -140,6 +145,16 @@ func (c *acePluginClient) Rpc(ctx context.Context, in *RpcRequest, opts ...grpc.
 	return out, nil
 }
 
+func (c *acePluginClient) OnLocaleChanged(ctx context.Context, in *LocaleChangedRequest, opts ...grpc.CallOption) (*LocaleChangedResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(LocaleChangedResponse)
+	err := c.cc.Invoke(ctx, AcePlugin_OnLocaleChanged_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AcePluginServer is the server API for AcePlugin service.
 // All implementations must embed UnimplementedAcePluginServer
 // for forward compatibility.
@@ -157,6 +172,10 @@ type AcePluginServer interface {
 	OnTabEvent(context.Context, *TabEvent) (*TabEventResponse, error)
 	// 通用业务通道: 插件前端 (经宿主转发) 与宿主扩展能力都走这里, JSON 进出。
 	Rpc(context.Context, *RpcRequest) (*RpcResponse, error)
+	// 界面语言变更通知。宿主在用户切换语言后对每个运行中插件调用;
+	// 插件应更新自身展示文案, 宿主随后会以新 locale 重新拉取 Info 并刷新注册表。
+	// (旧版插件未实现本方法时宿主静默忽略 —— UNIMPLEMENTED 视为不支持。)
+	OnLocaleChanged(context.Context, *LocaleChangedRequest) (*LocaleChangedResponse, error)
 	mustEmbedUnimplementedAcePluginServer()
 }
 
@@ -187,6 +206,9 @@ func (UnimplementedAcePluginServer) OnTabEvent(context.Context, *TabEvent) (*Tab
 }
 func (UnimplementedAcePluginServer) Rpc(context.Context, *RpcRequest) (*RpcResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Rpc not implemented")
+}
+func (UnimplementedAcePluginServer) OnLocaleChanged(context.Context, *LocaleChangedRequest) (*LocaleChangedResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method OnLocaleChanged not implemented")
 }
 func (UnimplementedAcePluginServer) mustEmbedUnimplementedAcePluginServer() {}
 func (UnimplementedAcePluginServer) testEmbeddedByValue()                   {}
@@ -335,6 +357,24 @@ func _AcePlugin_Rpc_Handler(srv interface{}, ctx context.Context, dec func(inter
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AcePlugin_OnLocaleChanged_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(LocaleChangedRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AcePluginServer).OnLocaleChanged(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AcePlugin_OnLocaleChanged_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AcePluginServer).OnLocaleChanged(ctx, req.(*LocaleChangedRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AcePlugin_ServiceDesc is the grpc.ServiceDesc for AcePlugin service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -369,6 +409,10 @@ var AcePlugin_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Rpc",
 			Handler:    _AcePlugin_Rpc_Handler,
+		},
+		{
+			MethodName: "OnLocaleChanged",
+			Handler:    _AcePlugin_OnLocaleChanged_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

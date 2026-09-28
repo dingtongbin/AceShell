@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, nextTick, onMounted, onBeforeUnmount, watch, provide } from 'vue'
+import { ref, computed, nextTick, onMounted, onBeforeUnmount, watch, provide, markRaw } from 'vue'
 import { useMessage } from 'naive-ui'
 import { Events } from '@wailsio/runtime'
 import { DesktopOutline } from '@vicons/ionicons5'
@@ -9,12 +9,13 @@ import { ReleaseRdpConnection } from '../../bindings/changeme/internal/services/
 import { GetVncConnection } from '../../bindings/changeme/internal/services/vncservice.js'
 import { ReleaseVncConnection } from '../../bindings/changeme/internal/services/vncservice.js'
 import { applyTermCfg, normalizeTermConfig, resetTermComposition, type TermConfig } from '../composables/useXterm'
-import { loadPluginComponent, getPluginCtx } from '../composables/usePluginBridge'
+import { loadPluginComponent, getPluginCtx, usePlugins } from '../composables/usePluginBridge'
 import { PluginNotifyTabEvent } from '../../bindings/changeme/internal/services/pluginservice.js'
 import TabPane from './TabPane.vue'
 import SplitPane from './SplitPane.vue'
 import RemoteDesktopTab from './RemoteDesktopTab.vue'
 import VncTab from './VncTab.vue'
+import PluginDetailView from './PluginDetailView.vue'
 import type { LayoutNode, SplitNode } from './tabTypes'
 import type { Pane, PaneCtx, TabPaneApi, SplitDir, Tab, ActiveTabState } from './tabTypes'
 import { useI18n } from 'vue-i18n'
@@ -287,6 +288,13 @@ async function openPluginTab(payload: {
     const t = p.tabs.find(tab => (tab.componentProps as any)?.tabKey === payload.tabKey && (tab.componentProps as any)?.pluginID === payload.pluginID)
     if (t) {
       setFocus(p.id)
+      // 幂等重开时合并最新 props(工具类标签页靠 recordId 等字段切换内容), 组件实例不重建
+      if (payload.props && Object.keys(payload.props).length > 0) {
+        const old = (t.componentProps ?? {}) as Record<string, any>
+        paneApis.get(p.id)?.updateComponentTab(t.id, {
+          props: { ...old, ...payload.props, pluginID: payload.pluginID, tabKey: payload.tabKey, componentId: payload.componentId, ctx: getPluginCtx(payload.pluginID) },
+        })
+      }
       paneApis.get(p.id)?.activateTab(t.id)
       PluginNotifyTabEvent(payload.pluginID, payload.tabKey, 'activated').catch(() => {})
       return
@@ -301,7 +309,7 @@ async function openPluginTab(payload: {
     title: payload.title,
     kind: 'component',
     component: comp,
-    props: { ...(payload.props || {}), pluginID: payload.pluginID, tabKey: payload.tabKey, ctx: getPluginCtx(payload.pluginID) },
+    props: { ...(payload.props || {}), pluginID: payload.pluginID, tabKey: payload.tabKey, componentId: payload.componentId, ctx: getPluginCtx(payload.pluginID) },
     iconUrl: payload.icon,
     color: payload.color,
     protocol: payload.pluginID,
@@ -311,6 +319,51 @@ async function openPluginTab(payload: {
     },
   })
   if (tabId) PluginNotifyTabEvent(payload.pluginID, payload.tabKey, 'opened').catch(() => {})
+}
+
+// reloadPluginTabs 插件代次变化时用新模块就地重建该插件的全部标签页。
+// 保留标题/props/用户状态, 不关标签页 —— 重载路径不拆现场, 这正是"热"的含义。
+// (卸载/禁用仍走 ShellPanel 的 closePluginTabsOf。)
+async function reloadPluginTabs(pluginID: string) {
+  for (const p of panes.value) {
+    for (const t of p.tabs) {
+      if (t.protocol !== pluginID) continue
+      const cp = (t.componentProps ?? {}) as Record<string, any>
+      if (!cp.componentId) continue
+      const comp = await loadPluginComponent(pluginID, String(cp.componentId))
+      if (!comp) continue
+      paneApis.get(p.id)?.updateComponentTab(t.id, {
+        component: comp,
+        props: { ...cp, ctx: getPluginCtx(pluginID) },
+      })
+    }
+  }
+}
+
+const { plugins: pluginRegistry } = usePlugins()
+
+// openPluginDetailTab 打开插件详情标签页: 每个插件至多一个, 已存在则激活定位。
+// 详情是宿主自有组件(非插件 ESM), 数据直读注册表 ref(随失效协议自动刷新)。
+// 去重键用 componentProps.detailFor(协议字段会与插件 ID 空间冲突, 不用 protocol 判重)。
+function openPluginDetailTab(pluginID: string) {
+  for (const p of panes.value) {
+    const t = p.tabs.find(tab => (tab.componentProps as any)?.detailFor === pluginID)
+    if (t) {
+      setFocus(p.id)
+      paneApis.get(p.id)?.activateTab(t.id)
+      return
+    }
+  }
+  const summary = pluginRegistry.value.find(p => p.id === pluginID)
+  focusApi()?.openComponentTab({
+    title: summary?.displayName || pluginID,
+    kind: 'component',
+    component: markRaw(PluginDetailView),
+    props: { pluginID, detailFor: pluginID },
+    iconUrl: summary?.icon,
+    color: summary?.accentColor,
+    protocol: 'plugin-detail',
+  })
 }
 
 // closePluginTab 插件侧请求关闭(插件经 HostService.CloseTab)。
@@ -538,7 +591,7 @@ onBeforeUnmount(() => {
   }
 })
 
-defineExpose({ openSession, openSerial, openSftp, openScriptDialog, exportLog, clearScrollback, clearScreen, getActiveSessionPath, openComponentTab, updateComponentTab, closeTabById, activateFileTab, reportCursor, copySelection, pasteClipboard, openRdp, openVnc, listTabs, mcpTerminalSend, mcpCloseTab, openPluginTab, closePluginTab, closePluginTabsOf, setPluginTabTitle })
+defineExpose({ openSession, openSerial, openSftp, openScriptDialog, exportLog, clearScrollback, clearScreen, getActiveSessionPath, openComponentTab, updateComponentTab, closeTabById, activateFileTab, reportCursor, copySelection, pasteClipboard, openRdp, openVnc, listTabs, mcpTerminalSend, mcpCloseTab, openPluginTab, closePluginTab, closePluginTabsOf, setPluginTabTitle, reloadPluginTabs, openPluginDetailTab })
 </script>
 
 <template>

@@ -43,22 +43,29 @@ func (c *PluginClient) Dead() <-chan struct{} { return c.dead }
 // Raw 暴露生成的 gRPC 客户端 (需要自定义超时/拦截器时用)。
 func (c *PluginClient) Raw() pb.AcePluginClient { return c.raw }
 
-func (c *PluginClient) Info(ctx context.Context) (*PluginInfo, error) {
-	resp, err := c.raw.Info(ctx, &pb.InfoRequest{})
+func (c *PluginClient) Info(ctx context.Context, locale string) (*PluginInfo, error) {
+	resp, err := c.raw.Info(ctx, &pb.InfoRequest{Locale: locale})
 	if err != nil {
 		return nil, err
 	}
 	out := &PluginInfo{
-		ID:          resp.GetId(),
-		DisplayName: resp.GetDisplayName(),
-		Version:     resp.GetVersion(),
-		Icon:        resp.GetIcon(),
-		AccentColor: resp.GetAccentColor(),
+		ID:           resp.GetId(),
+		DisplayName:  resp.GetDisplayName(),
+		Version:      resp.GetVersion(),
+		Icon:         resp.GetIcon(),
+		AccentColor:  resp.GetAccentColor(),
+		Capabilities: resp.GetCapabilities(),
 	}
 	for _, v := range resp.GetViews() {
 		out.Views = append(out.Views, ViewInfo{ID: v.GetId(), Title: v.GetTitle(), Icon: v.GetIcon(), ComponentID: v.GetComponentId()})
 	}
 	return out, nil
+}
+
+// OnLocaleChanged 通知插件界面语言已变更。旧版插件返回 UNIMPLEMENTED 时调用方应静默忽略。
+func (c *PluginClient) OnLocaleChanged(ctx context.Context, locale string) error {
+	_, err := c.raw.OnLocaleChanged(ctx, &pb.LocaleChangedRequest{Locale: locale})
+	return err
 }
 
 func (c *PluginClient) Start(ctx context.Context, host *HostContext) error {

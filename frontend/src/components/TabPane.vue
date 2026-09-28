@@ -254,6 +254,8 @@ function updateComponentTab(tabId: string, patch: ComponentTabPatch) {
   const tab = pane.tabs.find(t => t.id === tabId)
   if (!tab || (tab.kind !== 'component' && tab.kind !== 'vnc')) return
   if (patch.title !== undefined) tab.title = patch.title
+  // 替换组件对象: 组件定义变化会让 <component :is> 卸旧挂新(插件热重载路径)
+  if (patch.component !== undefined) tab.component = patch.component
   if (patch.props !== undefined) tab.componentProps = patch.props
   if (patch.status !== undefined) tab.status = patch.status
   if (patch.dirty !== undefined) tab.dirty = patch.dirty
