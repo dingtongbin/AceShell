@@ -1,4 +1,4 @@
-// ping: AceShell 捆绑插件 —— 网络连通性探测工具。
+// ping: AceShell 示例插件 —— 网络连通性探测工具。
 //
 // 演示真实插件形态: 标签页工作台发起探测, Go 侧逐包执行系统 ping 并经
 // EmitUIEvent 流式推送结果(逐包延迟/丢包/统计), 全部钩子均有实际用途:
@@ -368,14 +368,34 @@ func absF(v float64) float64 {
 }
 
 // pingOnce 执行单次系统 ping 并解析延迟(跨平台命令; 解析仅取 ASCII 数字, 免编码问题)。
+// 执行错误不再吞掉: 空输出 + 执行出错时以 "ping 执行失败: ..." 返回, 便于日志/CI 直接定位。
 func pingOnce(ctx context.Context, host string, timeoutMs int) (ms float64, ok bool, line string) {
-	var cmd *exec.Cmd
 	perPing := time.Duration(timeoutMs+1500) * time.Millisecond
 	cctx, cancel := context.WithTimeout(ctx, perPing)
 	defer cancel()
+	out, runErr := runPing(cctx, host, timeoutMs)
+	ms, ok, line = parsePingOutput(out)
+	if ok {
+		return ms, ok, line
+	}
+	if ctx.Err() != nil {
+		return 0, false, "已停止"
+	}
+	if strings.TrimSpace(out) == "" {
+		if runErr != nil {
+			return 0, false, "ping 执行失败: " + runErr.Error()
+		}
+		return 0, false, "无响应(超时)"
+	}
+	return 0, false, line
+}
+
+// runPing 运行平台 ping 命令, 返回合并的 stdout/stderr 与执行错误。
+func runPing(cctx context.Context, host string, timeoutMs int) (string, error) {
+	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "windows":
-		cmd = exec.CommandContext(cctx, "ping", "-n", "1", "-w", strconv.Itoa(timeoutMs), host)
+		cmd = pingCmdWindows(cctx, timeoutMs, host)
 		pluginsdk.HideWindow(cmd)
 	case "darwin":
 		cmd = exec.CommandContext(cctx, "ping", "-c", "1", "-W", strconv.Itoa(timeoutMs), host)
@@ -385,9 +405,31 @@ func pingOnce(ctx context.Context, host string, timeoutMs int) (ms float64, ok b
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
-	_ = cmd.Run()
+	err := cmd.Run()
+	return out.String(), err
+}
 
-	sc := bufio.NewScanner(bytes.NewReader(out.Bytes()))
+// pingCmdWindows 构造 Windows 系统 ping 命令: 固定 %SystemRoot%\System32\ping.exe,
+// 不依赖 PATH —— Go 1.19+ 的 ErrDot 会拒绝"相对于当前目录"解析出的同名可执行文件
+// (曾因目录内存在误提交的 ping.exe 导致 CI 测试失败), 固定路径同时消除同名劫持面。
+func pingCmdWindows(cctx context.Context, timeoutMs int, host string) *exec.Cmd {
+	args := []string{"-n", "1", "-w", strconv.Itoa(timeoutMs), host}
+	root := os.Getenv("SystemRoot")
+	if root == "" {
+		root = os.Getenv("windir")
+	}
+	exe := filepath.Join(root, "System32", "ping.exe")
+	if _, err := os.Stat(exe); err != nil {
+		// 非常规系统布局: 回退 PATH 查找
+		return exec.CommandContext(cctx, "ping", args...)
+	}
+	return exec.CommandContext(cctx, exe, args...)
+}
+
+// parsePingOutput 扫描 ping 输出: 命中含延迟的行即成功;
+// 未命中时返回最后一条非空行(不可达/超时等失败信息), 无任何输出则返回空行。
+func parsePingOutput(out string) (ms float64, ok bool, line string) {
+	sc := bufio.NewScanner(strings.NewReader(out))
 	sc.Buffer(make([]byte, 64*1024), 64*1024)
 	replyLine := ""
 	for sc.Scan() {
@@ -402,13 +444,6 @@ func pingOnce(ctx context.Context, host string, timeoutMs int) (ms float64, ok b
 			}
 		}
 	}
-	if ctx.Err() != nil {
-		return 0, false, "已停止"
-	}
-	if replyLine == "" {
-		return 0, false, "无响应(超时)"
-	}
-	// 回复行无延迟字段: 不可达/超时等失败情形
 	return 0, false, replyLine
 }
 

@@ -103,7 +103,11 @@ func (s *PluginService) installFromGitHub(owner, repo, tag string) (string, stri
 			return "", "", fmt.Errorf("SHA256 校验失败: 期望 %s, 实际 %s", want, got)
 		}
 	} else {
-		s.logLine("GitHub 安装: release 未提供 checksums 文件, 跳过哈希校验 (" + asset.Name + ")")
+		// 插件 = 任意原生代码执行, 无法校验完整性属于显著安全信号:
+		// 记日志之外同步进错误收集器, 供设置页错误列表可见。
+		msg := fmt.Sprintf("release 未提供 checksums 文件, 无法校验 %s 完整性 (来源: %s/%s)", asset.Name, owner, repo)
+		s.logLine("GitHub 安装: " + msg)
+		CollectErrorMsg("plugin-install", "no-checksums", msg)
 	}
 
 	// 解压到 PluginsDir 同卷临时目录(保证 Rename 原子性)
@@ -361,7 +365,7 @@ func downloadFile(ctx context.Context, f *os.File, rawURL string) error {
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("下载返回 %d", resp.StatusCode)
 	}
-	_, err = io.Copy(f, io.LimitReader(resp.Body, 512<<20))
+	_, err = io.Copy(f, resp.Body)
 	return err
 }
 
@@ -432,6 +436,8 @@ func fileSHA256(path string) (string, error) {
 }
 
 // unzipTo 解压 zip 到目标目录(防路径穿越)。
+// 注意: 按产品决策不设解压大小上限 —— 恶意插件包可通过 zip bomb 放大占用磁盘,
+// 完整性依赖 checksums 校验与来源信任。
 func unzipTo(zipPath, destDir string) error {
 	r, err := zip.OpenReader(zipPath)
 	if err != nil {
@@ -462,7 +468,7 @@ func unzipTo(zipPath, destDir string) error {
 			rc.Close()
 			return err
 		}
-		_, err = io.Copy(out, io.LimitReader(rc, 512<<20))
+		_, err = io.Copy(out, rc)
 		rc.Close()
 		out.Close()
 		if err != nil {
